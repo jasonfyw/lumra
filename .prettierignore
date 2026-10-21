@@ -1,0 +1,7 @@
+pnpm-lock.yaml
+docs/PRD.md
+.next
+.turbo
+.wrangler
+dist
+coverage

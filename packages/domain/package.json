@@ -1,0 +1,19 @@
+{
+  "name": "@lumra/domain",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pure business logic: state machines, quotas, ordering, layout",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@lumra/config": "workspace:*",
+    "@lumra/contracts": "workspace:*"
+  }
+}

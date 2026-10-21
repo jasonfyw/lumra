@@ -1,0 +1,19 @@
+{
+  "name": "@lumra/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Zod request/response/event contracts shared by web, gateway and worker",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@lumra/config": "workspace:*",
+    "zod": "^4.6.7"
+  }
+}

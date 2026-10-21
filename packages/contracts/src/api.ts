@@ -1,0 +1,51 @@
+import { z } from 'zod';
+
+/** Error codes shared by all API responses (PRD §10). */
+export const API_ERROR_CODES = [
+  'unauthenticated',
+  'forbidden',
+  'not_found',
+  'conflict',
+  'payload_too_large',
+  'validation_failed',
+  'rate_limited',
+  'quota_exceeded',
+  'spend_cap_reached',
+  'internal',
+] as const;
+export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
+
+export const API_ERROR_STATUS: Record<ApiErrorCode, number> = {
+  unauthenticated: 401,
+  forbidden: 403,
+  not_found: 404,
+  conflict: 409,
+  payload_too_large: 413,
+  validation_failed: 422,
+  rate_limited: 429,
+  quota_exceeded: 403,
+  spend_cap_reached: 402,
+  internal: 500,
+};
+
+export const apiErrorSchema = z.object({
+  code: z.enum(API_ERROR_CODES),
+  message: z.string(),
+  retryable: z.boolean(),
+  details: z.record(z.string(), z.unknown()).optional(),
+});
+export type ApiError = z.infer<typeof apiErrorSchema>;
+
+export type ApiResponse<T> =
+  { data: T; error: null; requestId: string } | { data: null; error: ApiError; requestId: string };
+
+export const cursorPageQuerySchema = z.object({
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+export type CursorPageQuery = z.infer<typeof cursorPageQuerySchema>;
+
+export interface CursorPage<T> {
+  items: T[];
+  nextCursor: string | null;
+}

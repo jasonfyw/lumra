@@ -1,0 +1,15 @@
+{
+  "name": "@lumra/db",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Database client, typed queries and repositories (migrations live in infra/supabase)",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  }
+}

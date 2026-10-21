@@ -1,0 +1,18 @@
+{
+  "name": "@lumra/config",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Env schemas, typed rate card, feature flags and product limits",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  }
+}

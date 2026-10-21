@@ -1,0 +1,23 @@
+{
+  "name": "@lumra/worker",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cloudflare Queue consumers and scheduled jobs (outbox relay, cleanup, reconcile, metering)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lumra/config": "workspace:*",
+    "@lumra/contracts": "workspace:*",
+    "@lumra/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261021.1",
+    "wrangler": "^4.151.3"
+  }
+}

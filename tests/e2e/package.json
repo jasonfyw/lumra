@@ -1,0 +1,16 @@
+{
+  "name": "@lumra/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Playwright end-to-end journeys (PRD §14.2)",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "~1.56.1",
+    "@types/node": "^26.6.5"
+  }
+}

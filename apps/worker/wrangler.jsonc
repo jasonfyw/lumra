@@ -1,0 +1,27 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "lumra-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "lumra-jobs-dev" }],
+    "consumers": [
+      {
+        "queue": "lumra-jobs-dev",
+        "max_batch_size": 10,
+        "max_retries": 5,
+        "dead_letter_queue": "lumra-jobs-dlq-dev",
+      },
+    ],
+  },
+  "r2_buckets": [
+    { "binding": "ORIGINALS", "bucket_name": "lumra-originals-dev" },
+    { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives-dev" },
+    { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives-dev" },
+  ],
+  // Reconcilers and cleanup (T13): every 15 minutes, plus a nightly orphan sweep.
+  "triggers": { "crons": ["*/15 * * * *", "17 3 * * *"] },
+  // Secrets: DATABASE_URL, SENTRY_DSN
+}

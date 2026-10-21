@@ -1,0 +1,27 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "lumra-media-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "vars": { "APP_ORIGIN": "http://localhost:3000" },
+  // Buckets stay private; this Worker is the only read path (PRD §6.1, ADR-001).
+  "r2_buckets": [
+    { "binding": "ORIGINALS", "bucket_name": "lumra-originals-dev" },
+    { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives-dev" },
+    { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives-dev" },
+  ],
+  // Secrets (set with `wrangler secret put`): MEDIA_TOKEN_SECRET, SENTRY_DSN
+  "env": {
+    "staging": {
+      // TODO(T38): replace with the real staging origin once the domain is chosen.
+      "vars": { "APP_ORIGIN": "https://staging.lumra.invalid" },
+      "r2_buckets": [
+        { "binding": "ORIGINALS", "bucket_name": "lumra-originals-staging" },
+        { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives-staging" },
+        { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives-staging" },
+      ],
+    },
+  },
+}
