@@ -38,13 +38,20 @@ function splitExtension(name: string): { base: string; ext: string } {
 
 /**
  * Sanitize a user-supplied filename into one safe archive entry name.
- * `fallbackExtension` (e.g. from the sniffed MIME) is used when the name has no usable extension.
+ * `fallbackExtension` (e.g. from the sniffed MIME) is used when the name has no usable extension;
+ * `fallbackBasename` replaces a base name that sanitizes to nothing.
  */
-export function sanitizeArchiveFilename(name: string, fallbackExtension?: string): string {
+export function sanitizeArchiveFilename(
+  name: string,
+  fallbackExtension?: string,
+  fallbackBasename: string = FALLBACK_BASENAME,
+): string {
   // Keep only the last path component, whichever separator the client used.
   const lastComponent = (name ?? '').split(/[\\/]/).pop() ?? '';
   const cleaned = lastComponent
     .normalize('NFC')
+    // Trim first so trailing CR/LF or tabs aren't turned into `_` and break the extension.
+    .trim()
     .replace(UNSAFE_CHARS, '_')
     .replace(/\s+/g, ' ')
     .trim()
@@ -54,7 +61,7 @@ export function sanitizeArchiveFilename(name: string, fallbackExtension?: string
 
   let { base, ext } = splitExtension(cleaned);
   base = base.replace(/[.\s]+$/, '');
-  if (!base || /^_+$/.test(base)) base = FALLBACK_BASENAME;
+  if (!base || /^_+$/.test(base)) base = fallbackBasename;
   // `CON.jpg` is as reserved as `CON`; also catch `con.tar.gz`-style first segments.
   const firstSegment = base.split('.')[0] ?? base;
   if (WINDOWS_RESERVED.test(firstSegment.trim())) base = `_${base}`;
@@ -64,7 +71,16 @@ export function sanitizeArchiveFilename(name: string, fallbackExtension?: string
 
   const suffix = ext ? `.${ext}` : '';
   const truncated = truncate(base, MAX_FILENAME_LENGTH - suffix.length).replace(/[.\s]+$/, '');
-  return (truncated || FALLBACK_BASENAME) + suffix;
+  return (truncated || fallbackBasename) + suffix;
+}
+
+/**
+ * Download name for `Content-Disposition` (FR-D01): the same rules as archive entries, so a
+ * file is named identically whether downloaded singly or inside a ZIP.
+ */
+export function sanitizeDownloadFilename(raw: string | undefined, fallback: string): string {
+  if (!raw?.trim()) return fallback;
+  return sanitizeArchiveFilename(raw, undefined, fallback);
 }
 
 /**

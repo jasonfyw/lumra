@@ -41,6 +41,15 @@ importers:
       '@lumra/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@lumra/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@lumra/media':
+        specifier: workspace:*
+        version: link:../../packages/media
+      '@lumra/tokens':
+        specifier: workspace:*
+        version: link:../../packages/tokens
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261102.1
@@ -187,6 +196,15 @@ importers:
       aws4fetch:
         specifier: ^1.0.20
         version: 1.0.20
+
+  packages/tokens:
+    dependencies:
+      '@lumra/config':
+        specifier: workspace:*
+        version: link:../config
+      '@lumra/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
   packages/ui: {}
 
