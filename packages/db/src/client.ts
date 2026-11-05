@@ -19,13 +19,22 @@ export interface CreateDbOptions {
 
 export type Database = PostgresJsDatabase<typeof schema> & { $client: postgres.Sql };
 
-export function createDb(databaseUrl: string, options: CreateDbOptions = {}): Database {
-  if (!databaseUrl) throw new Error('createDb: databaseUrl is required');
-  const client = postgres(databaseUrl, {
+/**
+ * Raw postgres.js client with the same defaults as `createDb`. Used by the repositories in
+ * `./repositories` (Workers pass the Hyperdrive connection string here).
+ */
+export function createSqlClient(databaseUrl: string, options: CreateDbOptions = {}): postgres.Sql {
+  if (!databaseUrl) throw new Error('createSqlClient: databaseUrl is required');
+  return postgres(databaseUrl, {
     max: options.max ?? 5,
     prepare: options.prepare ?? false,
     // Never log query parameters (may contain capability hashes / emails).
     debug: false,
+    onnotice: () => {},
   });
-  return drizzle(client, { schema });
+}
+
+export function createDb(databaseUrl: string, options: CreateDbOptions = {}): Database {
+  if (!databaseUrl) throw new Error('createDb: databaseUrl is required');
+  return drizzle(createSqlClient(databaseUrl, options), { schema });
 }
