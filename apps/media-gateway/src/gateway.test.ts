@@ -8,7 +8,7 @@ import { mediaTokenKeyringSchema } from '@lumra/config';
 import { queueMessageSchema, type GalleryAccessState } from '@lumra/contracts';
 import { archivePartKey, derivativeKey, originalKey } from '@lumra/media';
 import { signMediaToken, type MediaTokenInput } from '@lumra/tokens';
-import worker, { type Env } from './index';
+import worker, { sentryOptions, type Env } from './index';
 import { FakeExecutionContext, FakeKv, FakeQueue, FakeR2Bucket } from './test-fakes';
 
 const SECRET = 's'.repeat(48);
@@ -451,5 +451,49 @@ describe('delivery usage events', () => {
     const res = await call(`/m/${await token()}`);
     expect(res.status).toBe(200);
     expect(h.logs.some((l) => l.includes('usage event send failed'))).toBe(true);
+  });
+});
+
+describe('observability (T04)', () => {
+  it('serves a sanitized /health: status, service and short commit only', async () => {
+    const res = await call('/health');
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
+    expect(await res.json()).toEqual({ status: 'ok', service: 'media-gateway' });
+    h.env = { ...h.env, COMMIT_SHA: '0123456789abcdef' } as Env;
+    expect(await (await call('/health')).json()).toEqual({
+      status: 'ok',
+      service: 'media-gateway',
+      commit: '0123456789ab',
+    });
+  });
+
+  it('echoes a valid x-request-id on every response and replaces invalid ones', async () => {
+    const served = await call(`/m/${await token()}`, { headers: { 'x-request-id': 'req-gw-1' } });
+    expect(served.status).toBe(200);
+    expect(served.headers.get('x-request-id')).toBe('req-gw-1');
+    const denied = await call('/m/not.a.token', {
+      headers: { 'x-request-id': 'bad id\twith tab' },
+    });
+    expect(denied.headers.get('x-request-id')).toMatch(/^[0-9a-f-]{36}$/);
+    const ray = await call('/originals/x', { headers: { 'cf-ray': '8d3f2a1b0c9e-IAD' } });
+    expect(ray.headers.get('x-request-id')).toBe('8d3f2a1b0c9e-IAD');
+  });
+
+  it('logs structured JSON bound to the request ID, which is the usage event traceId', async () => {
+    await call(`/m/${await token()}`, { headers: { 'x-request-id': 'req-trace-9' } });
+    expect(h.usage.messages[0]).toMatchObject({ traceId: 'req-trace-9' });
+    await call('/m/forged.token.value', { headers: { 'x-request-id': 'req-trace-10' } });
+    const events = h.logs.map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(
+      events.some((e) => e.requestId === 'req-trace-10' && e.service === 'media-gateway'),
+    ).toBe(true);
+    expect(events.every((e) => typeof e.ts === 'string' && typeof e.level === 'string')).toBe(true);
+  });
+
+  it('keeps Sentry uninitialised without a DSN', () => {
+    expect(sentryOptions(h.env)).toBeUndefined();
+    expect(
+      sentryOptions({ ...h.env, SENTRY_DSN: 'https://k@o1.ingest.sentry.io/1' } as Env),
+    ).toMatchObject({ enabled: true, sendDefaultPii: false });
   });
 });

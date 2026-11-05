@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { OutboxRepository, OutboxRow } from '@lumra/db';
+import { silentLogger } from './log';
 import { outboxRetryDelaySeconds, relayOutbox } from './outbox-relay';
 
 const mediaId = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
@@ -30,7 +31,7 @@ describe('relayOutbox', () => {
   it('publishes claimed rows with their dedupe keys and marks them processed', async () => {
     const repo = fakeRepo([row('a'), row('b')]);
     const queue = { sendBatch: vi.fn(async () => {}) };
-    const result = await relayOutbox(repo, queue, () => {});
+    const result = await relayOutbox(repo, queue, silentLogger);
     expect(result).toEqual({ published: 2, failed: 0 });
     expect(queue.sendBatch).toHaveBeenCalledWith([
       {
@@ -49,7 +50,7 @@ describe('relayOutbox', () => {
     const rows = Array.from({ length: 5 }, (_, i) => row(`r${i}`));
     const repo = fakeRepo(rows);
     const queue = { sendBatch: vi.fn(async () => {}) };
-    const result = await relayOutbox(repo, queue, () => {}, { batchSize: 2 });
+    const result = await relayOutbox(repo, queue, silentLogger, { batchSize: 2 });
     expect(result.published).toBe(5);
     expect(queue.sendBatch).toHaveBeenCalledTimes(3);
   });
@@ -57,7 +58,7 @@ describe('relayOutbox', () => {
   it('records failures with backoff when the queue rejects the batch', async () => {
     const repo = fakeRepo([row('a', { attemptCount: 2 })]);
     const queue = { sendBatch: vi.fn(async () => Promise.reject(new Error('queue down'))) };
-    const result = await relayOutbox(repo, queue, () => {});
+    const result = await relayOutbox(repo, queue, silentLogger);
     expect(result).toEqual({ published: 0, failed: 1 });
     expect(repo.markPublished).not.toHaveBeenCalled();
     expect(repo.markFailed).toHaveBeenCalledWith('a', 'publish failed: queue down', 40);
@@ -66,7 +67,7 @@ describe('relayOutbox', () => {
   it('parks malformed rows instead of publishing them', async () => {
     const repo = fakeRepo([row('bad', { payload: { mediaId: 'nope' } }), row('ok')]);
     const queue = { sendBatch: vi.fn(async () => {}) };
-    const result = await relayOutbox(repo, queue, () => {});
+    const result = await relayOutbox(repo, queue, silentLogger);
     expect(result).toEqual({ published: 1, failed: 1 });
     expect(repo.markFailed).toHaveBeenCalledWith('bad', 'invalid outbox payload', 3600);
     expect(repo.markPublished).toHaveBeenCalledWith(['ok']);

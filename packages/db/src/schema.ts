@@ -12,6 +12,7 @@ import {
   pgEnum,
   pgSchema,
   pgTable,
+  primaryKey,
   smallint,
   text,
   timestamp,
@@ -183,6 +184,8 @@ export const media = pgTable('media', {
   }),
   readyAt: tstz('ready_at'),
   failureCode: text('failure_code'),
+  /** Client-declared SHA-256 (hex), verified by the image worker (T10, docs/UPLOADS.md). */
+  checksumSha256: text('checksum_sha256'),
   deletedAt: tstz('deleted_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -223,6 +226,10 @@ export const uploadSessions = pgTable('upload_sessions', {
   status: uploadSessionStatus('status').notNull().default('pending'),
   idempotencyKey: text('idempotency_key').notNull().unique(),
   completedAt: tstz('completed_at'),
+  /** Guest quota holding this reservation; null when admitted against an account plan. */
+  guestSessionId: uuid('guest_session_id').references(() => guestSessions.id, {
+    onDelete: 'set null',
+  }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -351,6 +358,20 @@ export const providerWebhookEvents = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [unique('provider_webhook_events_provider_event_key').on(t.provider, t.providerEventId)],
+);
+
+/** Sliding-window rate limiter counters (FR-A05). Keys are HMACs; never raw IPs or ids. */
+export const rateLimitBuckets = pgTable(
+  'rate_limit_buckets',
+  {
+    bucketKey: text('bucket_key').notNull(),
+    windowStart: tstz('window_start').notNull(),
+    hitCount: integer('hit_count').notNull().default(0),
+    expiresAt: tstz('expires_at').notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ name: 'rate_limit_buckets_pkey', columns: [t.bucketKey, t.windowStart] })],
 );
 
 // ---------------------------------------------------------------------------------------------

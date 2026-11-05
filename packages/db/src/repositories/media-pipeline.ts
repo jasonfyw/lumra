@@ -14,6 +14,8 @@ export interface MediaForProcessing {
   mime: AcceptedPhotoMime;
   byteSize: number;
   originalKey: string;
+  /** Client-declared SHA-256 recorded at upload completion (T10), verified by the pipeline. */
+  checksumSha256: string | null;
   /** The media or its gallery is soft-deleted (deleted_at set). */
   deleted: boolean;
 }
@@ -66,6 +68,7 @@ interface MediaRow {
   mime: AcceptedPhotoMime;
   byte_size: string | number;
   original_key: string;
+  checksum_sha256: string | null;
   deleted: boolean;
 }
 
@@ -73,7 +76,7 @@ export function createMediaPipelineRepository(sql: postgres.Sql): MediaPipelineR
   return {
     async getForProcessing(mediaId) {
       const rows = await sql<MediaRow[]>`
-        select m.id, m.gallery_id, m.status, m.mime, m.byte_size, m.original_key,
+        select m.id, m.gallery_id, m.status, m.mime, m.byte_size, m.original_key, m.checksum_sha256,
                (m.deleted_at is not null or g.deleted_at is not null) as deleted
         from public.media m
         join public.galleries g on g.id = m.gallery_id
@@ -87,6 +90,7 @@ export function createMediaPipelineRepository(sql: postgres.Sql): MediaPipelineR
         mime: row.mime,
         byteSize: Number(row.byte_size),
         originalKey: row.original_key,
+        checksumSha256: row.checksum_sha256,
         deleted: row.deleted,
       };
     },

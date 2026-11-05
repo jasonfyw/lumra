@@ -30,16 +30,17 @@ Browser ──(HTML/JSON)──► Vercel / Next.js (apps/web)
 
 Shared code lives in `packages/*` so the web app, gateway and worker never duplicate business logic:
 
-| Package            | Responsibility                                                                                                                                |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@lumra/config`    | Zod env schemas per runtime, typed rate card, feature flags, numeric limits (guest quota, max file size, archive bounds)                      |
-| `@lumra/contracts` | Zod request/response/event schemas + inferred TS types (API §10, queue messages, media-token claims)                                          |
-| `@lumra/domain`    | Pure logic: state machines (gallery/media/archive/billing), quota checks, ordering keys, slug gen, justified-grid layout, filename sanitising |
-| `@lumra/db`        | DB client, typed queries/repositories; migrations live in `infra/supabase/migrations`                                                         |
-| `@lumra/billing`   | Rating (integer micro-USD), ledger writers, reservation math, Stripe adapter                                                                  |
-| `@lumra/media`     | Storage-key scheme, R2/S3 adapter (presign, multipart), magic-byte sniffing, derivative spec                                                  |
-| `@lumra/tokens`    | HMAC JWS media tokens with `kid` rotation; gallery access-state KV store and writer (ADR-001)                                                 |
-| `@lumra/ui`        | Design tokens, Tailwind preset, accessible primitives                                                                                         |
+| Package                | Responsibility                                                                                                                                |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@lumra/config`        | Zod env schemas per runtime, typed rate card, feature flags, numeric limits (guest quota, max file size, archive bounds)                      |
+| `@lumra/contracts`     | Zod request/response/event schemas + inferred TS types (API §10, queue messages, media-token claims)                                          |
+| `@lumra/domain`        | Pure logic: state machines (gallery/media/archive/billing), quota checks, ordering keys, slug gen, justified-grid layout, filename sanitising |
+| `@lumra/db`            | DB client, typed queries/repositories; migrations live in `infra/supabase/migrations`                                                         |
+| `@lumra/billing`       | Rating (integer micro-USD), ledger writers, reservation math, Stripe adapter                                                                  |
+| `@lumra/media`         | Storage-key scheme, R2/S3 adapter (presign, multipart), magic-byte sniffing, derivative spec                                                  |
+| `@lumra/observability` | Structured JSON logger, redaction (tokens/emails/IPs/signed URLs), request/trace IDs, health payload, Sentry scrubbing (T04)                  |
+| `@lumra/tokens`        | HMAC JWS media tokens with `kid` rotation; gallery access-state KV store and writer (ADR-001)                                                 |
+| `@lumra/ui`            | Design tokens, Tailwind preset, accessible primitives                                                                                         |
 
 ## 2. Decisions to record early (ADRs)
 

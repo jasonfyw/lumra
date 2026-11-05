@@ -52,7 +52,7 @@ export async function relayOutbox(
       } catch {
         // A malformed row is a producer bug; keep it visible (last_error) with long backoff.
         await repo.markFailed(row.id, 'invalid outbox payload', 3_600);
-        log('error', 'invalid outbox row', { outboxId: row.id, eventName: row.eventName });
+        log.error('invalid outbox row', { outboxId: row.id, eventName: row.eventName });
         result.failed++;
       }
     }
@@ -72,7 +72,7 @@ export async function relayOutbox(
             outboxRetryDelaySeconds(row.attemptCount),
           );
         }
-        log('error', 'outbox publish failed', { count: valid.length, error: reason.slice(0, 200) });
+        log.error('outbox publish failed', { count: valid.length, error: reason.slice(0, 200) });
         result.failed += valid.length;
         break;
       }

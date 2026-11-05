@@ -80,7 +80,7 @@ export async function handleMediaUploaded(
   if (media.status === 'reserved' || media.status === 'uploading') {
     // Finalize writes the outbox row in the same transaction as `uploaded`, so this means a
     // stale/replayed message for an upload that was re-opened; the next finalize re-enqueues.
-    log('warn', 'media.uploaded for media that is not uploaded', { ...ctx, status: media.status });
+    log.warn('media.uploaded for media that is not uploaded', { ...ctx, status: media.status });
     return 'skipped_not_uploaded';
   }
   if (media.status === 'uploaded')
@@ -92,7 +92,7 @@ export async function handleMediaUploaded(
 
   const reject = async (code: Parameters<MediaPipelineRepository['markFailed']>[1]) => {
     await repo.markFailed(media.id, code);
-    log('warn', 'media rejected', { ...ctx, code });
+    log.warn('media rejected', { ...ctx, code });
     return 'rejected' as const;
   };
 
@@ -118,6 +118,11 @@ export async function handleMediaUploaded(
     byteSize: original.size,
   });
   if (!result.ok) return reject(result.code);
+  // FR-M04: R2/multipart ETags aren't whole-file checksums, so the client SHA-256 recorded at
+  // finalize is verified here, on the bytes the processor actually decoded.
+  if (media.checksumSha256 && media.checksumSha256 !== result.manifest.source.sha256) {
+    return reject('checksum_mismatch');
+  }
 
   // Derivatives are written before the DB commit; if the commit is discarded we delete them.
   const variants: CompletedVariant[] = [];
@@ -165,16 +170,16 @@ export async function handleMediaUploaded(
     try {
       await derivatives.delete(written);
     } catch {
-      log('error', 'failed to delete discarded derivatives', { ...ctx, count: written.length });
+      log.error('failed to delete discarded derivatives', { ...ctx, count: written.length });
     }
-    log('info', 'processing result discarded', { ...ctx, reason: committed.reason });
+    log.info('processing result discarded', { ...ctx, reason: committed.reason });
     return 'discarded_deleted';
   }
 
   if (committed.staleObjectKeys.length > 0) {
     // Objects from an older pipeline version that no row references any more.
     await derivatives.delete(committed.staleObjectKeys).catch(() => {
-      log('warn', 'failed to delete stale derivatives', { ...ctx });
+      log.warn('failed to delete stale derivatives', { ...ctx });
     });
   }
   return 'ready';

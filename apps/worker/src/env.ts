@@ -7,6 +7,10 @@ export interface Env {
   /** Local dev only: plain-HTTP processor (`pnpm --filter @lumra/image-processor start`). */
   PROCESSOR_URL?: string;
   SENTRY_DSN?: string;
+  SENTRY_ENVIRONMENT?: string;
+  LOG_LEVEL?: string;
+  /** Deployed git SHA, e.g. `wrangler deploy --var COMMIT_SHA:$GITHUB_SHA`. */
+  COMMIT_SHA?: string;
   HYPERDRIVE?: Hyperdrive;
   /** Cloudflare Containers Durable Object namespace for the image processor (ADR-002). */
   IMAGE_PROCESSOR?: DurableObjectNamespace;

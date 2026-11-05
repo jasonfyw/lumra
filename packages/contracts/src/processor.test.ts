@@ -22,7 +22,14 @@ describe('processor contract', () => {
   it('validates the manifest shape', () => {
     const manifest = {
       mediaId,
-      source: { mime: 'image/jpeg', width: 4000, height: 3000, orientation: 6, takenAt: null },
+      source: {
+        mime: 'image/jpeg',
+        width: 4000,
+        height: 3000,
+        orientation: 6,
+        takenAt: null,
+        sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      },
       encoding: { format: 'webp', quality: 80, pipelineVersion: 1 },
       variants: [
         {

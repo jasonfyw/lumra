@@ -30,6 +30,9 @@ image with a separate entry point. Containers scale to zero when idle.
 - **Errors**: permanent rejections reuse `MEDIA_REJECTION_CODES` (+ new `processing_timeout`) as HTTP 422/413;
   environment problems (`processor_busy`, `processor_unavailable` — e.g. a missing HEVC decoder —,
   `internal_error`) are 5xx and retried, so a bad deploy never marks user photos `failed`.
+- **Integrity**: the manifest carries the SHA-256 of the received bytes; the Worker compares it with the
+  client checksum recorded at finalize (`media.checksum_sha256`, T10) and fails the media with
+  `checksum_mismatch` before writing any derivative (FR-M04).
 - **Transport**: the Worker reads the original from the `ORIGINALS` binding and streams it as the request
   body (never buffered in the Worker). Workers reach the container through the Durable Object namespace
   `IMAGE_PROCESSOR` (pool of 4 named instances, `enableInternet = false`, no credentials in the container);

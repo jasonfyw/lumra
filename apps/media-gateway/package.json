@@ -16,7 +16,9 @@
     "@lumra/contracts": "workspace:*",
     "@lumra/domain": "workspace:*",
     "@lumra/media": "workspace:*",
-    "@lumra/tokens": "workspace:*"
+    "@lumra/observability": "workspace:*",
+    "@lumra/tokens": "workspace:*",
+    "@sentry/cloudflare": "^11.10.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261102.1",

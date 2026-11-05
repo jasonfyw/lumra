@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import sharp, { type Metadata, type SharpOptions } from 'sharp';
 import {
   DERIVATIVE_ENCODING,
@@ -177,7 +178,14 @@ export async function processImage(
     return {
       manifest: {
         mediaId: params.mediaId,
-        source: { mime, width: displayWidth, height: displayHeight, orientation, takenAt },
+        source: {
+          mime,
+          width: displayWidth,
+          height: displayHeight,
+          orientation,
+          takenAt,
+          sha256: createHash('sha256').update(input).digest('hex'),
+        },
         encoding: {
           format: DERIVATIVE_ENCODING.format,
           quality: DERIVATIVE_ENCODING.quality,

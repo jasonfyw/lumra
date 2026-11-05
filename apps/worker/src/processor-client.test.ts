@@ -19,7 +19,14 @@ const input = (): ProcessInput => ({
 function manifest(overrides: Record<string, unknown> = {}) {
   return {
     mediaId,
-    source: { mime: 'image/heic', width: 400, height: 300, orientation: null, takenAt: null },
+    source: {
+      mime: 'image/heic',
+      width: 400,
+      height: 300,
+      orientation: null,
+      takenAt: null,
+      sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    },
     encoding: { format: 'webp', quality: 80, pipelineVersion: 1 },
     variants: [
       { variant: 'w320', field: 'w320', mime: 'image/webp', width: 320, height: 240, byteSize: 4 },

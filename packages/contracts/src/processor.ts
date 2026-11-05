@@ -58,6 +58,8 @@ export const processManifestSchema = z.object({
     orientation: z.number().int().min(1).max(8).nullable(),
     /** EXIF DateTimeOriginal (+ OffsetTimeOriginal when present) as UTC, null when absent. */
     takenAt: z.iso.datetime().nullable(),
+    /** Hex SHA-256 of the received bytes, so the caller can verify the client checksum. */
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
   }),
   encoding: z.object({
     format: z.literal(DERIVATIVE_ENCODING.format),

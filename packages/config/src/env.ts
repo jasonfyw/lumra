@@ -10,6 +10,7 @@ import { z } from 'zod';
 
 const url = z.url();
 const secret = z.string().min(32, 'must be at least 32 characters');
+const logLevel = z.enum(['debug', 'info', 'warn', 'error']);
 
 /**
  * Media-token keyring (ADR-001). Format: `kid:secret[,kid:secret...]`.
@@ -85,29 +86,48 @@ export const webServerEnvSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: url.optional(), // required by T05
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(), // required by T05
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(), // required by T02/T06
-  DATABASE_URL: url.optional(), // required by T02
-  GUEST_CAPABILITY_PEPPER: secret.optional(), // required by T06
+  DATABASE_URL: url.optional(), // required at use by DB-backed routes (lib/env.ts requireEnv)
+  GUEST_CAPABILITY_PEPPER: secret.optional(), // required at use by guest routes (T06)
   // Keyring (see mediaTokenKeyringSchema); required once the media-tokens endpoint lands.
   MEDIA_TOKEN_SECRET: mediaTokenKeyringSchema.optional(),
   // R2 adapter + bucket policy land in T09; the first caller (upload endpoints) tightens these.
-  R2_ACCOUNT_ID: z.string().optional(), // required by T10
-  R2_ACCESS_KEY_ID: z.string().optional(), // required by T10
-  R2_SECRET_ACCESS_KEY: z.string().optional(), // required by T10
+  // Required at use by the upload endpoints (T10); optional here so builds/CI need no secrets.
+  R2_ACCOUNT_ID: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
   R2_BUCKET_ORIGINALS: z.string().default('lumra-originals'),
+  // S3 endpoint override for local fakes / jurisdiction endpoints; default is the account endpoint.
+  R2_ENDPOINT: url.optional(),
+  // HMAC pepper for rate-limit subject keys (FR-A05); falls back to GUEST_CAPABILITY_PEPPER.
+  RATE_LIMIT_PEPPER: secret.optional(),
+  // Cloudflare Turnstile: bot challenges are enforced only when the secret is set (FR-A05).
+  TURNSTILE_SECRET_KEY: z.string().min(1).optional(),
+  NEXT_PUBLIC_TURNSTILE_SITE_KEY: z.string().min(1).optional(),
   STRIPE_SECRET_KEY: z.string().optional(), // required by T29
   STRIPE_WEBHOOK_SECRET: z.string().optional(), // required by T29
   STRIPE_PRICE_PRO_MONTHLY: z.string().optional(), // required by T29
-  SENTRY_DSN: url.optional(),
-  LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  SENTRY_DSN: url.optional(), // server/edge; absent ⇒ Sentry disabled (T04)
+  NEXT_PUBLIC_SENTRY_DSN: url.optional(), // browser; inlined at build time
+  SENTRY_ENVIRONMENT: z.string().optional(), // defaults to VERCEL_ENV / NODE_ENV
+  VERCEL_GIT_COMMIT_SHA: z.string().optional(), // Sentry release + /api/health `commit`
+  LOG_LEVEL: logLevel.default('info'),
 });
 export type WebServerEnv = z.infer<typeof webServerEnvSchema>;
+
+/** Observability vars shared by both Workers (T04). All optional: absent ⇒ Sentry disabled. */
+const workerObservability = {
+  SENTRY_DSN: url.optional(),
+  SENTRY_ENVIRONMENT: z.string().optional(),
+  LOG_LEVEL: logLevel.optional(),
+  COMMIT_SHA: z.string().optional(), // set at deploy: `wrangler deploy --var COMMIT_SHA:<sha>`
+};
 
 export const mediaGatewayEnvSchema = z.object({
   /** Allowed CORS origins, comma-separated (e.g. `https://lumra.vercel.app`). */
   APP_ORIGIN: originListSchema,
   /** Verification keyring; every listed kid is accepted (ADR-001). */
   MEDIA_TOKEN_SECRET: mediaTokenKeyringSchema,
-  SENTRY_DSN: url.optional(),
+  ...workerObservability,
 });
 export type MediaGatewayEnv = z.infer<typeof mediaGatewayEnvSchema>;
 
@@ -122,7 +142,7 @@ export const workerEnvSchema = z.object({
    * uses the Cloudflare Containers binding `IMAGE_PROCESSOR` (ADR-002).
    */
   PROCESSOR_URL: url.optional(),
-  SENTRY_DSN: url.optional(),
+  ...workerObservability,
 });
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;
 

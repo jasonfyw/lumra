@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import { processManifestSchema, type ProcessRequestParams } from '@lumra/contracts';
@@ -110,6 +111,7 @@ describe('processImage — metadata', () => {
 
     const { manifest, files } = await processImage(input, params());
     expect(manifest.source.takenAt).toBe('2024-05-06T05:08:09.000Z');
+    expect(manifest.source.sha256).toBe(createHash('sha256').update(input).digest('hex'));
     expect(manifest.source.orientation ?? 1).toBe(1);
     for (const bytes of files.values()) {
       const meta = await sharp(bytes).metadata();

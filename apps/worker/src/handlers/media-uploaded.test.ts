@@ -6,6 +6,7 @@ import type {
   MediaPipelineRepository,
 } from '@lumra/db';
 import type { MediaStatus } from '@lumra/contracts';
+import { silentLogger } from '../log';
 import { derivativeObjectKey } from '@lumra/media';
 import {
   handleMediaUploaded,
@@ -53,6 +54,7 @@ class FakeRepo implements MediaPipelineRepository {
       mime: 'image/jpeg',
       byteSize: 1000,
       originalKey,
+      checksumSha256: null,
       deleted: false,
     };
   }
@@ -129,6 +131,7 @@ function okResult(): ProcessResult {
         height: 3000,
         orientation: 1,
         takenAt: '2024-05-06T05:08:09.000Z',
+        sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       },
       encoding: { format: 'webp', quality: 80, pipelineVersion: 1 },
       variants: variants.map((v) => ({ ...v, field: v.variant, mime: 'image/webp', byteSize: 3 })),
@@ -151,7 +154,7 @@ function setup(
   const originals = new FakeOriginals();
   const derivatives = new FakeDerivatives();
   const processor = { process: vi.fn(process ?? (async () => okResult())) };
-  const deps: MediaUploadedDeps = { repo, originals, derivatives, processor, log: () => {} };
+  const deps: MediaUploadedDeps = { repo, originals, derivatives, processor, log: silentLogger };
   return { repo, originals, derivatives, processor, deps };
 }
 
@@ -247,6 +250,20 @@ describe('handleMediaUploaded', () => {
     expect(await handleMediaUploaded(message, deps)).toBe('rejected');
     expect(repo.row).toMatchObject({ status: 'failed', failureCode: 'too_many_pixels' });
     expect(derivatives.objects.size).toBe(0);
+  });
+
+  it('accepts a matching client checksum and fails a mismatch without writing derivatives', async () => {
+    const match = setup();
+    match.repo.row.checksumSha256 =
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    expect(await handleMediaUploaded(message, match.deps)).toBe('ready');
+
+    const mismatch = setup();
+    mismatch.repo.row.checksumSha256 =
+      'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    expect(await handleMediaUploaded(message, mismatch.deps)).toBe('rejected');
+    expect(mismatch.repo.row).toMatchObject({ status: 'failed', failureCode: 'checksum_mismatch' });
+    expect(mismatch.derivatives.objects.size).toBe(0);
   });
 
   it('throws on transient processor errors so the queue retries, leaving the row processing', async () => {

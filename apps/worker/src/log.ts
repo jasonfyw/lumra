@@ -1,8 +1,16 @@
-export type LogLevel = 'info' | 'warn' | 'error';
-export type Logger = (level: LogLevel, msg: string, fields?: Record<string, unknown>) => void;
+import { createLogger, type Logger } from '@lumra/observability';
+import type { Env } from './env';
 
-/** Structured JSON logs. Never pass tokens, signed URLs, filenames or object bytes. */
-export const log: Logger = (level, msg, fields = {}) => {
-  const sink = { info: console.info, warn: console.warn, error: console.error }[level];
-  sink(JSON.stringify({ level, msg, service: 'worker', ...fields }));
-};
+export type { Logger } from '@lumra/observability';
+
+/** Structured JSON logger (T04). Never log tokens, signed URLs, filenames or object bytes. */
+export function loggerFor(env: Pick<Env, 'LOG_LEVEL' | 'SENTRY_ENVIRONMENT'>): Logger {
+  return createLogger({
+    service: 'worker',
+    level: env.LOG_LEVEL,
+    production: env.SENTRY_ENVIRONMENT === 'production',
+  });
+}
+
+/** Logger that drops everything; for unit tests. */
+export const silentLogger: Logger = createLogger({ service: 'worker', sink: () => {} });
