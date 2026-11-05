@@ -43,3 +43,48 @@ export function partLength(plan: UploadPlan, size: number, partNumber: number): 
   }
   return partNumber < plan.partCount ? plan.partSize : size - plan.partSize * (plan.partCount - 1);
 }
+
+/**
+ * Rebuilds the plan persisted on an upload session (`reserved_bytes`, `part_size`) so later calls
+ * keep using the intent's plan even if the configured part size changes in between.
+ */
+export function planFromReservation(size: number, partSize: number): UploadPlan {
+  if (!Number.isSafeInteger(size) || size < 1 || !Number.isSafeInteger(partSize) || partSize < 1) {
+    throw new RangeError('size and partSize must be positive integers');
+  }
+  if (partSize >= size) return { multipart: false, partSize: size, partCount: 1 };
+  return { multipart: true, partSize, partCount: Math.ceil(size / partSize) };
+}
+
+export type PartListProblem =
+  | { problem: 'missing_parts'; partNumbers: number[] }
+  | { problem: 'unexpected_parts'; partNumbers: number[] }
+  | { problem: 'duplicate_parts'; partNumbers: number[] };
+
+/**
+ * Checks that `partNumbers` is exactly 1..partCount (any order, no duplicates) — a multipart
+ * upload is only completed when every planned part is present (FR-M04).
+ */
+export function checkCompletePartNumbers(
+  plan: UploadPlan,
+  partNumbers: readonly number[],
+): PartListProblem | null {
+  const seen = new Set<number>();
+  const duplicates = new Set<number>();
+  for (const n of partNumbers) (seen.has(n) ? duplicates : seen).add(n);
+  if (duplicates.size)
+    return { problem: 'duplicate_parts', partNumbers: [...duplicates].sort((a, b) => a - b) };
+  const unexpected = [...seen].filter((n) => !Number.isInteger(n) || n < 1 || n > plan.partCount);
+  if (unexpected.length)
+    return { problem: 'unexpected_parts', partNumbers: unexpected.sort((a, b) => a - b) };
+  const missing: number[] = [];
+  for (let n = 1; n <= plan.partCount && missing.length < 50; n++)
+    if (!seen.has(n)) missing.push(n);
+  if (missing.length) return { problem: 'missing_parts', partNumbers: missing };
+  return null;
+}
+
+/** Normalises an S3 ETag for comparison (strips quotes and a weak `W/` prefix). */
+export function normalizeEtag(etag: string): string {
+  return etag.trim().replace(/^W\//, '').replace(/^"|"$/g, '');
+}

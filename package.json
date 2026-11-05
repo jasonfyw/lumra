@@ -11,7 +11,7 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "test:db": "pnpm --workspace-concurrency=1 --filter @lumra/db --filter @lumra/web test:db",
+    "test:db": "pnpm --filter @lumra/db test:db && pnpm --filter @lumra/web test:db",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "e2e": "pnpm --filter @lumra/e2e e2e"

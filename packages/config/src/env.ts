@@ -89,15 +89,23 @@ export const webServerEnvSchema = z
     NEXT_PUBLIC_SUPABASE_URL: url.optional(),
     NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1).optional(),
     SUPABASE_SERVICE_ROLE_KEY: z.string().optional(), // required by T02/T06
-    DATABASE_URL: url.optional(), // required by T02
-    GUEST_CAPABILITY_PEPPER: secret.optional(), // required by T06
+    DATABASE_URL: url.optional(), // required at use by DB-backed routes (lib/env.ts requireEnv)
+    GUEST_CAPABILITY_PEPPER: secret.optional(), // required at use by guest routes (T06)
     // Keyring (see mediaTokenKeyringSchema); required once the media-tokens endpoint lands.
     MEDIA_TOKEN_SECRET: mediaTokenKeyringSchema.optional(),
     // R2 adapter + bucket policy land in T09; the first caller (upload endpoints) tightens these.
-    R2_ACCOUNT_ID: z.string().optional(), // required by T10
-    R2_ACCESS_KEY_ID: z.string().optional(), // required by T10
-    R2_SECRET_ACCESS_KEY: z.string().optional(), // required by T10
+    // Required at use by the upload endpoints (T10); optional here so builds/CI need no secrets.
+    R2_ACCOUNT_ID: z.string().optional(),
+    R2_ACCESS_KEY_ID: z.string().optional(),
+    R2_SECRET_ACCESS_KEY: z.string().optional(),
     R2_BUCKET_ORIGINALS: z.string().default('lumra-originals'),
+    // S3 endpoint override for local fakes / jurisdiction endpoints; default is the account endpoint.
+    R2_ENDPOINT: url.optional(),
+    // HMAC pepper for rate-limit subject keys (FR-A05); falls back to GUEST_CAPABILITY_PEPPER.
+    RATE_LIMIT_PEPPER: secret.optional(),
+    // Cloudflare Turnstile: bot challenges are enforced only when the secret is set (FR-A05).
+    TURNSTILE_SECRET_KEY: z.string().min(1).optional(),
+    NEXT_PUBLIC_TURNSTILE_SITE_KEY: z.string().min(1).optional(),
     STRIPE_SECRET_KEY: z.string().optional(), // required by T29
     STRIPE_WEBHOOK_SECRET: z.string().optional(), // required by T29
     STRIPE_PRICE_PRO_MONTHLY: z.string().optional(), // required by T29

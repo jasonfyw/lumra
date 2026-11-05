@@ -3,6 +3,8 @@
 
 html {
   color-scheme: light;
+  /* The lightbox locks page scroll; keep the width stable so the grid does not re-flow. */
+  scrollbar-gutter: stable;
 }
 
 body {
@@ -15,4 +17,13 @@ body {
 :focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
+}
+
+@keyframes lumra-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }

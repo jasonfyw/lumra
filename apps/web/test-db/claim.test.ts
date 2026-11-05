@@ -11,7 +11,7 @@ import {
   signInAs,
   sql,
   useGuestCookie,
-} from './setup';
+} from './fixtures';
 
 const CLAIM_URL = '/api/v1/guest/drafts/claim';
 const post = (galleryId: unknown, headers?: Record<string, string>) =>

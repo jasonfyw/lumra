@@ -1,10 +1,9 @@
-/** Per-test fake request context, shared by the mocks (mocks.ts) and the tests (setup.ts). */
-export interface TestRequestContext {
-  user: null | { id: string; email: string };
-  cookies: Map<string, string>;
-}
+import type { TestRequestState } from './setup';
 
-const globalKey = '__lumraTestRequestContext';
-const store = globalThis as unknown as Record<string, TestRequestContext | undefined>;
-
-export const ctx: TestRequestContext = (store[globalKey] ??= { user: null, cookies: new Map() });
+/**
+ * The per-test fake request (signed-in user + cookie jar) owned by setup.ts (the vitest setup
+ * file). Re-exported for the T05/T07/T08 fixtures; setup.ts clears it after every test.
+ */
+export const ctx: TestRequestState = (
+  globalThis as unknown as { __lumraTestState: TestRequestState }
+).__lumraTestState;

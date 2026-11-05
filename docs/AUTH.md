@@ -29,9 +29,12 @@ Email OTP and magic link only, through Supabase Auth and `@supabase/ssr`.
   intent.
 - Resend has a 60 s cooldown in the UI, matching Supabase `max_frequency`. The profile and the Free
   billing account are created by the `handle_new_user` trigger on first sign-in.
-- **Rate limits (FR-A05):** this relies on Supabase Auth's built-in limits for now (`email_sent`,
-  `token_verifications`, `max_frequency`). `TODO(rate-limit)` in `actions.ts` marks where the
-  app-level per-IP/per-email limiter from `lib/rate-limit.ts` (T06) plugs in.
+- **Rate limits (FR-A05):** the send and verify actions apply the app limiter (`lib/rate-limit.ts`)
+  per client IP: `RATE_LIMITS.authOtpSend` (10/hour) and `authOtpVerify` (30 per 15 min). When
+  limited, the form shows an accessible "Too many…" error. Supabase Auth's own limits
+  (`email_sent`, `token_verifications`, per-address `max_frequency`) apply as well. If the limiter
+  is unavailable (no `DATABASE_URL` or pepper, or the migration is missing) it fails open and logs
+  `auth rate limiter unavailable`. There is no Turnstile challenge on the sign-in form yet.
 - **Without Supabase env** (local build, CI, the default e2e run), the proxy does nothing, every
   request counts as signed out, and `/auth` says sign-in is unavailable.
   `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are required only when

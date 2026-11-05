@@ -13,7 +13,7 @@ import {
   resetContext,
   signInAs,
   sql,
-} from './setup';
+} from './fixtures';
 
 const get = (query = '') => list(jsonRequest(`/api/v1/galleries${query}`, { method: 'GET' }), {});
 const post = (body?: unknown, headers?: Record<string, string>) =>

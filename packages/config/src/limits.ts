@@ -101,3 +101,51 @@ export const JUSTIFIED_LAYOUT = {
 export const ORDERING = {
   maxKeyLength: 32,
 } as const;
+
+/**
+ * Abuse thresholds (FR-A05). `limit` requests per sliding `windowSeconds` per subject; above
+ * `challengeAt` a bot challenge (Turnstile) is required when one is configured. Tune freely.
+ */
+export interface RateLimitRule {
+  limit: number;
+  windowSeconds: number;
+  challengeAt?: number;
+}
+
+export const RATE_LIMITS = {
+  /** Per client IP: guest draft creation (POST /api/v1/guest/drafts). */
+  guestDraftCreate: { limit: 20, windowSeconds: 60 * 60, challengeAt: 5 },
+  /** Per principal (user or guest session): upload intents. 2,000-item galleries need headroom. */
+  uploadIntent: { limit: 300, windowSeconds: 60 },
+  /** Per principal: part URL signing (parts are signed in batches of up to 100). */
+  uploadSign: { limit: 600, windowSeconds: 60 },
+  /** Per principal: upload status, complete and abort. */
+  uploadMutate: { limit: 600, windowSeconds: 60 },
+  /** Per client IP: sign-in emails (T05). Supabase also limits per address (`max_frequency`). */
+  authOtpSend: { limit: 10, windowSeconds: 60 * 60 },
+  /** Per client IP: OTP code verification attempts (T05). */
+  authOtpVerify: { limit: 30, windowSeconds: 15 * 60 },
+} as const satisfies Record<string, RateLimitRule>;
+export type RateLimitRuleName = keyof typeof RATE_LIMITS;
+
+/**
+ * Limiter subject keys: IPs are truncated to these prefixes (IPv6 clients usually own a /64),
+ * then HMAC'd with a server pepper and truncated, so raw IPs are never stored (PRD §6.2).
+ */
+export const RATE_LIMIT_KEYS = {
+  ipv4PrefixBits: 32,
+  ipv6PrefixBits: 64,
+  hashHexChars: 32,
+} as const;
+
+/**
+ * Conservative storage footprint estimate for upload admission (FR-G07, T28): derivatives
+ * (WebP at 320/640/1280/2048 px, no upscaling) are not known until processed, so each upload
+ * reserves `original + original × overheadBps / 10 000 + perItemBytes`. A 2048 px WebP is
+ * typically 3–10 % of a camera JPEG; 25 % + 100 kB also covers small, already-compressed PNG/WebP
+ * sources whose derivatives can be relatively larger.
+ */
+export const STORAGE_ESTIMATE = {
+  derivativeOverheadBps: 2_500,
+  derivativePerItemBytes: 100_000,
+} as const;

@@ -10,6 +10,13 @@ import { SUPABASE_E2E } from './env';
 const sql = postgres(SUPABASE_E2E.databaseUrl, { max: 2, onnotice: () => {}, prepare: false });
 test.afterAll(() => sql.end());
 
+// Each test looks like a different client IP, so the per-IP auth rate limits (RATE_LIMITS
+// authOtp*) don't accumulate across tests and repeated runs.
+test.beforeEach(async ({ context }) => {
+  const ip = `198.18.${randomBytes(1)[0]}.${randomBytes(1)[0]}`;
+  await context.setExtraHTTPHeaders({ 'x-forwarded-for': ip });
+});
+
 const uniqueEmail = () => `e2e-${randomUUID()}@example.test`;
 
 interface MailpitMessage {
@@ -159,7 +166,9 @@ test('interrupted auth: another browser without the guest cookie cannot claim', 
   browser,
 }) => {
   const draft = await seedGuestDraft();
-  const other = await browser.newContext();
+  const other = await browser.newContext({
+    extraHTTPHeaders: { 'x-forwarded-for': `198.19.${randomBytes(1)[0]}.${randomBytes(1)[0]}` },
+  });
   const page = await other.newPage();
   await page.goto(`/auth?returnTo=%2Fdashboard&intent=publish&galleryId=${draft.galleryId}`);
   await signInWithCode(page, uniqueEmail());

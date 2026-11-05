@@ -1,9 +1,12 @@
 'use server';
 
+import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { serverEnv } from '@/lib/env';
+import { ApiFailure } from '@/lib/api';
 import { logger } from '@/lib/log';
+import { clientIp, enforceRateLimit } from '@/lib/rate-limit';
 import {
   authFlowQuery,
   parseAuthFlowParams,
@@ -44,6 +47,42 @@ function flowFrom(formData: FormData): AuthFlowParams {
   });
 }
 
+/**
+ * App-level per-IP limits (FR-A05, `RATE_LIMITS.authOtp*`) on top of Supabase Auth's own.
+ * Returns a user-facing message when limited. Fails open (logged) if the limiter itself is
+ * unavailable, e.g. no DATABASE_URL locally: Supabase's limits still apply.
+ */
+async function rateLimitMessage(rule: 'authOtpSend' | 'authOtpVerify'): Promise<string | null> {
+  const incoming = await headers();
+  const forwarded = new Headers();
+  for (const name of ['x-forwarded-for', 'x-real-ip']) {
+    const value = incoming.get(name);
+    if (value) forwarded.set(name, value);
+  }
+  const request = new Request(serverEnv().NEXT_PUBLIC_APP_URL, { headers: forwarded });
+  try {
+    // No bot challenge here: the form has no Turnstile widget (yet).
+    await enforceRateLimit(
+      request,
+      rule,
+      { kind: 'ip', ip: clientIp(forwarded) },
+      {
+        log,
+        challenge: null,
+      },
+    );
+    return null;
+  } catch (error) {
+    if (error instanceof ApiFailure && error.error.code === 'rate_limited') {
+      return rule === 'authOtpSend'
+        ? 'Too many sign-in emails. Wait a while, then try again.'
+        : 'Too many attempts. Wait a few minutes, then try again.';
+    }
+    log.warn('auth rate limiter unavailable', { rule, err: error });
+    return null;
+  }
+}
+
 function isRateLimited(error: { status?: number; code?: string }): boolean {
   return error.status === 429 || (error.code ?? '').startsWith('over_');
 }
@@ -59,8 +98,9 @@ export async function sendOtpAction(
   const supabase = await createSupabaseServerClient();
   if (!supabase) return { ...previous, error: NOT_CONFIGURED, notice: null };
 
-  // TODO(rate-limit): app-level per-IP/per-email send limit (FR-A05) via lib/rate-limit.ts once
-  // T06 lands it. Until then Supabase Auth's built-in limits apply (email_sent, max_frequency).
+  const limited = await rateLimitMessage('authOtpSend');
+  if (limited) return { ...previous, email: email.data, error: limited, notice: null };
+
   const confirmUrl = new URL('/auth/confirm', serverEnv().NEXT_PUBLIC_APP_URL);
   confirmUrl.search = authFlowQuery(flowFrom(formData)).toString();
   const { error } = await supabase.auth.signInWithOtp({
@@ -100,7 +140,9 @@ export async function verifyOtpAction(
   const supabase = await createSupabaseServerClient();
   if (!supabase) return { ...previous, error: NOT_CONFIGURED, notice: null };
 
-  // TODO(rate-limit): app-level verify-attempt limit (FR-A05); Supabase limits verifications.
+  const limited = await rateLimitMessage('authOtpVerify');
+  if (limited) return { ...previous, error: limited, notice: null };
+
   const { error } = await supabase.auth.verifyOtp({
     email: email.data,
     token: code.data,

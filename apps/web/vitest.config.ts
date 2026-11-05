@@ -2,9 +2,11 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  resolve: {
-    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+  resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.{ts,tsx}'],
+    setupFiles: ['./src/test/setup.ts'],
+    // test-db/ needs the local Supabase stack: `pnpm test:db` (vitest.db.config.ts).
   },
-  // DB integration tests (test-db/) need local Supabase: `pnpm test:db`.
-  test: { include: ['src/**/*.test.{ts,tsx}'] },
 });

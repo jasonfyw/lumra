@@ -10,6 +10,7 @@ const auth = vi.hoisted(() => ({
   verifyOtp: vi.fn(),
   exchangeCodeForSession: vi.fn(),
   signInWithOtp: vi.fn(),
+  limited: null as null | 'authOtpSend' | 'authOtpVerify',
 }));
 
 vi.mock('server-only', () => ({}));
@@ -19,7 +20,20 @@ vi.mock('@sentry/nextjs', () => ({
 }));
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: () => undefined, getAll: () => [], set: () => {} }),
+  headers: async () => new Headers({ 'x-forwarded-for': '203.0.113.7' }),
 }));
+vi.mock('@/lib/rate-limit', async () => {
+  const { ApiFailure } = await import('@/lib/api');
+  return {
+    clientIp: (h: Headers) => h.get('x-forwarded-for'),
+    enforceRateLimit: vi.fn(async (_req: Request, rule: string, subject: unknown) => {
+      expect(subject).toEqual({ kind: 'ip', ip: '203.0.113.7' });
+      if (auth.limited === rule) {
+        throw new ApiFailure({ code: 'rate_limited', message: 'x', retryable: true });
+      }
+    }),
+  };
+});
 vi.mock('@/lib/supabase/server', () => ({
   isSupabaseConfigured: () => auth.configured,
   createSupabaseServerClient: async () =>
@@ -58,6 +72,7 @@ beforeEach(() => {
   auth.verifyOtp.mockReset();
   auth.exchangeCodeForSession.mockReset();
   auth.signInWithOtp.mockReset();
+  auth.limited = null;
   vi.spyOn(console, 'info').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
@@ -202,6 +217,20 @@ describe('auth server actions', () => {
       token: '123456',
       type: 'email',
     });
+  });
+
+  it('applies the per-IP app rate limits before calling Supabase', async () => {
+    auth.limited = 'authOtpSend';
+    const send = await sendOtpAction(state, form({ email: 'a@b.co' }));
+    expect(send.error).toMatch(/Too many sign-in emails/);
+    expect(auth.signInWithOtp).not.toHaveBeenCalled();
+    auth.limited = 'authOtpVerify';
+    const verify = await verifyOtpAction(
+      { ...state, step: 'code', email: 'a@b.co' },
+      form({ email: 'a@b.co', code: '123456' }),
+    );
+    expect(verify.error).toMatch(/Too many attempts/);
+    expect(auth.verifyOtp).not.toHaveBeenCalled();
   });
 
   it('degrades gracefully without Supabase env', async () => {

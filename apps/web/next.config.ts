@@ -17,6 +17,7 @@ const nextConfig: NextConfig = {
     '@lumra/contracts',
     '@lumra/db',
     '@lumra/domain',
+    '@lumra/media',
     '@lumra/observability',
     '@lumra/ui',
   ],

@@ -36,6 +36,9 @@ function sqlTables(): Record<string, Set<string>> {
     }
     out[m[1]!] = cols;
   }
+  for (const m of sql.matchAll(/alter table public\.(\w+)\s+add column ([a-z_][a-z0-9_]*) /g)) {
+    out[m[1]!]?.add(m[2]!);
+  }
   return out;
 }
 
@@ -59,9 +62,9 @@ describe('SQL enums match TypeScript status sets', () => {
 describe('Drizzle schema mirrors SQL tables', () => {
   const fromSql = sqlTables();
 
-  it('has the same set of public tables (all PRD §8 tables)', () => {
+  it('has the same set of public tables (PRD §8 tables + rate_limit_buckets)', () => {
     expect(drizzleTables.map((t) => t.name).sort()).toEqual(Object.keys(fromSql).sort());
-    expect(Object.keys(fromSql)).toHaveLength(16);
+    expect(Object.keys(fromSql)).toHaveLength(17);
   });
 
   for (const table of drizzleTables) {
