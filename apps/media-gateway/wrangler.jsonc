@@ -22,6 +22,8 @@
   //   MEDIA_TOKEN_SECRET — verification keyring `kid:secret[,kid:secret]` (ADR-001); local dev
   //                        reads it from `.dev.vars`.
   //   SENTRY_DSN
+  // Optional vars (T04): SENTRY_ENVIRONMENT, LOG_LEVEL, COMMIT_SHA (`--var COMMIT_SHA:<sha>`)
+  "upload_source_maps": true,
   "env": {
     "staging": {
       // TODO(T38): set to the stable staging branch alias once the Vercel project exists.

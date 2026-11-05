@@ -10,6 +10,7 @@ import { z } from 'zod';
 
 const url = z.url();
 const secret = z.string().min(32, 'must be at least 32 characters');
+const logLevel = z.enum(['debug', 'info', 'warn', 'error']);
 
 /**
  * Media-token keyring (ADR-001). Format: `kid:secret[,kid:secret...]`.
@@ -97,23 +98,34 @@ export const webServerEnvSchema = z.object({
   STRIPE_SECRET_KEY: z.string().optional(), // required by T29
   STRIPE_WEBHOOK_SECRET: z.string().optional(), // required by T29
   STRIPE_PRICE_PRO_MONTHLY: z.string().optional(), // required by T29
-  SENTRY_DSN: url.optional(),
-  LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  SENTRY_DSN: url.optional(), // server/edge; absent ⇒ Sentry disabled (T04)
+  NEXT_PUBLIC_SENTRY_DSN: url.optional(), // browser; inlined at build time
+  SENTRY_ENVIRONMENT: z.string().optional(), // defaults to VERCEL_ENV / NODE_ENV
+  VERCEL_GIT_COMMIT_SHA: z.string().optional(), // Sentry release + /api/health `commit`
+  LOG_LEVEL: logLevel.default('info'),
 });
 export type WebServerEnv = z.infer<typeof webServerEnvSchema>;
+
+/** Observability vars shared by both Workers (T04). All optional: absent ⇒ Sentry disabled. */
+const workerObservability = {
+  SENTRY_DSN: url.optional(),
+  SENTRY_ENVIRONMENT: z.string().optional(),
+  LOG_LEVEL: logLevel.optional(),
+  COMMIT_SHA: z.string().optional(), // set at deploy: `wrangler deploy --var COMMIT_SHA:<sha>`
+};
 
 export const mediaGatewayEnvSchema = z.object({
   /** Allowed CORS origins, comma-separated (e.g. `https://lumra.vercel.app`). */
   APP_ORIGIN: originListSchema,
   /** Verification keyring; every listed kid is accepted (ADR-001). */
   MEDIA_TOKEN_SECRET: mediaTokenKeyringSchema,
-  SENTRY_DSN: url.optional(),
+  ...workerObservability,
 });
 export type MediaGatewayEnv = z.infer<typeof mediaGatewayEnvSchema>;
 
 export const workerEnvSchema = z.object({
   DATABASE_URL: url.optional(), // required by T12
-  SENTRY_DSN: url.optional(),
+  ...workerObservability,
 });
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;
 
