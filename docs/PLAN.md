@@ -23,7 +23,7 @@ Browser ──(HTML/JSON)──► Vercel / Next.js (apps/web)
    │                                       image processor container (sharp/libvips+HEIF)
    │                                       archive builder (streamed ZIP → R2 temp-archives)
    │
-   └──(short-lived media token)──► apps/media-gateway (Worker on media.<domain>)
+   └──(short-lived media token)──► apps/media-gateway (Worker on *.workers.dev until a custom domain exists)
                                      verifies JWS + access_version, streams from R2 binding,
                                      emits delivery-byte usage events
 ```
@@ -46,7 +46,7 @@ Shared code lives in `packages/*` so the web app, gateway and worker never dupli
 | ------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
 | ADR-000 | Monorepo tooling                        | pnpm workspaces + Turborepo, TS strict, ESLint flat config + Prettier, Vitest                                                                               | T01 (done in scaffold) |
 | ADR-001 | Private media gateway vs presigned GETs | Worker gateway with HMAC-SHA256 JWS (≤5 min), access-version check against KV/DO with ≤5 s cache, fail closed                                               | T20                    |
-| ADR-002 | Image processor runtime                 | Cloudflare Queue → container job (Cloudflare Containers or Fly Machines) running sharp with libheif; no native deps on Vercel                               | T12                    |
+| ADR-002 | Image processor runtime                 | **Accepted:** Cloudflare Queue → Cloudflare Containers job running sharp with libheif; no native deps on Vercel                                             | T12                    |
 | ADR-003 | ZIP implementation                      | Streamed STORE-mode ZIP (no recompression of JPEG/HEIC) built in the worker container, multipart-uploaded to R2; partitions ≤500 items / ≤2 GB              | T24                    |
 | ADR-004 | Billing rating & Stripe mapping         | Internal append-only `usage_ledger` authoritative; Stripe Billing Meters for storage GB-month & delivery GB, exported daily with idempotency keys           | T27/T31                |
 | ADR-005 | RLS & guest claim security              | Owner RLS on browser-readable tables; guest + billing + gateway tables service-only; claim requires guest cookie hash + verified session in one transaction | T02/T07                |
@@ -228,9 +228,11 @@ T27 ── T28 ── T32 ;  T29 ── T30 ── T33 ; T31     (start after T0
 
 Parallelisable streams once P0 lands: (a) auth/drafts (T05–T08), (b) storage/upload (T09–T13), (c) billing core (T27), (d) UI shell/grid layout algorithm (T03, T17 layout math).
 
-## 5. Open questions for the product owner
+## 5. Product-owner decisions
 
-1. Production domain (needed for `media.<domain>`, auth redirects, email sender).
-2. Image processor host: Cloudflare Containers vs Fly.io/Render (ADR-002) — affects cost and ops.
-3. Email provider for transactional mail (Supabase SMTP via Resend/Postmark?).
-4. Confirm Proposed commercial defaults in PRD §17 before T27 hard-codes the initial rate-card version.
+| #   | Question                               | Decision (2026-11-05)                           | Implications                                                                                                                                                                                                                                                                                                                      |
+| --- | -------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Production domain                      | `lumra.vercel.app`                              | Auth redirect allowlist and `NEXT_PUBLIC_APP_URL` use it. A custom subdomain can't be put on `vercel.app`, so the media gateway runs on its `*.workers.dev` URL. Tokens travel in the URL, so a cross-origin gateway works. Revisit `media.<domain>` if a custom domain is bought.                                                |
+| 2   | Image processor host                   | Cloudflare Containers (ADR-002)                 | Processor, archive builder and queues all on Cloudflare; R2 accessed via bindings with no egress.                                                                                                                                                                                                                                 |
+| 3   | Transactional email                    | Resend as Supabase custom SMTP (agent's choice) | Local dev uses Supabase's built-in Inbucket. **Launch blocker:** Resend (like every reputable provider) needs a verified sending domain with SPF/DKIM/DMARC, and `vercel.app` can't be verified. Supabase's default SMTP is rate-limited to a few emails/hour and is not for production. Buy a domain before public launch (T39). |
+| 4   | Proposed commercial defaults (PRD §17) | Open                                            | Confirm before T27 fixes rate-card v1.                                                                                                                                                                                                                                                                                            |

@@ -15,12 +15,21 @@
   // Secrets (set with `wrangler secret put`): MEDIA_TOKEN_SECRET, SENTRY_DSN
   "env": {
     "staging": {
-      // TODO(T38): replace with the real staging origin once the domain is chosen.
+      // TODO(T38): set to the stable staging branch alias once the Vercel project exists.
       "vars": { "APP_ORIGIN": "https://staging.lumra.invalid" },
       "r2_buckets": [
         { "binding": "ORIGINALS", "bucket_name": "lumra-originals-staging" },
         { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives-staging" },
         { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives-staging" },
+      ],
+    },
+    "production": {
+      // Served on the Worker's workers.dev URL; no custom media domain while on vercel.app.
+      "vars": { "APP_ORIGIN": "https://lumra.vercel.app" },
+      "r2_buckets": [
+        { "binding": "ORIGINALS", "bucket_name": "lumra-originals" },
+        { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives" },
+        { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives" },
       ],
     },
   },
