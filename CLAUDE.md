@@ -20,7 +20,7 @@ Read `docs/PRD.md` (spec), `docs/PLAN.md` (task breakdown, T01–T40) and releva
 pnpm install
 pnpm lint && pnpm typecheck && pnpm test && pnpm build
 pnpm format            # prettier
-pnpm e2e               # Playwright (tests/e2e)
+pnpm e2e               # Playwright (tests/e2e); set PLAYWRIGHT_CHROMIUM_EXECUTABLE to reuse a preinstalled Chromium
 pnpm --filter @lumra/web dev
 ```
 
