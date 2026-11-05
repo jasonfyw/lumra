@@ -5,4 +5,6 @@ export default defineConfig({
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
+  // DB integration tests (test-db/) need local Supabase: `pnpm test:db`.
+  test: { include: ['src/**/*.test.{ts,tsx}'] },
 });

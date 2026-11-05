@@ -2,7 +2,7 @@
   "name": "@lumra/e2e",
   "version": "0.0.0",
   "private": true,
-  "description": "Playwright end-to-end journeys (PRD §14.2)",
+  "description": "Playwright end-to-end journeys (PRD \u00a714.2)",
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
@@ -11,6 +11,7 @@
   },
   "devDependencies": {
     "@playwright/test": "~1.64.1",
-    "@types/node": "^26.6.6"
+    "@types/node": "^26.6.6",
+    "postgres": "^4.0.0"
   }
 }
