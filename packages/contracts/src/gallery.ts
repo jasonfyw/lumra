@@ -1,3 +1,4 @@
+import { GALLERY_LIMITS } from '@lumra/config';
 import { z } from 'zod';
 import { cursorPageQuerySchema } from './api';
 
@@ -37,14 +38,25 @@ export const createGalleryRequestSchema = z.object({
 });
 export type CreateGalleryRequest = z.infer<typeof createGalleryRequestSchema>;
 
+/** Gallery password (FR-G04): hashed with Argon2id server-side, never stored or logged. */
+export const galleryPasswordSchema = z.string().min(4).max(200);
+
+/**
+ * Expiry instant (FR-G05): ISO-8601 in UTC (`…Z`); the UI converts from local time. `null` means
+ * the link never expires. "Must be in the future" is checked server-side (`checkGalleryExpiry`).
+ */
+export const galleryExpiresAtSchema = z.iso.datetime().nullable();
+
+/** `POST /api/v1/galleries/{id}/publish` (T16). Both fields only apply on the first publish. */
 export const publishGalleryRequestSchema = z.object({
-  expiresAt: z.iso.datetime().nullable().optional(),
-  password: z.string().min(4).max(200).optional(),
+  expiresAt: galleryExpiresAtSchema.optional(),
+  password: galleryPasswordSchema.optional(),
 });
 export type PublishGalleryRequest = z.infer<typeof publishGalleryRequestSchema>;
 
+/** `PATCH /api/v1/galleries/{id}/media/order` (T15): a full permutation of non-deleted items. */
 export const reorderMediaRequestSchema = z.object({
-  orderedIds: z.array(z.uuid()).min(1).max(2_000),
+  orderedIds: z.array(z.uuid()).min(1).max(GALLERY_LIMITS.maxItemsPerGallery),
 });
 export type ReorderMediaRequest = z.infer<typeof reorderMediaRequestSchema>;
 
