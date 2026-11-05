@@ -14,6 +14,7 @@ const nextConfig: NextConfig = {
   transpilePackages: [
     '@lumra/config',
     '@lumra/contracts',
+    '@lumra/db',
     '@lumra/domain',
     '@lumra/observability',
     '@lumra/ui',
