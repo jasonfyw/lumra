@@ -3,6 +3,7 @@ export * from './api';
 export * from './gallery';
 export * from './guest';
 export * from './media-token';
+export * from './pagination';
 export * from './queue';
 export * from './upload';
 export * from './public-gallery';

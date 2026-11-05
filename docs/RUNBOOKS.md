@@ -11,6 +11,17 @@ Filled in as the relevant systems land (T13, T38). Each runbook: symptom → das
 - [ ] Database restore from PITR (T37)
 - [ ] Disable uploads / checkout via feature flag; read-only mode (T38)
 
+## Auth and guest claim (T05/T07)
+
+See [AUTH.md](AUTH.md) for the flow, the hosted Supabase email-template and redirect setup, and
+the manual QA script.
+
+- Users report "no code in the email" or "link only works on one device": the hosted project is
+  still using Supabase's default templates. Paste `infra/supabase/templates/magic_link.html` (AUTH.md).
+- Claims refused: grep logs for `guest claim refused` and its `reason`
+  (`no_capability` = a different browser, `session_expired`, `capability_mismatch`). The client
+  always sees a 404.
+
 ## Observability (T04)
 
 Shared implementation: `packages/observability` (`@lumra/observability`) — logger, redaction,

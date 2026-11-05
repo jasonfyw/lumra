@@ -19,3 +19,9 @@ test('health probe is sanitized', async ({ request }) => {
   if (commit !== undefined) expect(commit).toMatch(/^[0-9a-f]{7,12}$/);
   expect(body.requestId).toBe('e2e-health-probe');
 });
+
+test('dashboard redirects signed-out visitors to sign in', async ({ page }) => {
+  await page.goto('/dashboard');
+  await expect(page).toHaveURL(/\/auth\?returnTo=%2Fdashboard$/);
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+});

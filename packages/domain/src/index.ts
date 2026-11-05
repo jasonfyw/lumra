@@ -1,4 +1,5 @@
 export * from './archive';
+export * from './claim';
 export * from './cover';
 export * from './filenames';
 export * from './gallery';

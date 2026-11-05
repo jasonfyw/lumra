@@ -73,6 +73,18 @@ max_frequency = "60s"
 otp_length = 6
 otp_expiry = 900
 
+# Sign-in emails carry the 6-digit code AND a token_hash link to /auth/confirm (T05, docs/AUTH.md).
+# The token_hash link verifies in any browser (FR-A04 interrupted auth); Supabase's default
+# PKCE link only works in the browser that requested it. Hosted projects need the same templates
+# (Dashboard → Authentication → Email Templates). Applied on the next `supabase start`.
+[auth.email.template.magic_link]
+subject = "Your Lumra sign-in code"
+content_path = "./supabase/templates/magic_link.html"
+
+[auth.email.template.confirmation]
+subject = "Your Lumra sign-in code"
+content_path = "./supabase/templates/confirmation.html"
+
 [auth.sms]
 enabled = false
 

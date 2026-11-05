@@ -121,6 +121,10 @@ export const RATE_LIMITS = {
   uploadSign: { limit: 600, windowSeconds: 60 },
   /** Per principal: upload status, complete and abort. */
   uploadMutate: { limit: 600, windowSeconds: 60 },
+  /** Per client IP: sign-in emails (T05). Supabase also limits per address (`max_frequency`). */
+  authOtpSend: { limit: 10, windowSeconds: 60 * 60 },
+  /** Per client IP: OTP code verification attempts (T05). */
+  authOtpVerify: { limit: 30, windowSeconds: 15 * 60 },
 } as const satisfies Record<string, RateLimitRule>;
 export type RateLimitRuleName = keyof typeof RATE_LIMITS;
 

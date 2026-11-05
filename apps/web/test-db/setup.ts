@@ -55,6 +55,7 @@ vi.mock('next/headers', () => {
 });
 
 vi.mock('@/lib/supabase/server', () => ({
+  isSupabaseConfigured: () => true,
   createSupabaseServerClient: async () => ({
     auth: {
       getUser: async () => {
