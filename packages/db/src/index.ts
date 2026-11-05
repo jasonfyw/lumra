@@ -1,6 +1,8 @@
 /**
- * Database access layer (T02). SQL migrations live in `infra/supabase/migrations`;
- * this package will expose the typed client and repositories used by web and worker.
- * Service-role access is only constructed in trusted server/worker code.
+ * Database access layer (T02, ADR-007). SQL migrations in `infra/supabase/migrations` are the
+ * source of truth; this package mirrors them as a Drizzle schema for typed queries.
+ * `createDb` is server-only: it uses a privileged connection that bypasses RLS.
  */
-export {};
+export * from './client';
+export * from './enums';
+export * from './schema';
