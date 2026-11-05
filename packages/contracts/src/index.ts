@@ -1,6 +1,7 @@
 export * from './access-state';
 export * from './api';
 export * from './gallery';
+export * from './gallery-editor';
 export * from './guest';
 export * from './media-token';
 export * from './pagination';
