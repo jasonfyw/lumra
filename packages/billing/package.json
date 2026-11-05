@@ -11,5 +11,13 @@
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "fast-check": "^4.10.2"
+  },
+  "dependencies": {
+    "@lumra/config": "workspace:*",
+    "@lumra/domain": "workspace:*",
+    "zod": "^4.6.7"
   }
 }
