@@ -1,4 +1,4 @@
-import type { MediaStatus } from '@lumra/contracts';
+import type { MediaStatus, PublicMediaStatus } from '@lumra/contracts';
 
 /**
  * Hero/cover selection (PRD §4 "Hero", T15/T17). The cover is data (`galleries.cover_media_id`),
@@ -7,7 +7,8 @@ import type { MediaStatus } from '@lumra/contracts';
  */
 export interface CoverCandidate {
   id: string;
-  status: MediaStatus;
+  /** Internal status (creator views) or the recipient-facing status (public gallery). */
+  status: MediaStatus | PublicMediaStatus;
   /** Upload order (e.g. reservation sequence or `created_at` epoch ms); lower = earlier. */
   uploadOrder: number;
 }
