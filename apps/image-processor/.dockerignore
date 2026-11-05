@@ -1,0 +1,4 @@
+*
+!dist/server.mjs
+!dist/server.mjs.map
+!dist/package.json

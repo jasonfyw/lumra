@@ -5,6 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GALLERY_LIMITS, UPLOAD_LIMITS } from '@lumra/config';
+import { outboxRowToQueueMessage } from '@lumra/contracts';
 import { POST as createIntent } from '@/app/api/v1/galleries/[id]/upload-intents/route';
 import { GET as getUpload } from '@/app/api/v1/uploads/[id]/route';
 import { POST as signParts } from '@/app/api/v1/uploads/[id]/parts/sign/route';
@@ -322,7 +323,15 @@ describe('single PUT flow', () => {
     const rows = await outboxRows(mediaId, 'media.uploaded');
     expect(rows).toHaveLength(1);
     expect(rows[0]!.dedupe_key).toBe(`media.uploaded:${mediaId}`);
-    expect(rows[0]!.payload).toMatchObject({ type: 'media.uploaded', mediaId });
+    // The worker relay turns the row into exactly this queue message (T12 outbox contract).
+    expect(
+      outboxRowToQueueMessage({
+        id: 'row',
+        eventName: 'media.uploaded',
+        payload: rows[0]!.payload,
+        dedupeKey: rows[0]!.dedupe_key,
+      }),
+    ).toMatchObject({ type: 'media.uploaded', mediaId, dedupeKey: `media.uploaded:${mediaId}` });
     const [media2] = await sql<{ status: string; checksum_sha256: string }[]>`
       select status, checksum_sha256 from public.media where id = ${mediaId}`;
     expect(media2).toEqual({ status: 'uploaded', checksum_sha256: checksum });
