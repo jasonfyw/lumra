@@ -1,6 +1,6 @@
 import { unstable_rethrow } from 'next/navigation';
 import { REQUEST_ID_HEADER, type Logger } from '@lumra/observability';
-import { internalError, requestContext } from './api';
+import { ApiFailure, fail, internalError, requestContext } from './api';
 import { reportError } from './sentry';
 
 export interface RouteScope {
@@ -24,6 +24,7 @@ export interface WithRouteOptions {
  * Wraps a route handler with the cross-cutting request contract (PRD §10, §12):
  * - assigns a request ID (valid inbound `x-request-id` or a new UUID) and a bound logger;
  * - always sets `x-request-id` on the response;
+ * - turns a thrown `ApiFailure` into its error envelope (expected outcome, not reported);
  * - turns unexpected throws into the standard `internal` 500 envelope — the error is logged
  *   (redacted) and sent to Sentry tagged with the request ID, but never echoed to the client;
  * - logs one completion line with method, status and duration.
@@ -46,9 +47,16 @@ export function withRoute<C = unknown>(
       response = await handler(request, { requestId, log }, context);
     } catch (error) {
       unstable_rethrow(error); // let notFound()/redirect() reach Next.js
-      log.error('unhandled route error', { err: error });
-      reportError(error, { requestId, route: name });
-      response = internalError(requestId);
+      if (error instanceof ApiFailure) {
+        // Expected outcome (validation, authz, quota, rate limit): not reported to Sentry.
+        response = fail(error.error, requestId, {
+          headers: { 'Cache-Control': 'no-store', ...error.headers },
+        });
+      } else {
+        log.error('unhandled route error', { err: error });
+        reportError(error, { requestId, route: name });
+        response = internalError(requestId);
+      }
     }
 
     response = withRequestIdHeader(response, requestId);

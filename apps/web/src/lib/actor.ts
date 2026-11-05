@@ -47,11 +47,28 @@ export async function getActiveGuestSession(now = new Date()): Promise<ActiveGue
       and(
         eq(guestSessions.capabilityHash, capabilityHash),
         gt(guestSessions.expiresAt, now),
+        // Either column marks a claim (ADR-005); match reserve_guest_upload's `claimed_at is null`.
         isNull(guestSessions.claimedByUserId),
+        isNull(guestSessions.claimedAt),
       ),
     )
     .limit(1);
   return row ? { guestSessionId: row.id, expiresAt: row.expiresAt } : null;
+}
+
+/**
+ * Every credential the request carries. Upload endpoints authorise against the resource's owner:
+ * a signed-in user who still holds the guest cookie (J1, before the claim) can keep working on
+ * the guest draft, and the guest capability never grants access to account-owned galleries.
+ */
+export interface Principals {
+  user: AuthenticatedUser | null;
+  guest: ActiveGuestSession | null;
+}
+
+export async function getPrincipals(): Promise<Principals> {
+  const [user, guest] = await Promise.all([getAuthenticatedUser(), getActiveGuestSession()]);
+  return { user, guest };
 }
 
 /** A signed-in user takes precedence; the guest capability is still readable for claims (T07). */

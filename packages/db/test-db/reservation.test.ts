@@ -76,6 +76,47 @@ describe('reserve_guest_upload', () => {
     expect(await usage(live)).toEqual({ files: 0, bytes: 0 });
   });
 
+  it('release_guest_upload compensates a reservation and never goes negative', async () => {
+    const id = await newGuestSession();
+    expect(await reserve(id, 10_000_000)).toBe(true);
+    const release = () =>
+      sql.begin(async (tx) => {
+        await actAs(tx, 'service_role');
+        const [row] = await tx<{ ok: boolean }[]>`
+          select public.release_guest_upload(${id}::uuid, 10000000::bigint) as ok`;
+        return row!.ok;
+      });
+    expect(await release()).toBe(true);
+    expect(await usage(id)).toEqual({ files: 0, bytes: 0 });
+    expect(await release()).toBe(true);
+    expect(await usage(id)).toEqual({ files: 0, bytes: 0 });
+  });
+
+  it('T06/T10 helper functions are executable only by service_role', async () => {
+    await inRollback(sql, async (tx) => {
+      const user = await createUser(tx);
+      for (const [role, uid] of [
+        ['anon', undefined],
+        ['authenticated', user],
+      ] as const) {
+        await actAs(tx, role, uid);
+        await expectSqlError(tx, DENIED, (sp) => sp`select * from public.rate_limit_hit('k', 60)`);
+        await expectSqlError(tx, DENIED, (sp) => sp`select public.prune_rate_limit_buckets(1)`);
+        await expectSqlError(
+          tx,
+          DENIED,
+          (sp) => sp`select public.release_guest_upload(${randomUUID()}::uuid, 1::bigint)`,
+        );
+      }
+      await actAs(tx, 'service_role');
+      const [first] = await tx<{ current_count: number }[]>`
+        select current_count from public.rate_limit_hit('test:svc', 60)`;
+      const [second] = await tx<{ current_count: number }[]>`
+        select current_count from public.rate_limit_hit('test:svc', 60)`;
+      expect(second!.current_count).toBe(first!.current_count + 1);
+    });
+  });
+
   it('is executable only by service_role', async () => {
     await inRollback(sql, async (tx) => {
       const user = await createUser(tx);

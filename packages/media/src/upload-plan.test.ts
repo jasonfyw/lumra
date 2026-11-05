@@ -1,6 +1,57 @@
 import { UPLOAD_LIMITS } from '@lumra/config';
 import { describe, expect, it } from 'vitest';
-import { partLength, planUpload } from './upload-plan';
+import {
+  checkCompletePartNumbers,
+  normalizeEtag,
+  partLength,
+  planFromReservation,
+  planUpload,
+} from './upload-plan';
+
+describe('planFromReservation', () => {
+  it('round-trips planUpload for persisted sessions', () => {
+    for (const size of [1, 8 * 1024 * 1024, 8 * 1024 * 1024 + 1, 50_000_000]) {
+      const plan = planUpload(size);
+      expect(planFromReservation(size, plan.partSize)).toEqual(plan);
+    }
+  });
+
+  it('rejects invalid values', () => {
+    expect(() => planFromReservation(0, 1)).toThrow(RangeError);
+    expect(() => planFromReservation(10, 0)).toThrow(RangeError);
+  });
+});
+
+describe('checkCompletePartNumbers', () => {
+  const plan = { multipart: true, partSize: 8 * 1024 * 1024, partCount: 3 };
+
+  it('accepts exactly 1..partCount in any order', () => {
+    expect(checkCompletePartNumbers(plan, [3, 1, 2])).toBeNull();
+  });
+
+  it('reports missing, unexpected and duplicate parts', () => {
+    expect(checkCompletePartNumbers(plan, [1, 3])).toEqual({
+      problem: 'missing_parts',
+      partNumbers: [2],
+    });
+    expect(checkCompletePartNumbers(plan, [1, 2, 3, 10, 4])).toEqual({
+      problem: 'unexpected_parts',
+      partNumbers: [4, 10],
+    });
+    expect(checkCompletePartNumbers(plan, [1, 2, 2, 3])).toEqual({
+      problem: 'duplicate_parts',
+      partNumbers: [2],
+    });
+  });
+});
+
+describe('normalizeEtag', () => {
+  it('strips quotes and weak prefixes', () => {
+    expect(normalizeEtag('"abc123"')).toBe('abc123');
+    expect(normalizeEtag('W/"abc123"')).toBe('abc123');
+    expect(normalizeEtag('abc123')).toBe('abc123');
+  });
+});
 
 const MIB = 1024 * 1024;
 

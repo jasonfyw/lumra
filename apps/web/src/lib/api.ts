@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import type { z } from 'zod';
 import { API_ERROR_STATUS, type ApiError, type ApiResponse } from '@lumra/contracts';
 import {
   generateRequestId,
@@ -22,6 +23,55 @@ export function fail(error: ApiError, requestId: string, init?: ResponseInit) {
   );
   res.headers.set(REQUEST_ID_HEADER, requestId);
   return res;
+}
+
+/**
+ * An expected API error thrown from deep inside a handler or service (e.g. inside a DB
+ * transaction, which it also rolls back). `withRoute` turns it into the error envelope.
+ */
+export class ApiFailure extends Error {
+  constructor(
+    readonly error: ApiError,
+    readonly headers: Record<string, string> = {},
+  ) {
+    super(`${error.code}: ${error.message}`);
+    this.name = 'ApiFailure';
+  }
+}
+
+export const notFoundError = (message = 'Not found.'): ApiFailure =>
+  new ApiFailure({ code: 'not_found', message, retryable: false });
+
+export const validationError = (details?: Record<string, unknown>): ApiFailure =>
+  new ApiFailure({
+    code: 'validation_failed',
+    message: 'The request is invalid.',
+    retryable: false,
+    ...(details ? { details } : {}),
+  });
+
+/** Parses a JSON body with a Zod schema; malformed JSON or schema errors become a 422. */
+export async function parseJsonBody<S extends z.ZodType>(
+  request: Request,
+  schema: S,
+): Promise<z.output<S>> {
+  let body: unknown;
+  const text = await request.text();
+  try {
+    body = text.length === 0 ? {} : JSON.parse(text);
+  } catch {
+    throw validationError({ body: 'Malformed JSON.' });
+  }
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) {
+    throw validationError({
+      issues: parsed.error.issues.slice(0, 20).map((issue) => ({
+        path: issue.path.map(String).join('.'),
+        message: issue.message,
+      })),
+    });
+  }
+  return parsed.data;
 }
 
 /** The only body ever returned for unexpected failures: no messages, stacks or causes. */
