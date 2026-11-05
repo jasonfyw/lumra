@@ -47,6 +47,8 @@ export const MEDIA_REJECTION_CODES = [
   'too_many_pixels',
   'heic_unsupported_variant',
   'malformed',
+  /** The processor could not decode/encode within its time budget (T12); not retried. */
+  'processing_timeout',
 ] as const;
 export const mediaRejectionCodeSchema = z.enum(MEDIA_REJECTION_CODES);
 export type MediaRejectionCode = z.infer<typeof mediaRejectionCodeSchema>;

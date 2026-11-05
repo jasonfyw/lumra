@@ -33,6 +33,28 @@ importers:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@26.6.6)(vite@8.3.4(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0))
 
+  apps/image-processor:
+    dependencies:
+      '@lumra/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@lumra/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@lumra/media':
+        specifier: workspace:*
+        version: link:../../packages/media
+      exif-reader:
+        specifier: ^2.0.3
+        version: 2.0.3
+      sharp:
+        specifier: 0.35.5
+        version: 0.35.5(@types/node@26.6.6)
+    devDependencies:
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
+
   apps/media-gateway:
     dependencies:
       '@lumra/config':
@@ -106,15 +128,27 @@ importers:
 
   apps/worker:
     dependencies:
+      '@cloudflare/containers':
+        specifier: 0.3.7
+        version: 0.3.7
       '@lumra/config':
         specifier: workspace:*
         version: link:../../packages/config
       '@lumra/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@lumra/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@lumra/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@lumra/media':
+        specifier: workspace:*
+        version: link:../../packages/media
+      postgres:
+        specifier: ^4.0.0
+        version: 4.0.0
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261102.1
@@ -228,6 +262,9 @@ packages:
 
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
+
+  '@cloudflare/containers@0.3.7':
+    resolution: {integrity: sha512-DM9dm3FnIBSyiSJ1FLavKwl/lk3oAmTaynCzZQ9pZR0ncRPquSxkxd8Nu2MFILxmDDsPkxKsSNEh9mHHMty4Fw==}
 
   '@cloudflare/kv-asset-handler@0.5.0':
     resolution: {integrity: sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg==}
@@ -1319,6 +1356,9 @@ packages:
     resolution: {integrity: sha512-kVscqXk4OCp68SZ0dkgEKVi6/8ij300KBWTJq32P/dYeWTSwK41WyTxalN1eRmA5Z9UU/LX9D7FWSmV9SAYx6g==}
     engines: {node: '>=0.10.0'}
 
+  exif-reader@2.0.3:
+    resolution: {integrity: sha512-zFbQvguwT9JkqyYhR7pjE1Yn8SagwaGLNRU0Oh14xFa1paSf5Gzxn4gxgk0XhnudI0UIqU+HgnBX93+nva592A==}
+
   expect-type@1.4.0:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
@@ -2022,6 +2062,8 @@ snapshots:
     dependencies:
       hashery: 1.5.1
       keyv: 5.6.0
+
+  '@cloudflare/containers@0.3.7': {}
 
   '@cloudflare/kv-asset-handler@0.5.0': {}
 
@@ -2837,6 +2879,8 @@ snapshots:
       '@types/estree': 1.0.10
 
   esutils@2.0.3: {}
+
+  exif-reader@2.0.3: {}
 
   expect-type@1.4.0: {}
 

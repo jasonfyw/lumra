@@ -1,8 +1,9 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "lumra-worker",
-  "main": "src/index.ts",
+  "main": "src/worker.ts",
   "compatibility_date": "2026-10-01",
+  // postgres.js needs node:net/tls shims (Hyperdrive / DATABASE_URL).
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "queues": {
@@ -21,7 +22,33 @@
     { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives-dev" },
     { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives-dev" },
   ],
-  // Reconcilers and cleanup (T13): every 15 minutes, plus a nightly orphan sweep.
-  "triggers": { "crons": ["*/15 * * * *", "17 3 * * *"] },
-  // Secrets: DATABASE_URL, SENTRY_DSN
+  // Supabase Postgres via Hyperdrive (pooled, Workers-friendly). Create with
+  //   wrangler hyperdrive create lumra-db-dev --connection-string="postgres://..."
+  // and replace the placeholder id. `localConnectionString` is used by `wrangler dev`.
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "00000000000000000000000000000000",
+      "localConnectionString": "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+    },
+  ],
+  // Image processor (ADR-002): Cloudflare Containers image built from apps/image-processor.
+  // Run `pnpm --filter @lumra/image-processor build` before `wrangler deploy` (the Dockerfile
+  // copies dist/). Locally, set PROCESSOR_URL instead and run the container with Docker.
+  "containers": [
+    {
+      "class_name": "ImageProcessorContainer",
+      "image": "../image-processor/Dockerfile",
+      "image_build_context": "../image-processor",
+      "instance_type": "standard",
+      "max_instances": 4,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "IMAGE_PROCESSOR", "class_name": "ImageProcessorContainer" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ImageProcessorContainer"] }],
+  // Every minute: outbox relay (polls ~50 s per tick). */15 and nightly: reconcilers (T13).
+  "triggers": { "crons": ["* * * * *", "*/15 * * * *", "17 3 * * *"] },
+  // Secrets: DATABASE_URL (local only), SENTRY_DSN. Vars: PROCESSOR_URL (local only).
 }

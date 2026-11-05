@@ -35,3 +35,42 @@ export const queueMessageSchema = z.discriminatedUnion('type', [
   deliveryServedMessageSchema,
 ]);
 export type QueueMessage = z.infer<typeof queueMessageSchema>;
+
+/**
+ * Transactional outbox mapping (PRD §6.3, T12). The web app inserts a `job_outbox` row in the
+ * same transaction as the state change (e.g. upload finalize → `media.uploaded`); the worker
+ * relay publishes it to the `JOBS` queue. `event_name` is the message `type`, `dedupe_key` the
+ * message `dedupeKey`, and `payload` holds the remaining message fields (`traceId` optional).
+ */
+export interface OutboxRecord {
+  eventName: QueueMessage['type'];
+  aggregateId: string;
+  payload: Record<string, unknown>;
+  dedupeKey: string;
+}
+
+export function toOutboxRecord(message: QueueMessage, aggregateId: string): OutboxRecord {
+  const { type, dedupeKey, ...payload } = message;
+  return { eventName: type, aggregateId, payload, dedupeKey };
+}
+
+export interface OutboxRowLike {
+  id: string;
+  eventName: string;
+  payload: unknown;
+  dedupeKey: string | null;
+}
+
+/** Builds the queue message for an outbox row. Throws a ZodError if the row is malformed. */
+export function outboxRowToQueueMessage(row: OutboxRowLike): QueueMessage {
+  const payload =
+    row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
+      ? (row.payload as Record<string, unknown>)
+      : {};
+  return queueMessageSchema.parse({
+    traceId: `outbox:${row.id}`,
+    ...payload,
+    type: row.eventName,
+    dedupeKey: row.dedupeKey ?? `outbox:${row.id}`,
+  });
+}

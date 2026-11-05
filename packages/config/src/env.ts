@@ -112,10 +112,26 @@ export const mediaGatewayEnvSchema = z.object({
 export type MediaGatewayEnv = z.infer<typeof mediaGatewayEnvSchema>;
 
 export const workerEnvSchema = z.object({
-  DATABASE_URL: url.optional(), // required by T12
+  /**
+   * Direct Postgres URL for local dev / tests. Deployed environments use the `HYPERDRIVE`
+   * binding instead; the worker fails on first DB use if neither is configured (T12).
+   */
+  DATABASE_URL: url.optional(),
+  /**
+   * Plain-HTTP image processor for local dev (`http://localhost:8080`). When unset the worker
+   * uses the Cloudflare Containers binding `IMAGE_PROCESSOR` (ADR-002).
+   */
+  PROCESSOR_URL: url.optional(),
   SENTRY_DSN: url.optional(),
 });
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;
+
+/** Image-processor container (apps/image-processor, ADR-002). */
+export const imageProcessorEnvSchema = z.object({
+  PORT: z.coerce.number().int().min(1).max(65_535).default(8080),
+  LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+});
+export type ImageProcessorEnv = z.infer<typeof imageProcessorEnvSchema>;
 
 export class EnvValidationError extends Error {
   constructor(

@@ -12,9 +12,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@cloudflare/containers": "0.3.7",
     "@lumra/config": "workspace:*",
     "@lumra/contracts": "workspace:*",
-    "@lumra/domain": "workspace:*"
+    "@lumra/db": "workspace:*",
+    "@lumra/domain": "workspace:*",
+    "@lumra/media": "workspace:*",
+    "postgres": "^4.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261102.1",

@@ -54,6 +54,34 @@ export const GALLERY_LIMITS = {
 
 export const DERIVATIVE_WIDTHS = [320, 640, 1280, 2048] as const;
 
+/**
+ * Single master derivative pipeline (FR-M06, ADR-002). Bump `pipelineVersion` whenever the
+ * encoder settings or processing steps change: the variant hash (and therefore the derivative
+ * object key) changes with it, so cached derivatives are never served with stale pixels.
+ */
+export const DERIVATIVE_ENCODING = {
+  format: 'webp',
+  mime: 'image/webp',
+  quality: 80,
+  /** libwebp effort 0–6; 4 is the sharp default and a good speed/size trade-off. */
+  effort: 4,
+  pipelineVersion: 1,
+} as const;
+
+/** Bounds for the image-processor container and its callers (T12, ADR-002). */
+export const PROCESSOR_LIMITS = {
+  /** Wall-clock budget for one `/process` request inside the container (decode + encodes). */
+  processTimeoutMs: 60_000,
+  /** The Worker aborts a processor call after this long and lets the queue retry. */
+  clientTimeoutMs: 90_000,
+  /** Jobs one container instance runs at once; extra requests get a retryable 503. */
+  maxConcurrentJobs: 1,
+  /** Request bodies above this are rejected while streaming (same cap as uploads). */
+  maxInputBytes: UPLOAD_LIMITS.maxPhotoBytes,
+  /** libvips operation cache is disabled; this caps libvips worker threads per job. */
+  vipsConcurrency: 2,
+} as const;
+
 export const ARCHIVE_LIMITS = {
   /** Proposed partition bounds (FR-D03). */
   maxItemsPerPart: 500,
