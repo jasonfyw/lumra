@@ -79,39 +79,51 @@ export const originListSchema = z.string().transform((raw, ctx): string[] => {
   return origins;
 });
 
-export const webServerEnvSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  NEXT_PUBLIC_APP_URL: url,
-  NEXT_PUBLIC_MEDIA_URL: url.optional(), // required by T20
-  NEXT_PUBLIC_SUPABASE_URL: url.optional(), // required by T05
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(), // required by T05
-  SUPABASE_SERVICE_ROLE_KEY: z.string().optional(), // required by T02/T06
-  DATABASE_URL: url.optional(), // required at use by DB-backed routes (lib/env.ts requireEnv)
-  GUEST_CAPABILITY_PEPPER: secret.optional(), // required at use by guest routes (T06)
-  // Keyring (see mediaTokenKeyringSchema); required once the media-tokens endpoint lands.
-  MEDIA_TOKEN_SECRET: mediaTokenKeyringSchema.optional(),
-  // R2 adapter + bucket policy land in T09; the first caller (upload endpoints) tightens these.
-  // Required at use by the upload endpoints (T10); optional here so builds/CI need no secrets.
-  R2_ACCOUNT_ID: z.string().optional(),
-  R2_ACCESS_KEY_ID: z.string().optional(),
-  R2_SECRET_ACCESS_KEY: z.string().optional(),
-  R2_BUCKET_ORIGINALS: z.string().default('lumra-originals'),
-  // S3 endpoint override for local fakes / jurisdiction endpoints; default is the account endpoint.
-  R2_ENDPOINT: url.optional(),
-  // HMAC pepper for rate-limit subject keys (FR-A05); falls back to GUEST_CAPABILITY_PEPPER.
-  RATE_LIMIT_PEPPER: secret.optional(),
-  // Cloudflare Turnstile: bot challenges are enforced only when the secret is set (FR-A05).
-  TURNSTILE_SECRET_KEY: z.string().min(1).optional(),
-  NEXT_PUBLIC_TURNSTILE_SITE_KEY: z.string().min(1).optional(),
-  STRIPE_SECRET_KEY: z.string().optional(), // required by T29
-  STRIPE_WEBHOOK_SECRET: z.string().optional(), // required by T29
-  STRIPE_PRICE_PRO_MONTHLY: z.string().optional(), // required by T29
-  SENTRY_DSN: url.optional(), // server/edge; absent ⇒ Sentry disabled (T04)
-  NEXT_PUBLIC_SENTRY_DSN: url.optional(), // browser; inlined at build time
-  SENTRY_ENVIRONMENT: z.string().optional(), // defaults to VERCEL_ENV / NODE_ENV
-  VERCEL_GIT_COMMIT_SHA: z.string().optional(), // Sentry release + /api/health `commit`
-  LOG_LEVEL: logLevel.default('info'),
-});
+export const webServerEnvSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    NEXT_PUBLIC_APP_URL: url,
+    NEXT_PUBLIC_MEDIA_URL: url.optional(), // required by T20
+    // Required on Vercel deployments (see refinement below). Optional elsewhere so local builds,
+    // CI and the e2e smoke run without a Supabase stack: auth then degrades to "signed out" (T05).
+    NEXT_PUBLIC_SUPABASE_URL: url.optional(),
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1).optional(),
+    SUPABASE_SERVICE_ROLE_KEY: z.string().optional(), // required by T02/T06
+    DATABASE_URL: url.optional(), // required at use by DB-backed routes (lib/env.ts requireEnv)
+    GUEST_CAPABILITY_PEPPER: secret.optional(), // required at use by guest routes (T06)
+    // Keyring (see mediaTokenKeyringSchema); required once the media-tokens endpoint lands.
+    MEDIA_TOKEN_SECRET: mediaTokenKeyringSchema.optional(),
+    // R2 adapter + bucket policy land in T09; the first caller (upload endpoints) tightens these.
+    // Required at use by the upload endpoints (T10); optional here so builds/CI need no secrets.
+    R2_ACCOUNT_ID: z.string().optional(),
+    R2_ACCESS_KEY_ID: z.string().optional(),
+    R2_SECRET_ACCESS_KEY: z.string().optional(),
+    R2_BUCKET_ORIGINALS: z.string().default('lumra-originals'),
+    // S3 endpoint override for local fakes / jurisdiction endpoints; default is the account endpoint.
+    R2_ENDPOINT: url.optional(),
+    // HMAC pepper for rate-limit subject keys (FR-A05); falls back to GUEST_CAPABILITY_PEPPER.
+    RATE_LIMIT_PEPPER: secret.optional(),
+    // Cloudflare Turnstile: bot challenges are enforced only when the secret is set (FR-A05).
+    TURNSTILE_SECRET_KEY: z.string().min(1).optional(),
+    NEXT_PUBLIC_TURNSTILE_SITE_KEY: z.string().min(1).optional(),
+    STRIPE_SECRET_KEY: z.string().optional(), // required by T29
+    STRIPE_WEBHOOK_SECRET: z.string().optional(), // required by T29
+    STRIPE_PRICE_PRO_MONTHLY: z.string().optional(), // required by T29
+    SENTRY_DSN: url.optional(), // server/edge; absent ⇒ Sentry disabled (T04)
+    NEXT_PUBLIC_SENTRY_DSN: url.optional(), // browser; inlined at build time
+    SENTRY_ENVIRONMENT: z.string().optional(), // defaults to VERCEL_ENV / NODE_ENV
+    VERCEL_GIT_COMMIT_SHA: z.string().optional(), // Sentry release + /api/health `commit`
+    VERCEL_ENV: z.enum(['production', 'preview', 'development']).optional(),
+    LOG_LEVEL: logLevel.default('info'),
+  })
+  .superRefine((env, ctx) => {
+    // Deployed environments must have auth configured (T05).
+    if (env.VERCEL_ENV !== 'production' && env.VERCEL_ENV !== 'preview') return;
+    for (const key of ['NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_ANON_KEY'] as const) {
+      if (!env[key])
+        ctx.addIssue({ code: 'custom', path: [key], message: 'required on Vercel deployments' });
+    }
+  });
 export type WebServerEnv = z.infer<typeof webServerEnvSchema>;
 
 /** Observability vars shared by both Workers (T04). All optional: absent ⇒ Sentry disabled. */

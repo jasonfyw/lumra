@@ -30,4 +30,25 @@ describe('parseEnv', () => {
       expect(message).not.toContain('short'); // never echo secret values
     }
   });
+
+  it('requires Supabase auth config on Vercel deployments only (T05)', () => {
+    const base = { NEXT_PUBLIC_APP_URL: 'https://lumra.test' };
+    expect(() => parseEnv('web', webServerEnvSchema, base)).not.toThrow();
+    expect(() =>
+      parseEnv('web', webServerEnvSchema, { ...base, VERCEL_ENV: 'development' }),
+    ).not.toThrow();
+    for (const VERCEL_ENV of ['production', 'preview']) {
+      expect(() => parseEnv('web', webServerEnvSchema, { ...base, VERCEL_ENV })).toThrowError(
+        /NEXT_PUBLIC_SUPABASE_URL[\s\S]*NEXT_PUBLIC_SUPABASE_ANON_KEY/,
+      );
+      expect(() =>
+        parseEnv('web', webServerEnvSchema, {
+          ...base,
+          VERCEL_ENV,
+          NEXT_PUBLIC_SUPABASE_URL: 'https://abc.supabase.co',
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon',
+        }),
+      ).not.toThrow();
+    }
+  });
 });
