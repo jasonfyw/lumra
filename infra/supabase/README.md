@@ -16,8 +16,12 @@ query-layer approach.
     `reserve_guest_upload()` (atomic guest quota, service role only).
   - `20261105000300_rls_and_grants.sql`: RLS on every table, owner read policies, service-only
     lockdown, default-privilege hardening.
+  - `20261105001000_rate_limits_and_upload_tracking.sql` (T06/T10): `rate_limit_buckets` +
+    `rate_limit_hit()`/`prune_rate_limit_buckets()` (service-only), `release_guest_upload()`,
+    `upload_sessions.guest_session_id`, `media.checksum_sha256`. See `docs/UPLOADS.md`.
 - `seed.sql`: synthetic local fixtures only (a demo creator, a draft and a guest draft).
-- DB tests live in `packages/db/test-db/` (Vitest + postgres.js against the local stack).
+- DB tests live in `packages/db/test-db/` (Vitest + postgres.js against the local stack); route-level
+  upload/guest tests in `apps/web/test-db/`. `pnpm test:db` runs both.
 
 ## Commands
 

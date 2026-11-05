@@ -12,10 +12,12 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   // Workspace packages ship TypeScript source.
   transpilePackages: [
+    '@lumra/billing',
     '@lumra/config',
     '@lumra/contracts',
     '@lumra/db',
     '@lumra/domain',
+    '@lumra/media',
     '@lumra/observability',
     '@lumra/ui',
   ],
