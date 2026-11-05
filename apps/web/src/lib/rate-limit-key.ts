@@ -8,7 +8,9 @@ import { RATE_LIMIT_KEYS, type RateLimitRule } from '@lumra/config';
 export type RateLimitSubject =
   | { kind: 'ip'; ip: string | null }
   | { kind: 'user'; userId: string }
-  | { kind: 'guest'; guestSessionId: string };
+  | { kind: 'guest'; guestSessionId: string }
+  /** A whole gallery across all clients (distributed password guessing, T19). */
+  | { kind: 'gallery'; galleryId: string };
 
 /**
  * Client IP as set by the platform. On Vercel `x-forwarded-for`/`x-real-ip` are overwritten by
@@ -106,6 +108,8 @@ export function subjectString(subject: RateLimitSubject): string {
       return `user|${subject.userId}`;
     case 'guest':
       return `guest|${subject.guestSessionId}`;
+    case 'gallery':
+      return `gallery|${subject.galleryId}`;
   }
 }
 

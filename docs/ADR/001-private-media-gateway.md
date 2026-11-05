@@ -50,12 +50,18 @@ Authorization always completes before any R2 read. Every denial is a generic `40
 
 - Contract `galleryAccessStateSchema` (`@lumra/contracts`): `{accessVersion, deleted, expiresAt,
 deliverySuspended, updatedAt}` stored as JSON in KV namespace `ACCESS_STATE`, key `gallery:{galleryId}`.
-- Postgres remains authoritative. The web app writes the KV document with `writeGalleryAccessState`
-  (`@lumra/tokens`) after the DB transaction commits, on publish, password change/revocation (bumps
-  `access_version`), expiry change, delivery suspension/resumption and deletion (tombstone `deleted: true`).
-  From Vercel it uses the Cloudflare KV REST API (`{ rest: { accountId, namespaceId, apiToken } }`, token
-  scoped to _Workers KV Storage: Edit_ on this namespace only); Workers use the binding. Failed writes are
-  retried through the outbox (T02/T15 wiring).
+- Postgres remains authoritative. **Writer (as built, T20):** every access-relevant change (publish,
+  password change/revocation — bumps `access_version` —, expiry change, delivery suspension/resumption,
+  deletion) calls `enqueueAccessStateSync` inside its DB transaction, which writes a
+  `gallery.access_changed` outbox row. The worker relays it to the jobs queue and
+  `apps/worker/src/handlers/access-state.ts` re-reads the gallery (and the owner's billing account,
+  `deriveBillingRestrictions` → `deliverySuspended`, failing closed on inconsistent billing rows) and
+  writes the document through the `ACCESS_STATE` binding with `writeGalleryAccessState`.
+  `gallery.delete` writes a tombstone (`deleted: true`); drafts write nothing. Each run writes the
+  _current_ DB state, so redelivery and reordering are harmless. `reconcileAccessStates` rewrites all
+  published/deleted galleries (lost messages, time-based billing transitions); T13 schedules it. The
+  REST target (`{ rest: … }`) remains available for writers outside Workers but is unused, so Vercel
+  needs no Cloudflare API token. Worker and gateway must bind the **same** namespace id.
 - The gateway reads through `createKvGalleryAccessStore`: an in-isolate memo of at most 5 s (clamped in
   code), errors never memoized. A KV error or schema-invalid document → `503` (fail closed); a missing
   document → `404`. Any `access_version` mismatch (lower = revoked, higher = KV lagging) → `403`.
@@ -66,6 +72,28 @@ deliverySuspended, updatedAt}` stored as JSON in KV namespace `ACCESS_STATE`, ke
   minting endpoint checks Postgres directly. If strict seconds-level global revocation becomes a requirement,
   swap the `GalleryAccessStore` implementation for a Durable Object (strongly consistent) — the interface
   is unchanged.
+
+### Token minting strategy (T16/T20)
+
+- Minting happens only in the web app, after checking Postgres directly (published, not deleted, not
+  expired, valid gallery session for passworded galleries); tokens carry the current `access_version`
+  and are signed with the **first** keyring entry. TTL is the maximum 300 s.
+- **Bounded payloads for 2,000 items:** `GET /api/v1/public/galleries/{slug}` lists every item
+  (status, dimensions, filename) but mints preview URLs (one token per derivative, ~4 per item) only
+  for the first `PUBLIC_GALLERY.initialUrlWindow` (48) ready items in display order plus the hero —
+  ≈ 200 tokens / ~100 kB instead of ~8,000 tokens / ~4 MB. Ready items outside the window arrive
+  with `variants: []` (the contract allows this; tiles render a quiet skeleton).
+- The client (`PublicGallery`) reports the windowed grid's rendered ids and mints the missing ones via
+  `POST …/media-tokens` (`action: 'preview'`, ≤ 100 ids, debounced). A tile keeps the URL it was first
+  rendered with; an item is re-minted only when it is needed again and its URL expires within 45 s
+  (re-minting on a timer would change `src` and re-download bytes already on screen).
+- Download URLs (`action: 'original'`, `owner_ref` from the stored original key, sanitized `filename`)
+  are minted only for the item open in the lightbox and refreshed every 30 s while it is open; an
+  expired download URL is hidden rather than offered.
+- Pending items: the client polls `GET …?urls=0` (statuses only, no signing) every 8 s while any item is
+  pending, then mints URLs for tiles that became ready (PRD §14.2-3).
+- All public responses are `Cache-Control: private, no-store` and rate limited per IP
+  (`publicGalleryRead`, `publicMediaTokens`).
 
 ### Cache policy
 

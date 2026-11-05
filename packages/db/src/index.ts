@@ -8,3 +8,4 @@ export * from './enums';
 export * from './schema';
 export * from './repositories/media-pipeline';
 export * from './repositories/outbox';
+export * from './repositories/access-state';

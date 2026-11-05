@@ -20,6 +20,7 @@
     "@lumra/domain": "workspace:*",
     "@lumra/media": "workspace:*",
     "@lumra/observability": "workspace:*",
+    "@lumra/tokens": "workspace:*",
     "@lumra/ui": "workspace:*",
     "@sentry/nextjs": "^11.10.0",
     "@supabase/ssr": "^0.12.7",

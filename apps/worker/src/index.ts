@@ -8,6 +8,7 @@ import {
   sentryBaseOptions,
 } from '@lumra/observability';
 import type { Env } from './env';
+import { syncGalleryAccessState } from './handlers/access-state';
 import { handleMediaUploaded } from './handlers/media-uploaded';
 import { loggerFor, type Logger } from './log';
 import { relayOutbox } from './outbox-relay';
@@ -41,7 +42,22 @@ export const handlers: Partial<Record<QueueMessage['type'], JobHandler>> = {
     });
     log.info('media.uploaded handled', { mediaId: message.mediaId, outcome });
   },
+  'gallery.access_changed': accessStateJob,
+  // Tombstones the gateway's access state immediately (FR-G06). TODO(T13): also enqueue/perform
+  // the R2 cleanup here; until then the nightly orphan sweep removes the objects.
+  'gallery.delete': accessStateJob,
 };
+
+/** `gallery.access_changed` / `gallery.delete`: rewrite the gateway's KV access state (T20). */
+async function accessStateJob(message: QueueMessage, { env, services, log }: JobContext) {
+  if (message.type !== 'gallery.access_changed' && message.type !== 'gallery.delete') return;
+  const outcome = await syncGalleryAccessState(message.galleryId, {
+    repo: services.accessStateRepo(),
+    kv: env.ACCESS_STATE,
+    log,
+  });
+  log.info('access state synced', { galleryId: message.galleryId, outcome });
+}
 
 /** Cron that drives the outbox relay (wrangler.jsonc `triggers.crons`). */
 export const OUTBOX_RELAY_CRON = '* * * * *';

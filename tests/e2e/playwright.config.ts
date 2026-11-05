@@ -58,6 +58,8 @@ export default defineConfig({
                 NEXT_PUBLIC_SUPABASE_ANON_KEY: SUPABASE_E2E.anonKey,
                 DATABASE_URL: SUPABASE_E2E.databaseUrl,
                 GUEST_CAPABILITY_PEPPER: SUPABASE_E2E.guestPepper,
+                MEDIA_TOKEN_SECRET: SUPABASE_E2E.mediaTokenSecret,
+                NEXT_PUBLIC_MEDIA_URL: SUPABASE_E2E.mediaUrl,
               }
             : {}),
         },

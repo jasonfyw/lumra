@@ -36,6 +36,11 @@ export interface JustifiedGridProps {
   onOpen(index: number): void;
   /** Accessible name of the photo list. */
   label?: string;
+  /**
+   * Ids of the items currently rendered (viewport ± overscan), reported whenever the window
+   * changes. The public page uses it to mint gateway URLs for visible tiles only (ADR-001).
+   */
+  onVisibleItemsChange?(ids: string[]): void;
   ref?: Ref<JustifiedGridHandle>;
 }
 
@@ -57,7 +62,13 @@ const UNMEASURED_MIN_HEIGHT = '100svh';
  * so 2,000 items keep a bounded node count. Tiles are absolutely positioned inside a spacer of
  * the full layout height with explicit sizes, so loading images never shift layout.
  */
-export function JustifiedGrid({ items, onOpen, label = 'Photos', ref }: JustifiedGridProps) {
+export function JustifiedGrid({
+  items,
+  onOpen,
+  label = 'Photos',
+  onVisibleItemsChange,
+  ref,
+}: JustifiedGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [dpr, setDpr] = useState(1);
@@ -169,6 +180,12 @@ export function JustifiedGrid({ items, onOpen, label = 'Photos', ref }: Justifie
     boxes.push(...(layout.rows[r]?.items ?? []));
   }
 
+  const visibleKey = width === 0 ? '' : boxes.map((box) => items[box.index]?.id ?? '').join(',');
+  useEffect(() => {
+    if (!onVisibleItemsChange || visibleKey === '') return;
+    onVisibleItemsChange(visibleKey.split(','));
+  }, [visibleKey, onVisibleItemsChange]);
+
   return (
     <div
       ref={containerRef}
@@ -251,6 +268,15 @@ const Tile = memo(function Tile({ item, box, total, dpr, onOpen }: TileProps) {
 });
 
 function PlaceholderContent({ status }: { status: PublicMediaItem['status'] }) {
+  if (status === 'ready') {
+    // Ready, but its short-lived URL is still being minted: a quiet skeleton, no text.
+    return (
+      <span
+        aria-hidden="true"
+        className="block h-full w-full bg-[var(--color-line)] opacity-40 motion-safe:animate-pulse"
+      />
+    );
+  }
   if (status === 'pending') {
     return (
       <span

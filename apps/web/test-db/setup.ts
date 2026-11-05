@@ -20,6 +20,9 @@ Object.assign(process.env, {
   R2_SECRET_ACCESS_KEY,
   R2_BUCKET_ORIGINALS: R2_BUCKET,
   R2_ENDPOINT,
+  MEDIA_TOKEN_SECRET:
+    'k2:test-media-token-secret-0123456789abcdef,k1:older-media-token-secret-0123456789abcdef',
+  NEXT_PUBLIC_MEDIA_URL: 'https://media.lumra.test',
   LOG_LEVEL: 'error',
 });
 delete process.env.TURNSTILE_SECRET_KEY;

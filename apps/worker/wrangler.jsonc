@@ -17,6 +17,12 @@
       },
     ],
   },
+  // Gallery access state (`gallery:{id}`) read by the media gateway (ADR-001), written by the
+  // gallery.access_changed / gallery.delete handlers. Must be the SAME namespace as
+  // apps/media-gateway's ACCESS_STATE: before the first deploy create it once
+  // (`wrangler kv namespace create lumra-access-state-dev`) and put its `id` in both configs
+  // (T38) — otherwise auto-provisioning gives each Worker its own empty namespace.
+  "kv_namespaces": [{ "binding": "ACCESS_STATE" }],
   "r2_buckets": [
     { "binding": "ORIGINALS", "bucket_name": "lumra-originals-dev" },
     { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives-dev" },
