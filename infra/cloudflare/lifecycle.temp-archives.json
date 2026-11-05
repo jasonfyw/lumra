@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "id": "expire-archives-after-1-day",
+      "enabled": true,
+      "conditions": { "prefix": "" },
+      "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 86400 } },
+      "abortMultipartUploadsTransition": { "condition": { "type": "Age", "maxAge": 86400 } }
+    }
+  ]
+}

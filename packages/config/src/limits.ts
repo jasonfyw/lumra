@@ -17,6 +17,9 @@ export const UPLOAD_LIMITS = {
   multipartThresholdBytes: 8 * 1024 * 1024,
   partSizeBytes: 8 * 1024 * 1024,
   presignTtlSeconds: 15 * 60,
+  /** S3/R2 multipart rules: every part except the last is >= 5 MiB; at most 10,000 parts. */
+  minPartSizeBytes: 5 * 1024 * 1024,
+  maxPartCount: 10_000,
   concurrentFilesDesktop: 3,
   concurrentFilesMobile: 2,
   /** Proposed: stale authenticated reservations are failed/cleaned after 48 h. */
@@ -30,6 +33,19 @@ export const ACCEPTED_PHOTO_MIME_TYPES = [
   'image/heic',
 ] as const;
 export type AcceptedPhotoMime = (typeof ACCEPTED_PHOTO_MIME_TYPES)[number];
+
+/** Accepted filename extensions (FR-M01). `.heif` is the same container as `.heic`. */
+export const ACCEPTED_PHOTO_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif'] as const;
+
+export const IMAGE_VALIDATION = {
+  /** Proposed: decompression-bomb guard. Images above this many pixels are rejected (FR-M01). */
+  maxPixels: 100_000_000,
+  /**
+   * Bytes read from the start of a file for type sniffing (client pre-check and worker).
+   * Large enough to reach JPEG SOF markers behind EXIF/XMP/ICC segments and HEIF `meta` boxes.
+   */
+  sniffBytes: 256 * 1024,
+} as const;
 
 export const GALLERY_LIMITS = {
   maxItemsPerGallery: 2_000,

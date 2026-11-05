@@ -1,5 +1,6 @@
 export * from './archive';
 export * from './cover';
+export * from './filenames';
 export * from './gallery';
 export * from './justified-layout';
 export * from './media';
