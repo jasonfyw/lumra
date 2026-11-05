@@ -24,4 +24,6 @@
   // Reconcilers and cleanup (T13): every 15 minutes, plus a nightly orphan sweep.
   "triggers": { "crons": ["*/15 * * * *", "17 3 * * *"] },
   // Secrets: DATABASE_URL, SENTRY_DSN
+  // Optional vars (T04): SENTRY_ENVIRONMENT, LOG_LEVEL, COMMIT_SHA (`--var COMMIT_SHA:<sha>`)
+  "upload_source_maps": true,
 }
