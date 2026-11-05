@@ -5,6 +5,7 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // APP_ORIGIN: comma-separated CORS allow-list (exact origins, never `*`).
   "vars": { "APP_ORIGIN": "http://localhost:3000" },
   // Buckets stay private; this Worker is the only read path (PRD §6.1, ADR-001).
   "r2_buckets": [
@@ -12,7 +13,15 @@
     { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives-dev" },
     { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives-dev" },
   ],
-  // Secrets (set with `wrangler secret put`): MEDIA_TOKEN_SECRET, SENTRY_DSN
+  // Gallery access state (`gallery:{id}`), written by the web app (ADR-001). Namespace ids are
+  // provisioned on first deploy / filled in by T38; local dev uses a Miniflare namespace.
+  "kv_namespaces": [{ "binding": "ACCESS_STATE" }],
+  // `delivery.served` usage events; consumed by usage-ledger ingestion (T27).
+  "queues": { "producers": [{ "binding": "USAGE", "queue": "lumra-usage-dev" }] },
+  // Secrets (set with `wrangler secret put`):
+  //   MEDIA_TOKEN_SECRET — verification keyring `kid:secret[,kid:secret]` (ADR-001); local dev
+  //                        reads it from `.dev.vars`.
+  //   SENTRY_DSN
   // Optional vars (T04): SENTRY_ENVIRONMENT, LOG_LEVEL, COMMIT_SHA (`--var COMMIT_SHA:<sha>`)
   "upload_source_maps": true,
   "env": {
@@ -24,6 +33,8 @@
         { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives-staging" },
         { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives-staging" },
       ],
+      "kv_namespaces": [{ "binding": "ACCESS_STATE" }],
+      "queues": { "producers": [{ "binding": "USAGE", "queue": "lumra-usage-staging" }] },
     },
     "production": {
       // Served on the Worker's workers.dev URL; no custom media domain while on vercel.app.
@@ -33,6 +44,8 @@
         { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives" },
         { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives" },
       ],
+      "kv_namespaces": [{ "binding": "ACCESS_STATE" }],
+      "queues": { "producers": [{ "binding": "USAGE", "queue": "lumra-usage" }] },
     },
   },
 }

@@ -19,6 +19,7 @@ packages/db         database access layer
 packages/billing    rating, ledger, Stripe adapter
 packages/media      storage keys, R2 adapter, file sniffing
 packages/observability  structured logging, redaction, request IDs, Sentry scrubbing
+packages/tokens     media-token signing/verification, gallery access-state store (ADR-001)
 packages/ui         design tokens and shared components
 infra/              Cloudflare, Supabase and Vercel configuration
 tests/              e2e (Playwright), security, performance

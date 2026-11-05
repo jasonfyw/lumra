@@ -1,0 +1,81 @@
+# Supabase CLI config for local development and DB tests (T02).
+# Reference: https://supabase.com/docs/guides/local-development/cli/config
+# Only what Lumra uses is enabled: Postgres, PostgREST, Auth (email OTP / magic link) and the local
+# SMTP inbox. Media lives in private Cloudflare R2, so Supabase Storage, Realtime, Edge Functions,
+# Studio and Analytics are disabled.
+project_id = "lumra"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.pooler]
+enabled = false
+
+[db.migrations]
+enabled = true
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
+[realtime]
+enabled = false
+
+[studio]
+enabled = false
+
+[local_smtp]
+# Captures OTP / magic-link emails locally at http://127.0.0.1:54324.
+enabled = true
+port = 54324
+
+[storage]
+enabled = false
+
+[edge_runtime]
+enabled = false
+
+[analytics]
+enabled = false
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000/**", "https://lumra.vercel.app/**"]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+enable_signup = true
+enable_anonymous_sign_ins = false
+enable_manual_linking = false
+
+[auth.rate_limit]
+email_sent = 2
+sign_in_sign_ups = 30
+token_verifications = 30
+
+# Email OTP / magic link is the only sign-in method (FR-A04). No passwords, SMS or OAuth providers.
+[auth.email]
+enabled = true
+double_confirm_changes = true
+enable_confirmations = false
+secure_password_change = false
+max_frequency = "60s"
+otp_length = 6
+otp_expiry = 900
+
+[auth.sms]
+enabled = false
+
+[auth.mfa.totp]
+enroll_enabled = false
+verify_enabled = false

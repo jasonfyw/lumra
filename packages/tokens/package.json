@@ -1,0 +1,19 @@
+{
+  "name": "@lumra/tokens",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Media-token signing/verification (HMAC JWS) and gallery access-state store, shared by web and the media gateway",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lumra/config": "workspace:*",
+    "@lumra/contracts": "workspace:*"
+  }
+}

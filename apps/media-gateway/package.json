@@ -2,7 +2,7 @@
   "name": "@lumra/media-gateway",
   "version": "0.0.0",
   "private": true,
-  "description": "Cloudflare Worker that authorizes and streams private R2 media (media.<domain>)",
+  "description": "Cloudflare Worker that authorizes and streams private R2 media (served on its workers.dev URL)",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
@@ -14,7 +14,10 @@
   "dependencies": {
     "@lumra/config": "workspace:*",
     "@lumra/contracts": "workspace:*",
+    "@lumra/domain": "workspace:*",
+    "@lumra/media": "workspace:*",
     "@lumra/observability": "workspace:*",
+    "@lumra/tokens": "workspace:*",
     "@sentry/cloudflare": "^11.10.0"
   },
   "devDependencies": {

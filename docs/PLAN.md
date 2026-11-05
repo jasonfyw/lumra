@@ -39,6 +39,7 @@ Shared code lives in `packages/*` so the web app, gateway and worker never dupli
 | `@lumra/billing`       | Rating (integer micro-USD), ledger writers, reservation math, Stripe adapter                                                                  |
 | `@lumra/media`         | Storage-key scheme, R2/S3 adapter (presign, multipart), magic-byte sniffing, derivative spec                                                  |
 | `@lumra/observability` | Structured JSON logger, redaction (tokens/emails/IPs/signed URLs), request/trace IDs, health payload, Sentry scrubbing (T04)                  |
+| `@lumra/tokens`        | HMAC JWS media tokens with `kid` rotation; gallery access-state KV store and writer (ADR-001)                                                 |
 | `@lumra/ui`            | Design tokens, Tailwind preset, accessible primitives                                                                                         |
 
 ## 2. Decisions to record early (ADRs)
@@ -46,7 +47,7 @@ Shared code lives in `packages/*` so the web app, gateway and worker never dupli
 | ADR     | Decision                                | Recommendation (Proposed)                                                                                                                                   | Needed by              |
 | ------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
 | ADR-000 | Monorepo tooling                        | pnpm workspaces + Turborepo, TS strict, ESLint flat config + Prettier, Vitest                                                                               | T01 (done in scaffold) |
-| ADR-001 | Private media gateway vs presigned GETs | Worker gateway with HMAC-SHA256 JWS (≤5 min), access-version check against KV/DO with ≤5 s cache, fail closed                                               | T20                    |
+| ADR-001 | Private media gateway vs presigned GETs | **Accepted:** Worker gateway with HMAC-SHA256 JWS (≤5 min, `kid` rotation), access-version check against KV with ≤5 s memo, fail closed                     | T20                    |
 | ADR-002 | Image processor runtime                 | **Accepted:** Cloudflare Queue → Cloudflare Containers job running sharp with libheif; no native deps on Vercel                                             | T12                    |
 | ADR-003 | ZIP implementation                      | Streamed STORE-mode ZIP (no recompression of JPEG/HEIC) built in the worker container, multipart-uploaded to R2; partitions ≤500 items / ≤2 GB              | T24                    |
 | ADR-004 | Billing rating & Stripe mapping         | Internal append-only `usage_ledger` authoritative; Stripe Billing Meters for storage GB-month & delivery GB, exported daily with idempotency keys           | T27/T31                |
