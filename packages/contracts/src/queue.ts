@@ -30,6 +30,11 @@ export const queueMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('media.uploaded'), mediaId: z.uuid(), ...base }),
   z.object({ type: z.literal('media.delete'), mediaId: z.uuid(), ...base }),
   z.object({ type: z.literal('gallery.delete'), galleryId: z.uuid(), ...base }),
+  /**
+   * A gallery's access-relevant fields changed (publish, password, expiry, suspension, deletion).
+   * The worker re-reads the gallery and rewrites its KV access state (ADR-001); idempotent.
+   */
+  z.object({ type: z.literal('gallery.access_changed'), galleryId: z.uuid(), ...base }),
   z.object({ type: z.literal('archive.build'), jobId: z.uuid(), ...base }),
   z.object({ type: z.literal('guest.expire'), guestSessionId: z.uuid(), ...base }),
   deliveryServedMessageSchema,
