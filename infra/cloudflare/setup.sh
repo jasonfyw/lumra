@@ -62,7 +62,7 @@ ensure_bucket "$DERIVATIVES"
 ensure_bucket "$ARCHIVES"
 
 log "CORS: browser PUT/HEAD to originals only (derivatives/archives are read via the gateway)"
-"${WRANGLER[@]}" r2 bucket cors set "$ORIGINALS" --file "$HERE/cors.originals.json" --force
+"${WRANGLER[@]}" r2 bucket cors set "$ORIGINALS" --file "$HERE/cors.originals.$ENV_NAME.json" --force
 
 log "Lifecycle rules"
 "${WRANGLER[@]}" r2 bucket lifecycle set "$ORIGINALS" --file "$HERE/lifecycle.originals.json" --force

@@ -22,14 +22,14 @@ No bucket has `r2.dev` public access or a custom domain: the only read path is t
 
 ## Files
 
-| File                           | Applied to      | Purpose                                                                                                                                                                         |
-| ------------------------------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cors.originals.json`          | originals       | Allow `PUT`/`HEAD` with `content-type` from `http://localhost:3000` and `https://lumra.vercel.app`; expose `ETag` (needed to complete multipart uploads); preflight cached 1 h. |
-| `lifecycle.originals.json`     | originals       | Abort incomplete multipart uploads after 2 days (abandoned uploads still bill storage).                                                                                         |
-| `lifecycle.temp-archives.json` | temp-archives   | Delete archive objects (and abort their multipart uploads) after 1 day.                                                                                                         |
-| `setup.sh`                     | one env per run | Creates missing buckets/queues, disables `r2.dev`, applies CORS + lifecycle, prints verification. Idempotent.                                                                   |
+| File                           | Applied to      | Purpose                                                                                                                                                                                                                           |
+| ------------------------------ | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cors.originals.<env>.json`    | originals       | Allow `PUT`/`HEAD` with `content-type` from the env's app origin only (dev/staging: `http://localhost:3000`; production: `https://lumra.vercel.app`); expose `ETag` (needed to complete multipart uploads); preflight cached 1 h. |
+| `lifecycle.originals.json`     | originals       | Abort incomplete multipart uploads after 2 days (abandoned uploads still bill storage).                                                                                                                                           |
+| `lifecycle.temp-archives.json` | temp-archives   | Delete archive objects (and abort their multipart uploads) after 1 day.                                                                                                                                                           |
+| `setup.sh`                     | one env per run | Creates missing buckets/queues, disables `r2.dev`, applies CORS + lifecycle, prints verification. Idempotent.                                                                                                                     |
 
-The staging app origin is added to `cors.originals.json` once the stable staging alias exists
+The staging app origin is added to `cors.originals.staging.json` once the stable staging alias exists
 (T38). CORS is not access control — presigned URLs are — but keeping origins tight limits which
 pages can drive uploads with a leaked URL.
 
