@@ -16,3 +16,6 @@ test-results/
 playwright-report/
 next-env.d.ts
 *.tsbuildinfo
+
+# Agent worktrees (local, temporary)
+.claude/worktrees/
