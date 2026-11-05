@@ -1,6 +1,6 @@
 import 'server-only';
 import { createDb, type Database } from '@lumra/db';
-import { serverEnv } from './env';
+import { requireEnv } from './env';
 
 let db: Database | undefined;
 
@@ -10,9 +10,10 @@ let db: Database | undefined;
  */
 export function getDb(): Database {
   if (!db) {
-    const url = serverEnv().DATABASE_URL;
-    if (!url) throw new Error('DATABASE_URL is not configured');
-    db = createDb(url);
+    db = createDb(requireEnv('DATABASE_URL'));
   }
   return db;
 }
+
+/** A Drizzle transaction handle (`db.transaction(async (tx) => …)`). */
+export type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];

@@ -8,4 +8,6 @@ export default defineConfig({
     include: ['src/**/*.test.{ts,tsx}'],
     setupFiles: ['./src/test/setup.ts'],
   },
+  // test-db/ needs the local Supabase stack and runs via `pnpm test:db` (vitest.db.config.ts).
+  test: { include: ['src/**/*.test.ts'] },
 });
