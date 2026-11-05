@@ -53,3 +53,23 @@ export const MEDIA_TOKEN = {
 export const ANALYTICS = {
   viewDedupeWindowMs: 30 * 60 * 1000,
 } as const;
+
+/**
+ * Justified grid tunables (PRD §4 "Justified grid", T17). Row heights are CSS px.
+ * Desktop rows stay ~180–280 px (target 220); mobile ~110–190 px (target 150).
+ */
+export const JUSTIFIED_LAYOUT = {
+  /** Container widths below this use the mobile row heights. */
+  mobileBreakpointPx: 768,
+  desktop: { targetRowHeight: 220, minRowHeight: 180, maxRowHeight: 280, gap: 4 },
+  mobile: { targetRowHeight: 150, minRowHeight: 110, maxRowHeight: 190, gap: 2 },
+  /** Aspect ratio (w/h) used for placeholders whose dimensions are not known yet. */
+  defaultAspectRatio: 3 / 2,
+  /** Extra px rendered above/below the viewport by the windowed grid. */
+  overscanPx: 800,
+} as const;
+
+/** Fractional ordering keys (FR-G03, T15). Keys longer than this trigger a full rebalance. */
+export const ORDERING = {
+  maxKeyLength: 32,
+} as const;
