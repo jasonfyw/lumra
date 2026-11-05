@@ -4,3 +4,4 @@ export * from './gallery';
 export * from './media-token';
 export * from './queue';
 export * from './upload';
+export * from './public-gallery';
