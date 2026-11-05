@@ -29,3 +29,23 @@ export function archivePartKey(galleryId: string, jobId: string, partNo: number)
   if (!Number.isInteger(partNo) || partNo < 1) throw new Error('Invalid partNo for storage key');
   return `archives/${galleryId}/${jobId}/${partNo}.zip`;
 }
+
+const ID = '[A-Za-z0-9-]{8,64}';
+const STORAGE_KEY_PATTERNS = [
+  new RegExp(`^originals/${ID}/${ID}/${ID}/source$`),
+  new RegExp(`^derivatives/${ID}/${ID}/[a-z0-9]{4,64}\\.webp$`),
+  new RegExp(`^archives/${ID}/${ID}/[1-9][0-9]*\\.zip$`),
+];
+
+/** True if `key` has exactly the shape produced by one of the key builders above. */
+export function isStorageKey(key: string): boolean {
+  return STORAGE_KEY_PATTERNS.some((pattern) => pattern.test(key));
+}
+
+/**
+ * Guard for storage adapters: only keys produced by the builders may reach R2, so a caller
+ * can never pass a user-supplied path (e.g. `../x` or a filename) as an object key.
+ */
+export function assertStorageKey(key: string): void {
+  if (!isStorageKey(key)) throw new Error('Object key was not produced by a storage key builder');
+}
