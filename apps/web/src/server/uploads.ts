@@ -19,6 +19,7 @@ import type {
   UploadIntentResponse,
   UploadStateResponse,
 } from '@lumra/contracts';
+import { toOutboxRecord } from '@lumra/contracts';
 import { checkAdmission, estimateStoredFootprintBytes } from '@lumra/billing';
 import {
   billingAccounts,
@@ -787,15 +788,19 @@ export async function completeUpload(
       .set({ status: 'completed', completedAt: now })
       .where(eq(uploadSessions.id, session.id))
       .returning();
-    const dedupeKey = `media.uploaded:${item.id}`;
     await tx
       .insert(jobOutbox)
-      .values({
-        eventName: 'media.uploaded',
-        aggregateId: item.id,
-        payload: { type: 'media.uploaded', mediaId: item.id, traceId: deps.requestId, dedupeKey },
-        dedupeKey,
-      })
+      .values(
+        toOutboxRecord(
+          {
+            type: 'media.uploaded',
+            mediaId: item.id,
+            traceId: deps.requestId,
+            dedupeKey: `media.uploaded:${item.id}`,
+          },
+          item.id,
+        ),
+      )
       .onConflictDoNothing({ target: jobOutbox.dedupeKey });
 
     deps.log.info('upload completed', {
@@ -864,15 +869,19 @@ export async function abortUpload(
         sql`select public.release_guest_upload(${locked.guestSessionId}::uuid, ${locked.reservedBytes}::bigint)`,
       );
     }
-    const dedupeKey = `media.delete:${current.id}`;
     await tx
       .insert(jobOutbox)
-      .values({
-        eventName: 'media.delete',
-        aggregateId: current.id,
-        payload: { type: 'media.delete', mediaId: current.id, traceId: deps.requestId, dedupeKey },
-        dedupeKey,
-      })
+      .values(
+        toOutboxRecord(
+          {
+            type: 'media.delete',
+            mediaId: current.id,
+            traceId: deps.requestId,
+            dedupeKey: `media.delete:${current.id}`,
+          },
+          current.id,
+        ),
+      )
       .onConflictDoNothing({ target: jobOutbox.dedupeKey });
     return { response: completeResponse(aborted!, mediaStatus), aborted: true };
   });

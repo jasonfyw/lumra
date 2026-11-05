@@ -173,6 +173,8 @@ export const media = pgTable('media', {
   byteSize: int8('byte_size').notNull(),
   width: integer('width'),
   height: integer('height'),
+  /** EXIF orientation (1–8) of the original; derivatives are already rotated (T12). */
+  orientation: smallint('orientation'),
   takenAt: tstz('taken_at'),
   /** Fractional ordering key; column collation is "C" (byte-wise). */
   sortKey: text('sort_key').notNull(),

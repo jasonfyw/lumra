@@ -57,6 +57,25 @@ jobs:
           node-version-file: .nvmrc
       - run: pnpm audit --prod --audit-level high
 
+  # Builds the Cloudflare Containers image (libvips + libheif/libde265 from source) and proves
+  # HEIC decodes end to end; `pnpm test` cannot, because sharp's prebuilt binaries lack HEVC.
+  image-processor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @lumra/image-processor build
+      - run: docker build --platform linux/amd64 -t lumra-image-processor:ci apps/image-processor
+      - run: docker run -d --rm -p 8080:8080 --name lumra-processor lumra-image-processor:ci
+      - run: node apps/image-processor/scripts/smoke.mjs http://127.0.0.1:8080
+      - if: failure()
+        run: docker logs lumra-processor
+
   db:
     runs-on: ubuntu-latest
     steps:

@@ -9,14 +9,19 @@
     "deploy": "wrangler deploy",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:db": "vitest run --config vitest.db.config.ts"
   },
   "dependencies": {
+    "@cloudflare/containers": "0.3.7",
     "@lumra/config": "workspace:*",
     "@lumra/contracts": "workspace:*",
+    "@lumra/db": "workspace:*",
     "@lumra/domain": "workspace:*",
+    "@lumra/media": "workspace:*",
     "@lumra/observability": "workspace:*",
-    "@sentry/cloudflare": "^11.10.0"
+    "@sentry/cloudflare": "^11.10.0",
+    "postgres": "^4.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261102.1",
