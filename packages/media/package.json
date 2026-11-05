@@ -11,5 +11,10 @@
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@lumra/config": "workspace:*",
+    "@lumra/contracts": "workspace:*",
+    "aws4fetch": "^1.0.20"
   }
 }

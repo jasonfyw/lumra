@@ -21,9 +21,10 @@ export const webServerEnvSchema = z.object({
   DATABASE_URL: url.optional(), // required by T02
   GUEST_CAPABILITY_PEPPER: secret.optional(), // required by T06
   MEDIA_TOKEN_SECRET: secret.optional(), // required by T20
-  R2_ACCOUNT_ID: z.string().optional(), // required by T09
-  R2_ACCESS_KEY_ID: z.string().optional(), // required by T09
-  R2_SECRET_ACCESS_KEY: z.string().optional(), // required by T09
+  // R2 adapter + bucket policy land in T09; the first caller (upload endpoints) tightens these.
+  R2_ACCOUNT_ID: z.string().optional(), // required by T10
+  R2_ACCESS_KEY_ID: z.string().optional(), // required by T10
+  R2_SECRET_ACCESS_KEY: z.string().optional(), // required by T10
   R2_BUCKET_ORIGINALS: z.string().default('lumra-originals'),
   STRIPE_SECRET_KEY: z.string().optional(), // required by T29
   STRIPE_WEBHOOK_SECRET: z.string().optional(), // required by T29

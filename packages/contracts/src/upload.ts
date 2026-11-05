@@ -33,3 +33,20 @@ export const completeUploadRequestSchema = z.object({
     .optional(),
 });
 export type CompleteUploadRequest = z.infer<typeof completeUploadRequestSchema>;
+
+/**
+ * Actionable reasons a photo is rejected by the client pre-check or the authoritative
+ * worker sniff (FR-M01, FR-M05, FR-M08). Stored as the media exception class on failure.
+ */
+export const MEDIA_REJECTION_CODES = [
+  'unsupported_extension',
+  'empty_file',
+  'file_too_large',
+  'unsupported_type',
+  'truncated',
+  'too_many_pixels',
+  'heic_unsupported_variant',
+  'malformed',
+] as const;
+export const mediaRejectionCodeSchema = z.enum(MEDIA_REJECTION_CODES);
+export type MediaRejectionCode = z.infer<typeof mediaRejectionCodeSchema>;
