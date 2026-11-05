@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dedupeFilenames, sanitizeArchiveFilename } from './filenames';
+import { dedupeFilenames, sanitizeArchiveFilename, sanitizeDownloadFilename } from './filenames';
 
 /** Mirrors what an unzip tool does with an entry name: resolve it under a target directory. */
 function escapesTarget(entry: string): boolean {
@@ -109,5 +109,26 @@ describe('dedupeFilenames', () => {
   it('composes with sanitisation for hostile inputs', () => {
     const names = ['../x.jpg', 'x.jpg', '..\\x.jpg', ''].map((n) => sanitizeArchiveFilename(n));
     expect(dedupeFilenames(names)).toEqual(['x.jpg', 'x (2).jpg', 'x (3).jpg', 'photo']);
+  });
+});
+
+describe('sanitizeDownloadFilename', () => {
+  it('keeps the last path segment and neutralises unsafe characters', () => {
+    expect(sanitizeDownloadFilename('C:\\Users\\me\\IMG 1.jpg', 'photo')).toBe('IMG 1.jpg');
+    expect(sanitizeDownloadFilename('../../etc/..pa"ss\u202Egpj.exe\r\n', 'photo')).toBe(
+      'pa_ss_gpj.exe',
+    );
+  });
+
+  it('uses the caller fallback when nothing safe remains', () => {
+    expect(sanitizeDownloadFilename('../..', 'photo')).toBe('photo');
+    expect(sanitizeDownloadFilename(undefined, 'lumra-archive-part-2')).toBe(
+      'lumra-archive-part-2',
+    );
+    expect(sanitizeDownloadFilename('""', 'lumra-archive-part-2')).toBe('lumra-archive-part-2');
+  });
+
+  it('bounds length', () => {
+    expect(sanitizeDownloadFilename('é'.repeat(400), 'x').length).toBeLessThanOrEqual(180);
   });
 });

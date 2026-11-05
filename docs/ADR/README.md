@@ -6,7 +6,7 @@ Required before the listed task starts (PRD §17, `docs/PLAN.md` §2):
 | ADR                                              | Topic                                   | Task     |
 | ------------------------------------------------ | --------------------------------------- | -------- |
 | [000](./000-monorepo-tooling.md)                 | Monorepo tooling                        | T01      |
-| 001                                              | Private media gateway vs presigned URLs | T20      |
+| [001](./001-private-media-gateway.md)            | Private media gateway vs presigned URLs | T20      |
 | [002](./002-image-processor.md)                  | Image processor / container / queue     | T12      |
 | 003                                              | ZIP implementation and partition sizes  | T24      |
 | [004](./004-billing-rating-and-stripe-meters.md) | Billing rating / Stripe meter mapping   | T27      |
