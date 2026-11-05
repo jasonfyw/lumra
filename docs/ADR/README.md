@@ -7,12 +7,12 @@ Required before the listed task starts (PRD §17, `docs/PLAN.md` §2):
 | ------------------------------------------------ | --------------------------------------- | -------- |
 | [000](./000-monorepo-tooling.md)                 | Monorepo tooling                        | T01      |
 | 001                                              | Private media gateway vs presigned URLs | T20      |
-| 002                                              | Image processor / container / queue     | T12      |
+| [002](./002-image-processor.md)                  | Image processor / container / queue     | T12      |
 | 003                                              | ZIP implementation and partition sizes  | T24      |
 | [004](./004-billing-rating-and-stripe-meters.md) | Billing rating / Stripe meter mapping   | T27      |
-| 005                                              | RLS and guest claim security            | T02, T07 |
+| [005](./005-rls-and-guest-claim.md)              | RLS and guest claim security            | T02, T07 |
 | 006                                              | Video provider (v1.1)                   | V01      |
-| 007                                              | Database access layer                   | T02      |
+| [007](./007-database-access-layer.md)            | Database access layer                   | T02      |
 
 Template:
 

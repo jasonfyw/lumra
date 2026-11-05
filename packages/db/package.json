@@ -5,11 +5,20 @@
   "description": "Database client, typed queries and repositories (migrations live in infra/supabase)",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./schema": "./src/schema.ts"
   },
   "scripts": {
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run",
+    "test:db": "vitest run --config vitest.db.config.ts"
+  },
+  "dependencies": {
+    "@lumra/config": "workspace:*",
+    "@lumra/contracts": "workspace:*",
+    "@lumra/domain": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "postgres": "^4.0.0"
   }
 }
