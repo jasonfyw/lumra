@@ -3,7 +3,7 @@
  * Creates one GitHub issue per epic and per task in docs/PLAN.md, linking tasks as sub-issues.
  * docs/PLAN.md stays the source of truth; re-running skips issues whose title already exists.
  *
- * Usage: node scripts/create-github-issues.mjs [--repo owner/name] [--dry-run]
+ * Usage: node scripts/create-github-issues.mjs [--repo owner/name] [--dry-run [--json]]
  * Requires an authenticated GitHub CLI (`gh auth login`).
  */
 import { execFileSync } from 'node:child_process';
@@ -72,7 +72,9 @@ function createIssue(title, body, labels) {
     return existing.get(title);
   }
   if (dryRun) {
-    console.info(`would create [${labels.join(', ')}] ${title}`);
+    if (args.includes('--json'))
+      console.info(JSON.stringify({ title, labels, body: body + footer }));
+    else console.info(`would create [${labels.join(', ')}] ${title}`);
     return 0;
   }
   const url = gh(
