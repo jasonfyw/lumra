@@ -1,0 +1,3 @@
+# Copy to .dev.vars for `wrangler dev` (never commit real secrets).
+# Keyring `kid:secret[,kid:secret]`; must match the web app's MEDIA_TOKEN_SECRET (ADR-001).
+MEDIA_TOKEN_SECRET=dev:replace-with-at-least-32-random-characters

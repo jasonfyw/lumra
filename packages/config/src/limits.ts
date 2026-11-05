@@ -48,6 +48,18 @@ export const ARCHIVE_LIMITS = {
 export const MEDIA_TOKEN = {
   audience: 'lumra-media',
   maxTtlSeconds: 5 * 60,
+  /** Tolerated clock difference between the minting server and the gateway (ADR-001). */
+  clockSkewSeconds: 30,
+  /** Upper bound on an encoded token; anything longer is rejected before any crypto work. */
+  maxEncodedLength: 2048,
+} as const;
+
+/** Gateway view of authoritative gallery access state (ADR-001). */
+export const ACCESS_STATE = {
+  /** KV key prefix: `gallery:{galleryId}`. */
+  kvKeyPrefix: 'gallery:',
+  /** Hard ceiling for the gateway's in-isolate memo of a KV read. */
+  maxMemoTtlMs: 5_000,
 } as const;
 
 export const ANALYTICS = {
