@@ -215,7 +215,9 @@ export function Lightbox({ items, index, onIndexChange, onClose }: LightboxProps
           >
             {item.status === 'pending'
               ? 'This photo is still processing. Check back soon.'
-              : 'This photo isn’t available.'}
+              : item.status === 'ready'
+                ? 'Loading…'
+                : 'This photo isn’t available.'}
           </div>
         )}
 

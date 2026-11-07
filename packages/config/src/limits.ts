@@ -106,6 +106,27 @@ export const ACCESS_STATE = {
   maxMemoTtlMs: 5_000,
 } as const;
 
+/**
+ * Recipient gallery delivery (T16/T19/T20, ADR-001 "Token minting strategy").
+ *
+ * The public payload lists every item (status, dimensions) but mints preview URLs only for the
+ * first `initialUrlWindow` items in display order plus the hero; the client mints the rest for
+ * tiles as they scroll into view via `media-tokens`, at most `maxMediaTokenIds` per call. This
+ * keeps the payload ~100 kB and signing work bounded for 2,000-item galleries.
+ */
+export const PUBLIC_GALLERY = {
+  initialUrlWindow: 48,
+  maxMediaTokenIds: 100,
+  /** Client re-mints a URL when it is this close to expiry before (re)using it. */
+  urlRefreshLeadMs: 45_000,
+  /** Client polling cadence while any item is still pending (PRD §14.2-3). */
+  pollIntervalMs: 8_000,
+  /** Gallery password session lifetime; also invalidated by any `access_version` bump. */
+  sessionTtlMs: 12 * 60 * 60 * 1000,
+  /** Upper bound on submitted password length (Argon2 input). */
+  maxPasswordLength: 256,
+} as const;
+
 export const ANALYTICS = {
   viewDedupeWindowMs: 30 * 60 * 1000,
 } as const;
@@ -153,6 +174,17 @@ export const RATE_LIMITS = {
   authOtpSend: { limit: 10, windowSeconds: 60 * 60 },
   /** Per client IP: OTP code verification attempts (T05). */
   authOtpVerify: { limit: 30, windowSeconds: 15 * 60 },
+  /** Per client IP: public gallery reads (page + polling API; T16). Polls run every ~8 s. */
+  publicGalleryRead: { limit: 120, windowSeconds: 60 },
+  /** Per client IP: media-token minting for visible tiles / downloads (T20). */
+  publicMediaTokens: { limit: 240, windowSeconds: 60 },
+  /** Per client IP: gallery password attempts (FR-A05 brute force, T19). */
+  galleryUnlock: { limit: 10, windowSeconds: 15 * 60, challengeAt: 5 },
+  /**
+   * Per gallery, across all clients: caps distributed guessing against one gallery. Set high
+   * enough that an attacker can't cheaply lock legitimate recipients out.
+   */
+  galleryUnlockPerGallery: { limit: 300, windowSeconds: 15 * 60 },
 } as const satisfies Record<string, RateLimitRule>;
 export type RateLimitRuleName = keyof typeof RATE_LIMITS;
 

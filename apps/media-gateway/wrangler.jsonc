@@ -1,6 +1,7 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "lumra-media-gateway",
+  "account_id": "307ee78e730439ad9485961695203b86",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -44,7 +45,7 @@
         { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives" },
         { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives" },
       ],
-      "kv_namespaces": [{ "binding": "ACCESS_STATE" }],
+      "kv_namespaces": [{ "binding": "ACCESS_STATE", "id": "411b68f7b8da4404ac02dc09ca186ecd" }],
       "queues": { "producers": [{ "binding": "USAGE", "queue": "lumra-usage" }] },
     },
   },

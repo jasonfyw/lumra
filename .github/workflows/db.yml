@@ -1,0 +1,41 @@
+name: DB tests
+
+# Runs the Supabase-backed suites only when code that talks to the database changes.
+on:
+  pull_request:
+    paths:
+      - infra/supabase/**
+      - packages/db/**
+      - apps/web/src/server/**
+      - apps/web/src/lib/**
+      - apps/web/test-db/**
+      - apps/worker/**
+      - pnpm-lock.yaml
+  workflow_dispatch:
+
+concurrency:
+  group: db-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 3.0.0
+      - run: pnpm install --frozen-lockfile
+      # Starts Postgres + Auth and applies infra/supabase/migrations and seed.sql.
+      - run: supabase start --workdir infra
+      - run: pnpm test:db
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - if: always()
+        run: supabase stop --workdir infra

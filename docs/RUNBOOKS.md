@@ -4,6 +4,7 @@ Filled in as the relevant systems land (T13, T38). Each runbook: symptom → das
 
 - [x] [Queue backlog > 30 min / DLQ growth (T12)](#queue-backlog--dead-letter-queue)
 - [ ] Upload finalize error rate > 2% (T10)
+- [x] [Gallery access state out of sync / gateway 403s (T20)](#gallery-access-state-kv-sync-t20)
 - [ ] Media gateway 5xx > 1% for 10 min (T20)
 - [ ] Stripe webhook unresolved > 15 min (T29)
 - [ ] Billed vs provider consumption drift > 10% (T31)
@@ -21,6 +22,49 @@ the manual QA script.
 - Claims refused: grep logs for `guest claim refused` and its `reason`
   (`no_capability` = a different browser, `session_expired`, `capability_mismatch`). The client
   always sees a 404.
+
+## Gallery access state (KV sync, T20)
+
+**Flow** (ADR-001): any change to a gallery's access-relevant fields (publish, password, expiry,
+suspension, delete) calls `enqueueAccessStateSync` in the same transaction → `job_outbox` row
+`gallery.access_changed` → worker relay → `lumra-jobs-<env>` → handler
+`apps/worker/src/handlers/access-state.ts` re-reads the gallery (+ owner billing) from Postgres
+and writes `gallery:{id}` in the `ACCESS_STATE` KV namespace. `gallery.delete` writes a tombstone
+(`deleted: true` → gateway 404). Drafts write nothing (missing doc → gateway 404). Handler is
+idempotent: duplicates/reordering converge on the current DB state.
+
+**Setup (T38):** create the namespace once per env (`wrangler kv namespace create
+lumra-access-state-<env>`) and put the **same** `id` under `ACCESS_STATE` in both
+`apps/worker/wrangler.jsonc` and `apps/media-gateway/wrangler.jsonc`. Without explicit ids
+wrangler auto-provisions a separate namespace per Worker and the gateway 404s everything.
+
+**Symptoms:** recipients see broken images (gateway 403 `revoked` / 404) although the gallery page
+renders; or a changed password still serves media beyond ~1 min.
+
+1. Check the outbox: `select event_name, attempt_count, last_error, available_at from job_outbox
+where aggregate_id = '<gallery id>' and processed_at is null;` and the DLQ for
+   `gallery.access_changed` messages (see below).
+2. Compare `galleries.access_version` with the KV doc:
+   `wrangler kv key get --binding ACCESS_STATE "gallery:<id>" [--env …]`. Higher in Postgres =
+   KV lagging (403 until fixed); `deleted: true` while the gallery is live = stale tombstone.
+3. **Fix one gallery:** insert a fresh outbox row (what `enqueueAccessStateSync` writes) or replay
+   the DLQ message. **Fix all:** run `reconcileAccessStates` (exported from the same module;
+   T13 schedules it) — it rewrites every published/deleted gallery and also applies time-based
+   billing suspension (past-due grace elapsing).
+4. KV is eventually consistent (~60 s across edge locations); a correct write that is "not yet
+   visible" elsewhere resolves on its own. New tokens are never minted for a locked/expired
+   gallery because the web app checks Postgres directly.
+
+**Token minting (T20):** the web signs with the first `MEDIA_TOKEN_SECRET` entry. The public
+gallery payload carries preview URLs for the first 48 items + hero; the client mints the rest via
+`POST /api/v1/public/galleries/{slug}/media-tokens` (≤ 100 ids/call, per-IP rate limit
+`publicMediaTokens`). A spike of `rate_limited` on that route usually means a scraper — see
+`RATE_LIMITS` in `@lumra/config`.
+
+**Password brute force (T19):** `galleryUnlock` (per IP, 10 / 15 min, Turnstile above 5 when
+configured) and `galleryUnlockPerGallery` (300 / 15 min across all IPs). Logs:
+`rate limited` with `rule`. Sessions live in `gallery_access_sessions` (token hash only); revoke
+all sessions of a gallery by bumping `galleries.access_version` (+ enqueue the KV sync).
 
 ## Queue backlog / dead-letter queue
 

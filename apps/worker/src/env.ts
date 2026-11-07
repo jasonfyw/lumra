@@ -14,6 +14,8 @@ export interface Env {
   HYPERDRIVE?: Hyperdrive;
   /** Cloudflare Containers Durable Object namespace for the image processor (ADR-002). */
   IMAGE_PROCESSOR?: DurableObjectNamespace;
+  /** Gallery access state mirrored for the media gateway (ADR-001); written by T20 handlers. */
+  ACCESS_STATE: KVNamespace;
   JOBS: Queue<QueueMessage>;
   ORIGINALS: R2Bucket;
   DERIVATIVES: R2Bucket;

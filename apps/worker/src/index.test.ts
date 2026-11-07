@@ -197,6 +197,9 @@ describe('scheduled outbox relay', () => {
       processor: () => {
         throw new Error('unused');
       },
+      accessStateRepo: () => {
+        throw new Error('unused');
+      },
       close,
     } as Services;
     return { services, outbox, close };

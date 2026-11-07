@@ -1,6 +1,7 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "lumra-worker",
+  "account_id": "307ee78e730439ad9485961695203b86",
   "main": "src/worker.ts",
   "compatibility_date": "2026-10-01",
   // postgres.js needs node:net/tls shims (Hyperdrive / DATABASE_URL).
@@ -17,6 +18,12 @@
       },
     ],
   },
+  // Gallery access state (`gallery:{id}`) read by the media gateway (ADR-001), written by the
+  // gallery.access_changed / gallery.delete handlers. Must be the SAME namespace as
+  // apps/media-gateway's ACCESS_STATE: before the first deploy create it once
+  // (`wrangler kv namespace create lumra-access-state-dev`) and put its `id` in both configs
+  // (T38) — otherwise auto-provisioning gives each Worker its own empty namespace.
+  "kv_namespaces": [{ "binding": "ACCESS_STATE" }],
   "r2_buckets": [
     { "binding": "ORIGINALS", "bucket_name": "lumra-originals-dev" },
     { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives-dev" },
@@ -40,7 +47,7 @@
       "class_name": "ImageProcessorContainer",
       "image": "../image-processor/Dockerfile",
       "image_build_context": "../image-processor",
-      "instance_type": "standard",
+      "instance_type": "standard-1",
       "max_instances": 4,
     },
   ],
@@ -53,4 +60,40 @@
   // Secrets: DATABASE_URL (local only), SENTRY_DSN. Vars: PROCESSOR_URL (local only).
   // Optional vars (T04): SENTRY_ENVIRONMENT, LOG_LEVEL, COMMIT_SHA (`--var COMMIT_SHA:<sha>`)
   "upload_source_maps": true,
+  // Production (`wrangler deploy --env production`). Bindings are not inherited, so they are
+  // repeated here; KV id is shared with apps/media-gateway's production ACCESS_STATE.
+  "env": {
+    "production": {
+      "queues": {
+        "producers": [{ "binding": "JOBS", "queue": "lumra-jobs" }],
+        "consumers": [
+          {
+            "queue": "lumra-jobs",
+            "max_batch_size": 10,
+            "max_retries": 5,
+            "dead_letter_queue": "lumra-jobs-dlq",
+          },
+        ],
+      },
+      "kv_namespaces": [{ "binding": "ACCESS_STATE", "id": "411b68f7b8da4404ac02dc09ca186ecd" }],
+      "r2_buckets": [
+        { "binding": "ORIGINALS", "bucket_name": "lumra-originals" },
+        { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives" },
+        { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives" },
+      ],
+      "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "HYPERDRIVE_ID_PRODUCTION" }],
+      "containers": [
+        {
+          "class_name": "ImageProcessorContainer",
+          "image": "../image-processor/Dockerfile",
+          "image_build_context": "../image-processor",
+          "instance_type": "standard-1",
+          "max_instances": 4,
+        },
+      ],
+      "durable_objects": {
+        "bindings": [{ "name": "IMAGE_PROCESSOR", "class_name": "ImageProcessorContainer" }],
+      },
+    },
+  },
 }

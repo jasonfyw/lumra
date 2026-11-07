@@ -190,6 +190,69 @@ still work without it.
 | `RATE_LIMIT_PEPPER`                                         | Optional: dedicated pepper for rate-limit keys        |
 | `TURNSTILE_SECRET_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY`    | Optional: turns on bot challenges                     |
 
+## Browser upload client (T14)
+
+The client lives in `apps/web/src/lib/upload/` (framework-agnostic TypeScript) and
+`apps/web/src/components/upload/` (React). `/new` mounts `GalleryUploader`; the gallery editor
+mounts the same component with `mode="owner"`.
+
+### Engine (`UploadEngine`)
+
+- **States.** `queued → uploading → uploaded → processing → ready`, plus recoverable `failed`,
+  `cancelled` and `removed` (PRD §4). `awaiting_file` is the resume state after a reload: the
+  engine knows the intent and completed parts but needs the user to reselect the `File`.
+- **Pre-check (FR-M08).** `precheckFile` (extension, ≤ 50 MB, magic bytes of the first 256 KiB)
+  runs before any request. Rejections come back from `addFiles` with user-facing text
+  (`messages.ts`). Duplicate picks (same name, size and `lastModified`) are skipped.
+- **Intent.** One `clientId` (UUID) per file, kept across retries, so a retried intent replays
+  (200) instead of reserving twice.
+- **Parts.** Single PUT or multipart per the intent's `partSize`/`partCount`. Parts are signed in
+  batches of 10 and uploaded with `XMLHttpRequest` (fetch has no upload progress). A failed part
+  is re-signed and retried with capped exponential backoff and equal jitter (`backoff.ts`:
+  500 ms base, 30 s cap, delay in `[cap/2, cap]`), 6 attempts, then the file is `failed` and
+  `Retry` resumes it. `Retry-After` on 429 (API or part PUT) is honoured, capped at 120 s. API
+  calls retry only on network errors, 5xx and 429.
+- **Concurrency.** 3 files on desktop, 2 on touch devices (`UPLOAD_LIMITS`), 1–2 when
+  `navigator.connection` reports `saveData`, `2g` or `3g`. Every error or slow part
+  (< 32 KiB/s) lowers the limit by one; four successes earn a slot back.
+- **Checksum.** `crypto.subtle.digest` is one-shot, so SHA-256 is computed incrementally with
+  hash-wasm in 4 MiB slices on the main thread (yielding between slices), in parallel with the
+  part uploads. It is sent with `complete` when available; if hashing fails it is skipped.
+- **Complete.** Sends the ordered part ETags. On a retryable 409 (`part_mismatch`,
+  `object_missing`, `no_parts`, `size_mismatch`) the engine reconciles with
+  `GET /uploads/{id}`, re-uploads what R2 lacks and completes again (up to twice).
+- **Resume.** Progress refs go to `draft-store` (IndexedDB): name, size, type, `lastModified`,
+  intent/media ids and part ETags. File bytes and URLs are never stored. On reload the
+  uploader shows "N uploads were interrupted" and asks for the same files. Matched files
+  resume after `GET /uploads/{id}`: only parts R2 does not list (or that have the wrong length)
+  are sent. An aborted or expired intent restarts with a new `clientId`.
+- **Errors.** Guest `quota_exceeded` (`requiresAuth`) and 401 set `authPrompt`. The UI then
+  links to `/auth?intent=publish&galleryId=…&returnTo=/new?gallery=…`, which claims the draft
+  and returns to the same gallery in owner mode. Uploaded photos stay in the draft, and the
+  refused files come back as "choose again" items. The guest limits (20 files / 250 MB) are
+  also checked locally, so the 21st file prompts sign-in without a reservation request.
+  A 404 is a non-retryable "gallery no longer available".
+- **Processing status.** After `complete` the engine polls: guests poll
+  `GET /guest/drafts/current` (one request for the whole draft, which also refreshes the quota),
+  owners poll `GET /uploads/{id}` for at most 5 items per tick. TODO(T15): use the gallery
+  detail endpoint. The interval is 3 s, growing ×1.5 up to 15 s while nothing changes.
+- **Cancel / remove.** Cancel aborts the in-flight PUT and calls `POST /uploads/{id}/abort`.
+  Remove only applies to unfinished items; deleting a finished photo is `DELETE /media/{id}`
+  (T15).
+
+### UI
+
+- `UploadZone`: drag-and-drop plus a real "Choose photos" button that opens the hidden
+  `<input type=file multiple accept=…jpeg,png,webp,heic>`. The button works with Enter or Space,
+  and the drag hint is hidden on coarse pointers.
+- `UploadList`: one tile per file (preview, status text, per-file progress bar) with
+  Retry/Cancel/Remove (≥ 44 px), a total progress bar, and a polite `aria-live` summary throttled
+  to one update every 3 s.
+- `GalleryUploader`: composes the zone and the list with the resume and sign-in prompts, and
+  warns on `beforeunload` while uploads run.
+- The title field on `/new` is client-side only. TODO(T15): persist it with
+  `PATCH /galleries/{id}`.
+
 ## Tests
 
 - **Unit** (`pnpm test`): `apps/web/src/lib/rate-limit-key.test.ts` (IP truncation, peppered
@@ -200,6 +263,17 @@ still work without it.
   against local Supabase. `next/headers` cookies, Supabase `getUser` and R2 are faked; R2 is
   faked at the `fetch` level (`test-db/fake-r2.ts`). The fake checks presigned `PUT`s with an
   independent SigV4 implementation, plus expiry, signed length and signed content type.
+- **Client** (`pnpm test`): `apps/web/src/lib/upload/engine.test.ts` runs the engine against a fake
+  API and fake R2 (`test-fakes.ts`) with fake timers. It covers state transitions, jittered part
+  retries, `Retry-After`, concurrency limits, cancel, the guest quota sign-in prompt, 401/404,
+  and resume skipping parts R2 has. `components/upload/upload.test.tsx` covers keyboard
+  activation, unsupported-file rejection, actions and throttled `aria-live` text.
+- **E2E.** `tests/e2e/specs/new.spec.ts` runs without a stack: the zone is visible, it works from
+  the keyboard only, and unsupported files are rejected client-side.
+  `specs/supabase/upload.spec.ts` (`E2E_SUPABASE=1`) uses the real routes and Postgres, with R2
+  replaced by a fake S3 server (`specs/supabase/fake-s3.ts` on port 54399 via `R2_ENDPOINT`). It
+  checks that a CDP-throttled 20 MiB multipart upload recovers from a forced part-2 failure, and
+  that after a reload, reselecting the file resumes without re-sending part 1.
 
 ## Manual QA (needs real R2 credentials)
 

@@ -11,6 +11,12 @@ export const API_ERROR_CODES = [
   'rate_limited',
   'quota_exceeded',
   'spend_cap_reached',
+  /** Public gallery whose `expires_at` has passed (PRD J4); distinct from not-found. */
+  'gallery_expired',
+  /** Password-protected gallery without a valid gallery session (FR-V01). */
+  'password_required',
+  /** Wrong gallery password (FR-G04). */
+  'invalid_password',
   'internal',
 ] as const;
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -25,6 +31,9 @@ export const API_ERROR_STATUS: Record<ApiErrorCode, number> = {
   rate_limited: 429,
   quota_exceeded: 403,
   spend_cap_reached: 402,
+  gallery_expired: 410,
+  password_required: 401,
+  invalid_password: 401,
   internal: 500,
 };
 

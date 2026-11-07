@@ -10,6 +10,10 @@ import { LumraBadge } from './lumra-badge';
 export interface GalleryViewProps {
   gallery: PublicGallery;
   items: readonly PublicMediaItem[];
+  /** Forwarded to the grid: ids of the tiles currently rendered. */
+  onVisibleItemsChange?(ids: string[]): void;
+  /** Index of the item shown in the lightbox, or null when it is closed. */
+  onLightboxIndexChange?(index: number | null): void;
 }
 
 /**
@@ -19,7 +23,12 @@ export interface GalleryViewProps {
  * On close, the grid scrolls the current item's row into view and focuses its tile (which is
  * the originating tile unless the viewer navigated inside the lightbox).
  */
-export function GalleryView({ gallery, items }: GalleryViewProps) {
+export function GalleryView({
+  gallery,
+  items,
+  onVisibleItemsChange,
+  onLightboxIndexChange,
+}: GalleryViewProps) {
   const gridRef = useRef<JustifiedGridHandle>(null);
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const [revealIndex, setRevealIndex] = useState<number | null>(null);
@@ -36,6 +45,10 @@ export function GalleryView({ gallery, items }: GalleryViewProps) {
     setRevealIndex(null);
   }, [revealIndex]);
 
+  useEffect(() => {
+    onLightboxIndexChange?.(openIndex);
+  }, [openIndex, onLightboxIndexChange]);
+
   const open = openIndex !== null;
 
   return (
@@ -44,7 +57,12 @@ export function GalleryView({ gallery, items }: GalleryViewProps) {
         <GalleryHero gallery={gallery} items={items} />
         <main className="px-1 pb-10 sm:px-4 lg:px-6">
           {items.length > 0 ? (
-            <JustifiedGrid ref={gridRef} items={items} onOpen={setOpenIndex} />
+            <JustifiedGrid
+              ref={gridRef}
+              items={items}
+              onOpen={setOpenIndex}
+              onVisibleItemsChange={onVisibleItemsChange}
+            />
           ) : (
             <p className="px-3 py-16 text-center text-[var(--color-ink-muted)]">
               No photos in this gallery yet.

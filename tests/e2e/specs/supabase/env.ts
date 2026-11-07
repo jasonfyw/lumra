@@ -10,4 +10,8 @@ export const SUPABASE_E2E = {
   mailpitUrl: process.env.E2E_MAILPIT_URL ?? 'http://127.0.0.1:54324',
   // Test-only pepper so specs can mint guest capabilities the server accepts.
   guestPepper: 'e2e-guest-pepper-e2e-guest-pepper-000001',
+  // Test-only media-token keyring and a gateway origin that is never contacted: specs assert the
+  // minted URLs, not image bytes (no Cloudflare account in CI).
+  mediaTokenSecret: 'e2e:e2e-media-token-secret-0123456789abcdef',
+  mediaUrl: 'https://media.lumra.invalid',
 };

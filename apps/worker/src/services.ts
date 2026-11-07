@@ -1,7 +1,9 @@
 import {
+  createAccessStateRepository,
   createMediaPipelineRepository,
   createOutboxRepository,
   createSqlClient,
+  type AccessStateRepository,
   type MediaPipelineRepository,
   type OutboxRepository,
 } from '@lumra/db';
@@ -15,6 +17,7 @@ export const PROCESSOR_POOL_SIZE = 4;
 export interface Services {
   mediaRepo(): MediaPipelineRepository;
   outboxRepo(): OutboxRepository;
+  accessStateRepo(): AccessStateRepository;
   processor(): ProcessorClient;
   /** Closes the DB pool; call once the invocation's work is done. */
   close(): Promise<void>;
@@ -66,6 +69,7 @@ export function createServices(env: Env): Services {
   return {
     mediaRepo: () => createMediaPipelineRepository(db()),
     outboxRepo: () => createOutboxRepository(db()),
+    accessStateRepo: () => createAccessStateRepository(db()),
     processor: () => (processor ??= createProcessorClient(processorFetcher(env))),
     async close() {
       if (sql) await sql.end({ timeout: 5 });

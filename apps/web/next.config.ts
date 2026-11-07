@@ -19,6 +19,7 @@ const nextConfig: NextConfig = {
     '@lumra/domain',
     '@lumra/media',
     '@lumra/observability',
+    '@lumra/tokens',
     '@lumra/ui',
   ],
   poweredByHeader: false,
