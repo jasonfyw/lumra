@@ -11,7 +11,7 @@ deliveries quickly, delivery bytes must be metered (FR-D04), and media bytes mus
 ## Decision
 
 **A Cloudflare Worker (`apps/media-gateway`) is the only read path into the private R2 buckets.** It is
-served on its `*.workers.dev` URL (no custom media domain while the app lives on `lumra.vercel.app`) and
+served on its `*.workers.dev` URL (no custom media domain while the app lives on `lumra-ten.vercel.app`) and
 exposes `GET|HEAD /m/:token`. Per request it:
 
 1. verifies the media token (signature, audience, expiry);
