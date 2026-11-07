@@ -1,0 +1,33 @@
+name: Image processor
+
+# Builds the Cloudflare Containers image (libvips + libheif/libde265 from source) and proves HEIC
+# decodes end to end. Only runs when the processor or its contracts change.
+on:
+  pull_request:
+    paths:
+      - apps/image-processor/**
+      - packages/contracts/src/processor.ts
+  workflow_dispatch:
+
+concurrency:
+  group: image-processor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image-processor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @lumra/image-processor build
+      - run: docker build --platform linux/amd64 -t lumra-image-processor:ci apps/image-processor
+      - run: docker run -d --rm -p 8080:8080 --name lumra-processor lumra-image-processor:ci
+      - run: node apps/image-processor/scripts/smoke.mjs http://127.0.0.1:8080
+      - if: failure()
+        run: docker logs lumra-processor

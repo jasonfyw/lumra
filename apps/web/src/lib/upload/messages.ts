@@ -23,6 +23,10 @@ export function rejectionMessage(name: string, code: RejectionCode): string {
       return `${name} has too many pixels (the limit is 100 megapixels).`;
     case 'heic_unsupported_variant':
       return `${name} uses a HEIC variant Lumra can’t process. Export it as JPEG and try again.`;
+    case 'processing_timeout':
+      return `${name} took too long to process. Try a smaller export.`;
+    case 'checksum_mismatch':
+      return `${name} didn’t upload intact. Remove it and try again.`;
     case 'duplicate':
       return `${name} is already in this upload.`;
     case 'unreadable':

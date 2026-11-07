@@ -1,5 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
 import { GalleryEditor } from '@/components/editor/gallery-editor';
+import { GalleryUploader } from '@/components/upload';
 import { getAuthenticatedUser } from '@/lib/actor';
 import { ApiFailure } from '@/lib/api';
 import { getDb } from '@/lib/db';
@@ -27,5 +28,17 @@ export default async function EditGalleryPage({ params }: { params: Promise<{ id
     if (err instanceof ApiFailure && err.error.code === 'not_found') notFound();
     throw err;
   }
-  return <GalleryEditor key={detail.id} initial={detail} />;
+  return (
+    <GalleryEditor
+      key={detail.id}
+      initial={detail}
+      uploadSlot={
+        <GalleryUploader
+          galleryId={detail.id}
+          mode="owner"
+          signInHref={`/auth?returnTo=${encodeURIComponent(`/dashboard/galleries/${detail.id}`)}`}
+        />
+      }
+    />
+  );
 }

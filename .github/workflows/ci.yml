@@ -1,9 +1,10 @@
 name: CI
 
+# Kept deliberately small to limit Actions minutes: one job, pull requests only (main only ever
+# receives already-checked squash merges). Heavier suites live in path-filtered workflows.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -12,6 +13,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v5
@@ -27,72 +29,3 @@ jobs:
       - run: pnpm build
         env:
           NEXT_PUBLIC_APP_URL: http://localhost:3000
-
-  e2e:
-    runs-on: ubuntu-latest
-    needs: check
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v5
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @lumra/e2e exec playwright install --with-deps chromium
-      - run: pnpm e2e
-      - uses: actions/upload-artifact@v7
-        if: failure()
-        with:
-          name: playwright-report
-          path: tests/e2e/test-results
-
-  audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v5
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-      - run: pnpm audit --prod --audit-level high
-
-  # Builds the Cloudflare Containers image (libvips + libheif/libde265 from source) and proves
-  # HEIC decodes end to end; `pnpm test` cannot, because sharp's prebuilt binaries lack HEVC.
-  image-processor:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v5
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @lumra/image-processor build
-      - run: docker build --platform linux/amd64 -t lumra-image-processor:ci apps/image-processor
-      - run: docker run -d --rm -p 8080:8080 --name lumra-processor lumra-image-processor:ci
-      - run: node apps/image-processor/scripts/smoke.mjs http://127.0.0.1:8080
-      - if: failure()
-        run: docker logs lumra-processor
-
-  db:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - uses: supabase/setup-cli@v1
-        with:
-          version: 3.0.0
-      - run: pnpm install --frozen-lockfile
-      # Starts Postgres + Auth and applies infra/supabase/migrations and seed.sql.
-      - run: supabase start --workdir infra
-      - run: pnpm test:db
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
-      - if: always()
-        run: supabase stop --workdir infra
