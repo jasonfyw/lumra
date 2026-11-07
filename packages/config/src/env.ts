@@ -135,7 +135,7 @@ const workerObservability = {
 };
 
 export const mediaGatewayEnvSchema = z.object({
-  /** Allowed CORS origins, comma-separated (e.g. `https://lumra.vercel.app`). */
+  /** Allowed CORS origins, comma-separated (e.g. `https://lumra-ten.vercel.app`). */
   APP_ORIGIN: originListSchema,
   /** Verification keyring; every listed kid is accepted (ADR-001). */
   MEDIA_TOKEN_SECRET: mediaTokenKeyringSchema,

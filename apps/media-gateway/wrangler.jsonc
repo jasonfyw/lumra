@@ -39,7 +39,7 @@
     },
     "production": {
       // Served on the Worker's workers.dev URL; no custom media domain while on vercel.app.
-      "vars": { "APP_ORIGIN": "https://lumra.vercel.app" },
+      "vars": { "APP_ORIGIN": "https://lumra-ten.vercel.app" },
       "r2_buckets": [
         { "binding": "ORIGINALS", "bucket_name": "lumra-originals" },
         { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives" },

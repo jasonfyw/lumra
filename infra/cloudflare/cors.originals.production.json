@@ -2,7 +2,7 @@
   "rules": [
     {
       "allowed": {
-        "origins": ["https://lumra.vercel.app"],
+        "origins": ["https://lumra-ten.vercel.app"],
         "methods": ["PUT", "HEAD"],
         "headers": ["content-type"]
       },
