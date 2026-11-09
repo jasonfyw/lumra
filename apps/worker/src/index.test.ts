@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RATE_CARD_V1 } from '@lumra/config';
 import { DEADLINES } from './deadline';
 import worker, {
   OUTBOX_RELAY_CRON,
   RELAY_KICK_PATH,
+  STORAGE_ACCRUAL_CRON,
   createWorker,
+  isUsageQueue,
   handlers,
   retryDelaySeconds,
   timeoutRetryDelaySeconds,
@@ -89,6 +92,9 @@ function fakeServices(claimBatches: number) {
       throw new Error('unused');
     },
     accessStateRepo: () => {
+      throw new Error('unused');
+    },
+    billingRepo: () => {
       throw new Error('unused');
     },
     close,
@@ -229,6 +235,22 @@ describe('scheduled outbox relay', () => {
     expect(sendBatch).toHaveBeenCalledTimes(2);
     expect(close).toHaveBeenCalled();
     expect(clock).toBeGreaterThan(40_000);
+  });
+
+  it('runs the storage accrual for its hourly cron (T27) and closes the pool', async () => {
+    const { services, outbox, close } = fakeServices(0);
+    const repo = {
+      storageAccrualCandidates: vi.fn(async () => []),
+      storageByteSecondsToDate: vi.fn(),
+      commitStorageAccrual: vi.fn(),
+    };
+    services.billingRepo = () => repo as unknown as ReturnType<Services['billingRepo']>;
+    const w = createWorker({ createServices: () => services });
+    await w.scheduled({ cron: STORAGE_ACCRUAL_CRON } as ScheduledController, {} as Env);
+    expect(repo.storageAccrualCandidates).toHaveBeenCalledTimes(1);
+    expect(outbox.claim).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    expect(events().some((e) => e.msg === 'storage accrual finished')).toBe(true);
   });
 
   it('ignores other crons (T13)', async () => {
@@ -409,5 +431,91 @@ describe('relay kick endpoint', () => {
     release();
     await settle();
     expect(outbox.claim).toHaveBeenCalledOnce(); // only the first kick ran a pass
+  });
+});
+
+describe('usage queue (T27 delivery ingestion)', () => {
+  const OWNER = '11111111-1111-4111-8111-111111111111';
+  const GALLERY = '22222222-2222-4222-8222-222222222222';
+  const delivered = (dedupeKey: string) => ({
+    type: 'delivery.served',
+    galleryId: GALLERY,
+    action: 'original',
+    mediaId: '55555555-5555-4555-8555-555555555555',
+    archivePartId: null,
+    variant: 'original',
+    bytes: 2048,
+    servedAt: '2026-11-09T12:00:00.000Z',
+    traceId: 'ray',
+    dedupeKey,
+  });
+
+  function usageServices(appendMany: (rows: unknown[]) => Promise<number>) {
+    const { services, close } = fakeServices(0);
+    const repo = {
+      galleryOwners: vi.fn(async () => new Map([[GALLERY, OWNER]])),
+      accountContexts: vi.fn(
+        async () =>
+          new Map([
+            [
+              OWNER,
+              {
+                accountId: OWNER,
+                account: { billingPeriodStart: null, billingPeriodEnd: null },
+                plan: RATE_CARD_V1.pro,
+              },
+            ],
+          ]),
+      ),
+      deliveryTotals: vi.fn(async () => new Map()),
+      ledger: { appendMany: vi.fn(appendMany) },
+    };
+    services.billingRepo = () => repo as unknown as ReturnType<Services['billingRepo']>;
+    return { services, repo, close };
+  }
+
+  const usageBatch = (...messages: ReturnType<typeof fakeMessage>[]) =>
+    ({ ...batchOf(...messages), queue: 'lumra-usage' }) as unknown as MessageBatch<unknown>;
+
+  it('recognises only the usage queues', () => {
+    for (const q of ['lumra-usage', 'lumra-usage-dev', 'lumra-usage-staging']) {
+      expect(isUsageQueue(q)).toBe(true);
+    }
+    for (const q of ['lumra-jobs', 'lumra-jobs-dev', 'lumra-usage-dlq', 'lumra-usage-x']) {
+      expect(isUsageQueue(q)).toBe(false);
+    }
+  });
+
+  it('ingests a batch in one ledger write and acks every message', async () => {
+    const { services, repo, close } = usageServices(async (rows) => rows.length);
+    const a = { ...fakeMessage(delivered('jti-a:0-2047')), id: 'a' };
+    const b = { ...fakeMessage(delivered('jti-b:0-2047')), id: 'b' };
+    const w = createWorker({ createServices: () => services });
+    await w.queue(usageBatch(a, b), env, ctx);
+    expect(repo.ledger.appendMany).toHaveBeenCalledTimes(1);
+    expect(repo.ledger.appendMany.mock.calls[0]![0]).toHaveLength(2);
+    expect(a.ack).toHaveBeenCalled();
+    expect(b.ack).toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    expect(events().find((e) => e.msg === 'usage batch ingested')).toMatchObject({
+      inserted: 2,
+    });
+  });
+
+  it('acks malformed messages and retries the valid ones when the DB write fails', async () => {
+    const { services } = usageServices(async () => {
+      throw new Error('db down');
+    });
+    const bad = { ...fakeMessage({ type: 'delivery.served', bytes: -1 }), id: 'bad' };
+    const good = { ...fakeMessage(delivered('jti-a:0-2047'), 2), id: 'good' };
+    const w = createWorker({ createServices: () => services });
+    await w.queue(usageBatch(bad, good), env, ctx);
+    expect(bad.ack).toHaveBeenCalled();
+    expect(good.ack).not.toHaveBeenCalled();
+    expect(good.retry).toHaveBeenCalledWith({ delaySeconds: retryDelaySeconds(2) });
+    const failure = events().find((e) => e.msg === 'usage batch failed');
+    expect(failure).toBeDefined();
+    // Never logs tokens or byte ranges from the dedupe key.
+    expect(JSON.stringify(failure)).not.toContain('jti-a');
   });
 });

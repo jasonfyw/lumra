@@ -1,6 +1,11 @@
 import * as Sentry from '@sentry/cloudflare';
 import { parseEnv, PROCESSOR_LIMITS, workerEnvSchema } from '@lumra/config';
-import { queueMessageSchema, type QueueMessage } from '@lumra/contracts';
+import {
+  deliveryServedMessageSchema,
+  queueMessageSchema,
+  type DeliveryServedMessage,
+  type QueueMessage,
+} from '@lumra/contracts';
 import {
   healthPayload,
   REQUEST_ID_HEADER,
@@ -11,6 +16,7 @@ import { DEADLINES, isDeadlineExceeded, withDeadline } from './deadline';
 import type { Env } from './env';
 import { syncGalleryAccessState } from './handlers/access-state';
 import { handleMediaUploaded } from './handlers/media-uploaded';
+import { ingestDeliveryEvents, runStorageAccrual } from './handlers/metering';
 import { bounded, type StepTimings } from './instrument';
 import { loggerFor, type Logger } from './log';
 import { relayOutbox, type QueueProducer, type RelayResult } from './outbox-relay';
@@ -85,6 +91,19 @@ export const OUTBOX_RELAY_WINDOW_MS = DEADLINES.relayTickMs;
 export const OUTBOX_RELAY_IDLE_MS = 3_000;
 /** Delay before re-delivering a message whose type has no handler yet. */
 export const UNHANDLED_RETRY_SECONDS = 60;
+/** Hourly storage GB-month accrual (T27), off the hour and away from the other crons. */
+export const STORAGE_ACCRUAL_CRON = '7 * * * *';
+/** Wall-time budget for one accrual run; unfinished accounts are picked up next hour. */
+export const STORAGE_ACCRUAL_BUDGET_MS = 50_000;
+
+/**
+ * Usage queues carry `delivery.served` events from the media gateway (`lumra-usage-dev`,
+ * `lumra-usage-staging`, `lumra-usage`); they are ingested in whole batches into the ledger.
+ */
+export function isUsageQueue(queueName: string): boolean {
+  return /^lumra-usage(-(dev|staging))?$/.test(queueName);
+}
+
 /** Path of the finalize "kick" (web → worker after an upload commits). */
 export const RELAY_KICK_PATH = '/internal/relay';
 
@@ -246,6 +265,76 @@ export function createWorker(options: WorkerOptions = {}) {
     }
   }
 
+  /**
+   * One `lumra-usage-*` batch → one ledger insert (T27). Malformed messages are acked and logged
+   * (they can never succeed); any DB failure retries the whole batch, which is safe because
+   * ingestion is idempotent per event `dedupeKey`.
+   */
+  async function runUsageBatch(
+    batch: MessageBatch<unknown>,
+    services: Services,
+    log: Logger,
+  ): Promise<void> {
+    const valid: { message: Message<unknown>; event: DeliveryServedMessage }[] = [];
+    for (const message of batch.messages) {
+      const parsed = deliveryServedMessageSchema.safeParse(message.body);
+      if (parsed.success) valid.push({ message, event: parsed.data });
+      else {
+        log.error('invalid usage message', { messageId: message.id, queue: batch.queue });
+        message.ack();
+      }
+    }
+    if (valid.length === 0) return;
+    const started = now();
+    const timings: StepTimings = {};
+    try {
+      const result = await withDeadline('usage batch', DEADLINES.jobMs, (signal) => {
+        const repo = services.billingRepo();
+        const opts = { signal, timings };
+        return ingestDeliveryEvents(
+          valid.map((v) => v.event),
+          {
+            repo: bounded(repo, 'db', DEADLINES.dbStepMs, opts),
+            ledger: bounded(repo.ledger, 'db.ledger', DEADLINES.dbStepMs, opts),
+            log,
+          },
+        );
+      });
+      for (const { message } of valid) message.ack();
+      log.info('usage batch ingested', { ...result, ms: now() - started, steps: timings });
+    } catch (error) {
+      const attempts = Math.max(...valid.map((v) => v.message.attempts));
+      const delaySeconds = isDeadlineExceeded(error)
+        ? timeoutRetryDelaySeconds(attempts)
+        : retryDelaySeconds(attempts);
+      log.error('usage batch failed', {
+        size: valid.length,
+        attempt: attempts,
+        err: error,
+        retryInSeconds: delaySeconds,
+        steps: timings,
+      });
+      Sentry.withScope((scope) => {
+        scope.setTag('jobType', 'delivery.served');
+        Sentry.captureException(error);
+      });
+      for (const { message } of valid) message.retry({ delaySeconds });
+    }
+  }
+
+  /** Hourly storage accrual run (T27). Per-account failures are logged inside the run. */
+  async function storageAccrualTick(services: Services, log: Logger): Promise<void> {
+    const started = now();
+    const timings: StepTimings = {};
+    const result = await runStorageAccrual({
+      repo: bounded(services.billingRepo(), 'db', DEADLINES.dbStepMs, { timings }),
+      log,
+      now,
+      budgetMs: STORAGE_ACCRUAL_BUDGET_MS,
+    });
+    log.info('storage accrual finished', { ...result, ms: now() - started, steps: timings });
+  }
+
   return {
     /**
      * `GET /health` (sanitized liveness) and `POST /internal/relay` (the finalize kick: one
@@ -311,6 +400,14 @@ export function createWorker(options: WorkerOptions = {}) {
       const log = loggerFor(env);
       const services = makeServices(env);
       const started = now();
+      if (isUsageQueue(batch.queue)) {
+        try {
+          await runUsageBatch(batch, services, log);
+        } finally {
+          await closeServices(services, log, ctx);
+        }
+        return;
+      }
       const offset = Math.floor(random() * PROCESSOR_POOL_SIZE) % PROCESSOR_POOL_SIZE;
       let nextSlot = 0;
       const slots = batch.messages.map((message) => {
@@ -349,6 +446,19 @@ export function createWorker(options: WorkerOptions = {}) {
     ): Promise<void> {
       parseEnv('worker', workerEnvSchema, env as unknown as Record<string, unknown>);
       const log = loggerFor(env);
+      if (controller.cron === STORAGE_ACCRUAL_CRON) {
+        const services = makeServices(env);
+        try {
+          await storageAccrualTick(services, log);
+        } catch (error) {
+          log.error('storage accrual failed', { err: error });
+          Sentry.captureException(error);
+          throw error;
+        } finally {
+          await closeServices(services, log, ctx);
+        }
+        return;
+      }
       if (controller.cron !== OUTBOX_RELAY_CRON) {
         // Reconcilers / cleanup land with T13.
         log.info('scheduled tick', { cron: controller.cron });

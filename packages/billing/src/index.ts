@@ -6,6 +6,7 @@ export * from './account';
 export * from './admission';
 export * from './footprint';
 export * from './ledger';
+export * from './metering';
 export * from './meters';
 export type * from './ports';
 export * from './rating';

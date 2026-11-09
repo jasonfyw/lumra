@@ -11,7 +11,8 @@ const base = { traceId: z.string(), dedupeKey: z.string() };
  * Emitted by the media gateway once per successful byte-bearing response (FR-D04).
  * `bytes` is the object size, or the range length for 206 responses. `dedupeKey` is
  * `{jti}:{start}-{end}` so a retried send of the same response is counted once.
- * Consumed by usage-ledger ingestion (T27) from the `lumra-usage-*` queue.
+ * Consumed by usage-ledger ingestion (T27) from the `lumra-usage-*` queue: the key becomes the
+ * ledger `source_id` (UNIQUE with the metric, at most 200 characters), so it must stay stable.
  */
 export const deliveryServedMessageSchema = z.object({
   type: z.literal('delivery.served'),
@@ -23,6 +24,7 @@ export const deliveryServedMessageSchema = z.object({
   bytes: z.number().int().positive(),
   servedAt: z.iso.datetime(),
   ...base,
+  dedupeKey: z.string().min(1).max(200),
 });
 export type DeliveryServedMessage = z.infer<typeof deliveryServedMessageSchema>;
 

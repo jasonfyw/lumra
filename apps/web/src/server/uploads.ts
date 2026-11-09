@@ -1,13 +1,6 @@
 import 'server-only';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
-import {
-  BILLING_POLICY_V1,
-  GALLERY_LIMITS,
-  GUEST_LIMITS,
-  UPLOAD_LIMITS,
-  type PlanId,
-  type PlanRates,
-} from '@lumra/config';
+import { BILLING_POLICY_V1, GALLERY_LIMITS, GUEST_LIMITS, UPLOAD_LIMITS } from '@lumra/config';
 import type {
   AbortUploadResponse,
   ApiError,
@@ -26,6 +19,7 @@ import {
   galleries,
   jobOutbox,
   media,
+  planRatesFromRow,
   plans,
   profiles,
   uploadSessions,
@@ -158,23 +152,6 @@ async function reserveGuestQuota(tx: Tx, guestSessionId: string, size: number): 
       maxBytes: GUEST_LIMITS.maxBytes,
     },
   });
-}
-
-function planRatesFromRow(row: typeof plans.$inferSelect): PlanRates {
-  return {
-    id: row.id as PlanId,
-    rateVersion: row.rateVersion,
-    monthlyFeeMicroUsd: row.monthlyFeeMicroUsd,
-    maxActiveGalleries: row.maxActiveGalleries,
-    maxStorageBytes: row.maxStorageBytes,
-    maxDeliveryBytesPerMonth: row.maxDeliveryBytesPerMonth,
-    includedStorageGbMonth: row.includedStorageGbMonth,
-    includedDeliveryGb: row.includedDeliveryGb,
-    storageOverageMicroUsdPerGbMonth: row.storageOverageMicroUsdPerGbMonth,
-    deliveryOverageMicroUsdPerGb: row.deliveryOverageMicroUsdPerGb,
-    defaultOverageCapMicroUsd: row.defaultOverageCapMicroUsd,
-    brandingVisible: row.brandingVisible,
-  };
 }
 
 /**

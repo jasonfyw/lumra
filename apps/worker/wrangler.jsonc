@@ -18,6 +18,15 @@
         "max_retries": 5,
         "dead_letter_queue": "lumra-jobs-dlq-dev",
       },
+      {
+        // `delivery.served` events from apps/media-gateway → usage_ledger (T27). Large batches:
+        // one ledger INSERT per batch; idempotent per event dedupeKey, so retries are safe.
+        "queue": "lumra-usage-dev",
+        "max_batch_size": 100,
+        "max_batch_timeout": 10,
+        "max_retries": 10,
+        "dead_letter_queue": "lumra-usage-dlq-dev",
+      },
     ],
   },
   // Gallery access state (`gallery:{id}`) read by the media gateway (ADR-001), written by the
@@ -58,7 +67,9 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ImageProcessorContainer"] }],
   // Every minute: outbox relay (polls ~50 s per tick). */15 and nightly: reconcilers (T13).
-  "triggers": { "crons": ["* * * * *", "*/15 * * * *", "17 3 * * *"] },
+  // Hourly at :07: storage GB-month accrual into usage_ledger (T27, STORAGE_ACCRUAL_CRON).
+  // Top-level triggers are inherited by env.production.
+  "triggers": { "crons": ["* * * * *", "*/15 * * * *", "7 * * * *", "17 3 * * *"] },
   // Secrets: DATABASE_URL (local only), SENTRY_DSN, WORKER_KICK_SECRET (enables the
   // `POST /internal/relay` finalize kick; same value as the web app). Vars: PROCESSOR_URL (local).
   // Optional vars (T04): SENTRY_ENVIRONMENT, LOG_LEVEL, COMMIT_SHA (`--var COMMIT_SHA:<sha>`)
@@ -77,6 +88,14 @@
             "max_batch_timeout": 1,
             "max_retries": 5,
             "dead_letter_queue": "lumra-jobs-dlq",
+          },
+          {
+            // `delivery.served` events from apps/media-gateway → usage_ledger (T27).
+            "queue": "lumra-usage",
+            "max_batch_size": 100,
+            "max_batch_timeout": 10,
+            "max_retries": 10,
+            "dead_letter_queue": "lumra-usage-dlq",
           },
         ],
       },

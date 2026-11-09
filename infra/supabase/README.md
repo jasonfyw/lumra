@@ -16,6 +16,9 @@ query-layer approach.
     `reserve_guest_upload()` (atomic guest quota, service role only).
   - `20261105000300_rls_and_grants.sql`: RLS on every table, owner read policies, service-only
     lockdown, default-privilege hardening.
+  - `20261109000100_rate_card_versions_and_metering.sql` (T27): immutable `plan_rate_versions` (public
+    read, v1 = PRD §9.2 proposed rate card), `plans` → current-version FK + projection trigger,
+    service-only `storage_accrual_cursors`. See `docs/BILLING.md`.
   - `20261105001000_rate_limits_and_upload_tracking.sql` (T06/T10): `rate_limit_buckets` +
     `rate_limit_hit()`/`prune_rate_limit_buckets()` (service-only), `release_guest_upload()`,
     `upload_sessions.guest_session_id`, `media.checksum_sha256`. See `docs/UPLOADS.md`.
