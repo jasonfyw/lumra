@@ -268,6 +268,48 @@ describe('PRD §11: gallery access state', () => {
     r2Untouched();
   });
 
+  describe('owner-scoped previews (editor thumbnails)', () => {
+    const ownerPreview: MediaTokenInput = { ...previewClaims, scope: 'owner' };
+
+    it('draft (no access state) → served to owner previews only', async () => {
+      setState(null);
+      const res = await call(`/m/${await token(ownerPreview)}`);
+      expect(res.status).toBe(200);
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(PREVIEW_BYTES);
+      expect(res.headers.get('Cache-Control')).toBe('private, max-age=300');
+      // Owner previews are delivery too (PRD §9.4 delivery meter includes previews).
+      expect(h.usage.messages).toHaveLength(1);
+    });
+
+    it('expired gallery → still served to the owner, not to recipients', async () => {
+      setState({ ...baseState, expiresAt: new Date(Date.now() - 1000).toISOString() });
+      expect((await call(`/m/${await token(ownerPreview)}`)).status).toBe(200);
+      h.usage.messages.length = 0;
+      await expectGenericFailure(await call(`/m/${await token()}`), 403);
+    });
+
+    it('deleted, revoked or suspended galleries deny owner previews too', async () => {
+      setState({ ...baseState, deleted: true });
+      await expectGenericFailure(await call(`/m/${await token(ownerPreview)}`), 404);
+      setState({ ...baseState, accessVersion: 2 });
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Date.now() + 5_000);
+      await expectGenericFailure(await call(`/m/${await token(ownerPreview)}`), 403);
+      setState({ ...baseState, deliverySuspended: true });
+      vi.setSystemTime(Date.now() + 5_000);
+      await expectGenericFailure(await call(`/m/${await token(ownerPreview)}`), 403);
+      r2Untouched();
+    });
+
+    it('the owner scope exists only on previews: originals stay fail-closed for drafts', async () => {
+      setState(null);
+      // `scope` is not part of the original-claims schema, so it is stripped when signing.
+      const t = await token({ ...originalClaims, scope: 'owner' } as unknown as MediaTokenInput);
+      await expectGenericFailure(await call(`/m/${t}`), 404);
+      r2Untouched();
+    });
+  });
+
   it('corrupt access state → 503 fail closed', async () => {
     h.kv.data.set(`gallery:${GALLERY}`, '{"accessVersion":"1"}');
     await expectGenericFailure(await call(`/m/${await token()}`), 503);

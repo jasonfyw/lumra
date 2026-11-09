@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { EditorMediaItem, GalleryDetail, MediaStatus } from '@lumra/contracts';
 import { PublishButton } from '@/components/publish-button';
 import {
@@ -15,9 +15,11 @@ import {
   utcIsoToLocalInput,
 } from '@/lib/editor-client';
 import { AppHeader, Icon, Tag, buttonClass } from '@/components/ui';
+import { UploadBridgeContext } from '@/components/upload';
 import { ConfirmDialog } from './confirm-dialog';
 import { MediaGrid, moveItem } from './media-grid';
 import { ShareSheet } from './share-sheet';
+import { THUMBNAIL_RETRY_MS, mergeThumbnails, useLocalPreviews } from './thumbnails';
 
 const IN_FLIGHT: readonly MediaStatus[] = ['reserved', 'uploading', 'uploaded', 'processing'];
 const POLL_MS = 5_000;
@@ -57,11 +59,48 @@ export function GalleryEditor({
     setTimeout(() => setAnnouncement(message), 10);
   }, []);
 
+  // Thumbnails whose gateway URL failed to load: take the next response's fresh URL.
+  const staleThumbnails = useRef(new Set<string>());
   const refresh = useCallback(async () => {
+    const stale = new Set(staleThumbnails.current);
+    staleThumbnails.current.clear();
     const res = await getGalleryRequest(galleryId);
-    if (res.ok) setGallery(res.data);
+    if (res.ok) setGallery((prev) => mergeThumbnails(prev, res.data, stale));
+    else for (const id of stale) staleThumbnails.current.add(id);
     return res;
   }, [galleryId]);
+
+  // Coalesces refetches requested by failing thumbnails and new uploads.
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimer.current) return;
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      void refresh();
+    }, 300);
+  }, [refresh]);
+  useEffect(
+    () => () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    },
+    [],
+  );
+
+  const thumbnailRetries = useRef(new Map<string, number>());
+  const onThumbnailError = useCallback(
+    (mediaId: string) => {
+      const now = Date.now();
+      const last = thumbnailRetries.current.get(mediaId);
+      if (last !== undefined && now - last < THUMBNAIL_RETRY_MS) return;
+      thumbnailRetries.current.set(mediaId, now);
+      staleThumbnails.current.add(mediaId);
+      scheduleRefresh();
+    },
+    [scheduleRefresh],
+  );
+
+  const knownIds = useMemo(() => new Set(gallery.items.map((i) => i.id)), [gallery.items]);
+  const { bridge, previews } = useLocalPreviews(knownIds, scheduleRefresh);
 
   // ---------------------------------------------------------------- order (serialised saves)
   const saving = useRef<{ inFlight: boolean; pending: string[] | null }>({
@@ -128,7 +167,7 @@ export function GalleryEditor({
       announce(res.message);
       return false;
     }
-    setGallery(res.data);
+    setGallery((prev) => mergeThumbnails(prev, res.data));
     announce(done);
     return true;
   }
@@ -327,11 +366,13 @@ export function GalleryEditor({
             <h2 id="add-photos-heading" className={heading}>
               Add photos
             </h2>
-            {uploadSlot ?? (
-              <div data-slot="upload-zone" className="lm-drop text-[var(--color-ink-muted)]">
-                Adding photos from the editor arrives with the upload zone (T14).
-              </div>
-            )}
+            <UploadBridgeContext.Provider value={bridge}>
+              {uploadSlot ?? (
+                <div data-slot="upload-zone" className="lm-drop text-[var(--color-ink-muted)]">
+                  Adding photos from the editor arrives with the upload zone (T14).
+                </div>
+              )}
+            </UploadBridgeContext.Provider>
           </section>
 
           <section aria-labelledby="photos-heading" className="flex flex-col gap-3">
@@ -346,6 +387,8 @@ export function GalleryEditor({
               onMove={move}
               onSetCover={setCover}
               onDelete={setToDelete}
+              localPreviews={previews}
+              onThumbnailError={onThumbnailError}
             />
           </section>
         </main>

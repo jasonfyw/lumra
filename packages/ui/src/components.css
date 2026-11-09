@@ -528,6 +528,59 @@
       display: none;
     }
   }
+
+  /* ---- Tile status overlay (creator grid) ------------------------------------------- */
+  /* Centered chip over a photo or shimmer; readable on any image. */
+  .lm-tile-status {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .lm-tile-status-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-pill);
+    background: rgb(255 255 255 / 0.92);
+    color: var(--color-ink);
+    box-shadow: var(--shadow-raised);
+  }
+  /* A local preview under a pending overlay is dimmed: not the final derivative yet. */
+  .lm-tile-pending-img {
+    opacity: 0.72;
+  }
+  .lm-spinner {
+    display: block;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--radius-pill);
+    border: 2px solid var(--color-hairline);
+    border-top-color: var(--color-ink);
+    animation: lm-spin 0.9s linear infinite;
+  }
+  /* Static stand-in shown instead of the spinner when motion is reduced. */
+  .lm-spinner-static {
+    display: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lm-spinner {
+      display: none;
+    }
+    .lm-spinner-static {
+      display: block;
+    }
+  }
+}
+
+@keyframes lm-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes lm-shimmer {

@@ -6,6 +6,7 @@ import { ApiFailure } from '@/lib/api';
 import { getDb } from '@/lib/db';
 import { serverEnv } from '@/lib/env';
 import { getGalleryDetail } from '@/server/gallery-editor';
+import { optionalMintDeps } from '@/server/public-context';
 
 export const metadata = { title: 'Edit gallery' };
 // Per-user, auth-gated: never prerendered or cached.
@@ -20,7 +21,7 @@ export default async function EditGalleryPage({ params }: { params: Promise<{ id
   let detail;
   try {
     detail = await getGalleryDetail(
-      { db: getDb(), appUrl: serverEnv().NEXT_PUBLIC_APP_URL },
+      { db: getDb(), appUrl: serverEnv().NEXT_PUBLIC_APP_URL, media: optionalMintDeps() },
       user.userId,
       id,
     );

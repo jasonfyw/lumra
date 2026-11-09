@@ -1,10 +1,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useContext, useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EditorMediaItem, GalleryDetail } from '@lumra/contracts';
 import { localInputToUtcIso, utcIsoToLocalInput } from '@/lib/editor-client';
 import { GalleryEditor } from './gallery-editor';
 import { MediaGrid, moveItem } from './media-grid';
+import { mergeThumbnails } from './thumbnails';
+import { UploadBridgeContext } from '@/components/upload';
 import { qrMatrix, ShareSheet } from './share-sheet';
 
 const push = vi.fn();
@@ -106,10 +109,11 @@ describe('MediaGrid reorder buttons', () => {
     expect(onMove).toHaveBeenCalledWith(1, 2);
   });
 
-  it('shows creator statuses, including recoverable failures', () => {
+  it('shows thumbnails for ready photos, overlays for pending and an error for failed', () => {
+    const ready = { ...item(1), thumbnailUrl: 'https://media.test/m/t1' };
     render(
       <MediaGrid
-        items={[item(1, 'processing'), item(2, 'failed')]}
+        items={[ready, item(2, 'processing'), item(3, 'failed'), item(4, 'uploading')]}
         coverMediaId={null}
         effectiveCoverMediaId={null}
         onMove={vi.fn()}
@@ -117,8 +121,67 @@ describe('MediaGrid reorder buttons', () => {
         onDelete={vi.fn()}
       />,
     );
-    expect(screen.getByText('Processing')).toBeInTheDocument();
-    expect(screen.getByText('Unavailable — re-upload or delete')).toBeInTheDocument();
+    const [readyTile, processingTile, failedTile, uploadingTile] = screen
+      .getAllByRole('listitem')
+      .map((li) => within(li));
+
+    // Ready: just the picture, no status text or badge (the accessible name keeps the status).
+    const img = readyTile!.getByTestId('tile-thumbnail');
+    expect(img).toHaveAttribute('src', 'https://media.test/m/t1');
+    expect(img).toHaveAttribute('alt', '');
+    expect(readyTile!.queryByText('Ready')).toBeNull();
+    expect(readyTile!.queryByTestId('tile-pending')).toBeNull();
+    expect(screen.getAllByRole('listitem')[0]).toHaveAttribute(
+      'aria-label',
+      'IMG_1.jpg, Ready, position 1 of 4',
+    );
+
+    // Pending: spinner over the shimmer with a visually hidden label.
+    expect(processingTile!.getByTestId('tile-pending')).toHaveTextContent('Processing');
+    expect(processingTile!.getByText('Processing')).toHaveClass('sr-only');
+    expect(processingTile!.queryByTestId('tile-thumbnail')).toBeNull();
+    expect(uploadingTile!.getByTestId('tile-pending')).toHaveTextContent('Uploading');
+
+    // Failed: icon + text + tooltip, not colour alone.
+    const failed = failedTile!.getByTestId('tile-failed');
+    expect(failed).toHaveTextContent('Unavailable');
+    expect(failed).toHaveTextContent('Re-upload or delete');
+    expect(failed).toHaveAttribute('title', 'Unavailable — re-upload or delete');
+    expect(failed.querySelector('svg')).not.toBeNull();
+  });
+
+  it('puts the spinner over a local preview while processing', () => {
+    render(
+      <MediaGrid
+        items={[item(1, 'processing')]}
+        coverMediaId={null}
+        effectiveCoverMediaId={null}
+        localPreviews={new Map([[uuid(1), 'blob:local-1']])}
+        onMove={vi.fn()}
+        onSetCover={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('tile-thumbnail')).toHaveAttribute('src', 'blob:local-1');
+    expect(screen.getByTestId('tile-pending')).toHaveTextContent('Processing');
+  });
+
+  it('reports a failed thumbnail and falls back to a neutral placeholder', () => {
+    const onThumbnailError = vi.fn();
+    render(
+      <MediaGrid
+        items={[{ ...item(1), thumbnailUrl: 'https://media.test/m/expired' }]}
+        coverMediaId={null}
+        effectiveCoverMediaId={null}
+        onMove={vi.fn()}
+        onSetCover={vi.fn()}
+        onDelete={vi.fn()}
+        onThumbnailError={onThumbnailError}
+      />,
+    );
+    fireEvent.error(screen.getByTestId('tile-thumbnail'));
+    expect(onThumbnailError).toHaveBeenCalledWith(uuid(1));
+    expect(screen.queryByTestId('tile-thumbnail')).toBeNull();
   });
 
   it('drags with a mouse via the handle', () => {
@@ -149,7 +212,82 @@ describe('MediaGrid reorder buttons', () => {
   });
 });
 
+describe('mergeThumbnails', () => {
+  const withUrl = (n: number, url: string | null, status: EditorMediaItem['status'] = 'ready') => ({
+    ...item(n, status),
+    thumbnailUrl: url,
+  });
+
+  it('keeps the URL a tile already shows unless it went stale; takes new ones', () => {
+    const prev = detail({
+      items: [withUrl(1, 'u1-old'), withUrl(2, 'u2-old'), withUrl(3, null, 'processing')],
+    });
+    const next = detail({
+      items: [withUrl(1, 'u1-new'), withUrl(2, 'u2-new'), withUrl(3, 'u3-new')],
+    });
+    expect(
+      mergeThumbnails(prev, next, new Set([uuid(2)])).items.map((i) => i.thumbnailUrl),
+    ).toEqual(['u1-old', 'u2-new', 'u3-new']);
+  });
+
+  it('drops URLs the server no longer returns', () => {
+    const prev = detail({ items: [withUrl(1, 'u1-old')] });
+    const next = detail({ items: [withUrl(1, null, 'failed')] });
+    expect(mergeThumbnails(prev, next).items[0]!.thumbnailUrl).toBeNull();
+  });
+});
+
 describe('GalleryEditor', () => {
+  it('refetches a fresh thumbnail URL when one fails to load', async () => {
+    const initial = detail({ items: [{ ...item(1), thumbnailUrl: 'https://media.test/m/old' }] });
+    mockFetch(() => detail({ items: [{ ...item(1), thumbnailUrl: 'https://media.test/m/new' }] }));
+    render(<GalleryEditor initial={initial} />);
+    fireEvent.error(screen.getByTestId('tile-thumbnail'));
+    await waitFor(() =>
+      expect(screen.getByTestId('tile-thumbnail')).toHaveAttribute(
+        'src',
+        'https://media.test/m/new',
+      ),
+    );
+    expect(calls).toEqual([
+      { url: `/api/v1/galleries/${uuid(99)}`, method: 'GET', body: undefined },
+    ]);
+    // A second failure within the retry window does not refetch again.
+    fireEvent.error(screen.getByTestId('tile-thumbnail'));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(calls).toHaveLength(1);
+  });
+
+  it('shows local previews from the uploader and picks up new uploads', async () => {
+    const createObjectURL = vi.fn(() => 'blob:local-7');
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() }));
+    mockFetch(() => detail({ items: [item(1), item(7, 'processing')], itemCount: 2 }));
+    function FakeUploader() {
+      const bridge = useContext(UploadBridgeContext);
+      useEffect(() => {
+        bridge?.report([
+          {
+            mediaId: uuid(7),
+            state: 'processing',
+            file: new File(['x'], 'new.jpg', { type: 'image/jpeg' }),
+          },
+        ]);
+      }, [bridge]);
+      return null;
+    }
+    render(
+      <GalleryEditor
+        initial={detail({ items: [item(1)], itemCount: 1 })}
+        uploadSlot={<FakeUploader />}
+      />,
+    );
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(2));
+    const tile = within(screen.getAllByRole('listitem')[1]!);
+    expect(tile.getByTestId('tile-thumbnail')).toHaveAttribute('src', 'blob:local-7');
+    expect(tile.getByTestId('tile-pending')).toHaveTextContent('Processing');
+    expect(calls.filter((c) => c.method === 'GET')).toHaveLength(1);
+  });
+
   it('reorders with the accessible buttons, saves the full order and announces it', async () => {
     mockFetch(() => ({ contentVersion: 2, updated: 1, rebalanced: false }));
     render(<GalleryEditor initial={detail()} />);

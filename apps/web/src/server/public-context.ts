@@ -2,7 +2,7 @@ import 'server-only';
 import { cookies } from 'next/headers';
 import type { RateLimitRuleName } from '@lumra/config';
 import { getDb } from '@/lib/db';
-import { requireEnv } from '@/lib/env';
+import { requireEnv, serverEnv } from '@/lib/env';
 import { GALLERY_SESSION_COOKIE } from '@/lib/gallery-session';
 import { clientIp, enforceRateLimit } from '@/lib/rate-limit';
 import type { RouteScope } from '@/lib/route';
@@ -20,6 +20,16 @@ export function mintDeps(): Omit<MintDeps, 'now'> {
     keyring: requireEnv('MEDIA_TOKEN_SECRET'),
     mediaBaseUrl: requireEnv('NEXT_PUBLIC_MEDIA_URL'),
   };
+}
+
+/**
+ * Like `mintDeps`, but null when media delivery isn't configured, for pages that degrade
+ * gracefully without URLs (the owner editor shows status tiles instead of thumbnails).
+ */
+export function optionalMintDeps(): Omit<MintDeps, 'now'> | null {
+  const env = serverEnv();
+  if (!env.MEDIA_TOKEN_SECRET || !env.NEXT_PUBLIC_MEDIA_URL) return null;
+  return { keyring: env.MEDIA_TOKEN_SECRET, mediaBaseUrl: env.NEXT_PUBLIC_MEDIA_URL };
 }
 
 /** The gallery session cookie (path-scoped to this gallery, so at most one is sent). */

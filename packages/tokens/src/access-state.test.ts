@@ -96,6 +96,21 @@ describe('evaluateGalleryAccess', () => {
   ] as const)('%j with token version %d → %s', (s, version, expected) => {
     expect(evaluateGalleryAccess(s, version, now)).toBe(expected);
   });
+
+  it.each([
+    // Drafts have no KV document: owner previews still load.
+    [null, 2, 'allow'],
+    // Deletion, revocation and billing suspension apply to the owner too.
+    [{ ...state, deleted: true }, 2, 'not_found'],
+    [state, 1, 'revoked'],
+    [state, 3, 'revoked'],
+    [{ ...state, deliverySuspended: true }, 2, 'suspended'],
+    // The owner keeps managing an expired gallery.
+    [{ ...state, expiresAt: '2026-11-05T12:00:00Z' }, 2, 'allow'],
+    [state, 2, 'allow'],
+  ] as const)('owner preview: %j with token version %d → %s', (s, version, expected) => {
+    expect(evaluateGalleryAccess(s, version, now, { ownerPreview: true })).toBe(expected);
+  });
 });
 
 describe('writeGalleryAccessState', () => {
