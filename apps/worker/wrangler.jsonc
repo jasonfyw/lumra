@@ -12,7 +12,9 @@
     "consumers": [
       {
         "queue": "lumra-jobs-dev",
-        "max_batch_size": 10,
+        // Small batches, flushed after 1 s: jobs run concurrently (one per processor slot).
+        "max_batch_size": 4,
+        "max_batch_timeout": 1,
         "max_retries": 5,
         "dead_letter_queue": "lumra-jobs-dlq-dev",
       },
@@ -57,7 +59,8 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ImageProcessorContainer"] }],
   // Every minute: outbox relay (polls ~50 s per tick). */15 and nightly: reconcilers (T13).
   "triggers": { "crons": ["* * * * *", "*/15 * * * *", "17 3 * * *"] },
-  // Secrets: DATABASE_URL (local only), SENTRY_DSN. Vars: PROCESSOR_URL (local only).
+  // Secrets: DATABASE_URL (local only), SENTRY_DSN, WORKER_KICK_SECRET (enables the
+  // `POST /internal/relay` finalize kick; same value as the web app). Vars: PROCESSOR_URL (local).
   // Optional vars (T04): SENTRY_ENVIRONMENT, LOG_LEVEL, COMMIT_SHA (`--var COMMIT_SHA:<sha>`)
   "upload_source_maps": true,
   // Production (`wrangler deploy --env production`). Bindings are not inherited, so they are
@@ -69,7 +72,9 @@
         "consumers": [
           {
             "queue": "lumra-jobs",
-            "max_batch_size": 10,
+            // Small batches, flushed after 1 s: jobs run concurrently (one per processor slot).
+            "max_batch_size": 4,
+            "max_batch_timeout": 1,
             "max_retries": 5,
             "dead_letter_queue": "lumra-jobs-dlq",
           },

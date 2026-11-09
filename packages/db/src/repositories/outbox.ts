@@ -9,6 +9,7 @@
  * which every consumer tolerates via the message `dedupeKey`.
  */
 import type postgres from 'postgres';
+import { pgArray } from '../client';
 
 export interface OutboxRow {
   id: string;
@@ -66,7 +67,7 @@ export function createOutboxRepository(sql: postgres.Sql): OutboxRepository {
       await sql`
         update public.job_outbox
         set processed_at = now(), last_error = null
-        where id = any(${[...ids]}::uuid[]) and processed_at is null`;
+        where id = any(${pgArray(ids)}::uuid[]) and processed_at is null`;
     },
 
     async markFailed(id, error, retryInSeconds) {

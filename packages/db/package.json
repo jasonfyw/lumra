@@ -19,6 +19,6 @@
     "@lumra/contracts": "workspace:*",
     "@lumra/domain": "workspace:*",
     "drizzle-orm": "^0.45.4",
-    "postgres": "^4.0.0"
+    "postgres": "~3.4.9"
   }
 }

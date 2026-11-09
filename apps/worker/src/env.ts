@@ -11,6 +11,11 @@ export interface Env {
   LOG_LEVEL?: string;
   /** Deployed git SHA, e.g. `wrangler deploy --var COMMIT_SHA:$GITHUB_SHA`. */
   COMMIT_SHA?: string;
+  /**
+   * Bearer secret for `POST /internal/relay` (the web app's post-finalize kick). Unset ⇒ the
+   * endpoint answers 503 and processing relies on the once-a-minute cron relay alone.
+   */
+  WORKER_KICK_SECRET?: string;
   HYPERDRIVE?: Hyperdrive;
   /** Cloudflare Containers Durable Object namespace for the image processor (ADR-002). */
   IMAGE_PROCESSOR?: DurableObjectNamespace;

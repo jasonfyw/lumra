@@ -3,16 +3,16 @@
  * (and its owner's billing row) and the handler writes the gateway's document to a fake KV.
  */
 import { randomUUID } from 'node:crypto';
-import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { galleryAccessStateSchema, queueMessageSchema } from '@lumra/contracts';
-import { createAccessStateRepository } from '@lumra/db';
+import { createAccessStateRepository, createSqlClient, pgArray } from '@lumra/db';
 import { reconcileAccessStates, syncGalleryAccessState } from '../src/handlers/access-state';
 import { silentLogger } from '../src/log';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-const sql = postgres(DATABASE_URL, { max: 4, prepare: false, onnotice: () => {} });
+// Same client defaults as production code (fetch_types off, statement_timeout, deadlines).
+const sql = createSqlClient(DATABASE_URL, { max: 4 });
 
 let ownerId: string;
 const galleries: string[] = [];
@@ -38,7 +38,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (galleries.length)
-    await sql`delete from public.galleries where id = any(${galleries}::uuid[])`;
+    await sql`delete from public.galleries where id = any(${pgArray(galleries)}::uuid[])`;
   await sql`delete from public.billing_accounts where user_id = ${ownerId}`.catch(() => {});
   await sql`delete from auth.users where id = ${ownerId}`.catch(() => {});
   await sql.end();
