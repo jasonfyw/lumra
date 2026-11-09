@@ -4,6 +4,7 @@
  * Hyperdrive and in Node against a direct connection.
  */
 import type postgres from 'postgres';
+import { pgArray } from '../client';
 import type { AcceptedPhotoMime } from '@lumra/config';
 import type { MediaRejectionCode, MediaStatus } from '@lumra/contracts';
 
@@ -131,7 +132,7 @@ export function createMediaPipelineRepository(sql: postgres.Sql): MediaPipelineR
         await tx`
           delete from public.media_variants
           where media_id = ${input.mediaId}
-            and not (variant = any(${input.variants.map((v) => v.variant)}::text[]))`;
+            and not (variant = any(${pgArray(input.variants.map((v) => v.variant))}::text[]))`;
         const rows = input.variants.map((v) => ({
           media_id: input.mediaId,
           variant: v.variant,

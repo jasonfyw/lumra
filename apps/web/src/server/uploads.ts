@@ -70,6 +70,11 @@ export interface UploadDeps {
   r2: () => R2Client;
   log: Logger;
   requestId: string;
+  /**
+   * Called after a finalize transaction commits: schedules the best-effort worker relay kick
+   * (`worker-kick.ts`) without delaying the response. Must not throw; errors are swallowed.
+   */
+  kickRelay?: () => void;
 }
 
 /** Who holds a gallery's upload quota: the account owner or the guest draft session. */
@@ -670,6 +675,7 @@ function completeResponse(
  * 3. One transaction: media `reserved/uploading → uploaded`, session `completed`, the optional
  *    client SHA-256 recorded for the worker to verify, and a `media.uploaded` outbox row with a
  *    dedupe key. Replays return the stored result; nothing is written twice.
+ * 4. After the commit, `deps.kickRelay` asks the worker to relay the outbox immediately.
  */
 export async function completeUpload(
   deps: UploadDeps,
@@ -757,7 +763,7 @@ export async function completeUpload(
     );
   }
 
-  return deps.db.transaction(async (tx) => {
+  const result = await deps.db.transaction(async (tx) => {
     const [locked] = await tx
       .select()
       .from(uploadSessions)
@@ -812,6 +818,17 @@ export async function completeUpload(
     });
     return completeResponse(completed!, 'uploaded');
   });
+
+  // Committed: nudge the worker so processing starts now rather than on the next cron relay.
+  // Best effort — the outbox row is already durable and the cron relay is the fallback.
+  try {
+    deps.kickRelay?.();
+  } catch (err) {
+    deps.log.warn('worker relay kick could not be scheduled', {
+      error: err instanceof Error ? err.name : 'error',
+    });
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------------------------
