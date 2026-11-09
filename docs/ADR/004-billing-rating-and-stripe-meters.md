@@ -84,6 +84,13 @@ The time-based consequences come from `deriveBillingRestrictions(account, now)` 
 
 These durations are Proposed. Nothing in this package deletes data.
 
+**Persistence and metering (T27 follow-up, 2026-11-09).** The rate card is versioned in the database:
+`plan_rate_versions` rows are immutable (only `decision` may move `proposed → confirmed`), and `plans` keeps
+the current-version pointer plus a trigger-maintained projection of its rates. Storage is accrued hourly by
+sampled step integration (previous sample held until the run, cursor moved atomically with the rows under an
+optimistic lock); delivery rows come from the gateway's `delivery.served` events keyed by their `dedupeKey`.
+Details and accepted approximations are in `docs/BILLING.md` ("Metering").
+
 ## Consequences
 
 - Rating, estimation and invoices share one code path (`computeOverage`), so the estimate shown before an

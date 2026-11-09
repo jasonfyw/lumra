@@ -91,6 +91,39 @@ export const plans = pgTable('plans', {
   updatedAt: updatedAt(),
 });
 
+/**
+ * Immutable, versioned rate card (T27). `plans` points at the current version and its rate
+ * columns are a trigger-maintained projection of that row. Only `decision`/`notes` may change.
+ */
+export const RATE_VERSION_DECISIONS = ['proposed', 'confirmed'] as const;
+export type RateVersionDecision = (typeof RATE_VERSION_DECISIONS)[number];
+
+export const planRateVersions = pgTable(
+  'plan_rate_versions',
+  {
+    planId: text('plan_id')
+      .$type<PlanId>()
+      .notNull()
+      .references(() => plans.id, { onDelete: 'restrict' }),
+    rateVersion: integer('rate_version').notNull(),
+    monthlyFeeMicroUsd: int8('monthly_fee_micro_usd').notNull(),
+    maxActiveGalleries: integer('max_active_galleries'),
+    maxStorageBytes: int8('max_storage_bytes'),
+    maxDeliveryBytesPerMonth: int8('max_delivery_bytes_per_month'),
+    includedStorageGbMonth: integer('included_storage_gb_month').notNull(),
+    includedDeliveryGb: integer('included_delivery_gb').notNull(),
+    storageOverageMicroUsdPerGbMonth: int8('storage_overage_micro_usd_per_gb_month'),
+    deliveryOverageMicroUsdPerGb: int8('delivery_overage_micro_usd_per_gb'),
+    defaultOverageCapMicroUsd: int8('default_overage_cap_micro_usd'),
+    brandingVisible: boolean('branding_visible').notNull(),
+    decision: text('decision').$type<RateVersionDecision>().notNull().default('proposed'),
+    notes: text('notes'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ name: 'plan_rate_versions_pkey', columns: [t.planId, t.rateVersion] })],
+);
+
 export const profiles = pgTable('profiles', {
   userId: uuid('user_id')
     .primaryKey()
@@ -316,6 +349,17 @@ export const usageLedger = pgTable(
   (t) => [unique('usage_ledger_metric_source_key').on(t.metric, t.sourceId)],
 );
 
+/** Storage accrual job cursor per account (T27): accrued up to `accruedThrough`. */
+export const storageAccrualCursors = pgTable('storage_accrual_cursors', {
+  accountId: uuid('account_id')
+    .primaryKey()
+    .references(() => billingAccounts.userId, { onDelete: 'cascade' }),
+  accruedThrough: tstz('accrued_through').notNull(),
+  storedBytes: int8('stored_bytes').notNull(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
 export const billingExports = pgTable('billing_exports', {
   id: id(),
   billingAccountId: uuid('billing_account_id')
@@ -379,6 +423,8 @@ export const rateLimitBuckets = pgTable(
 // ---------------------------------------------------------------------------------------------
 
 export type Plan = typeof plans.$inferSelect;
+export type PlanRateVersion = typeof planRateVersions.$inferSelect;
+export type StorageAccrualCursorRow = typeof storageAccrualCursors.$inferSelect;
 export type Profile = typeof profiles.$inferSelect;
 export type BillingAccount = typeof billingAccounts.$inferSelect;
 export type GuestSession = typeof guestSessions.$inferSelect;

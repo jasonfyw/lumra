@@ -262,6 +262,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@lumra/billing':
+        specifier: workspace:*
+        version: link:../billing
       '@lumra/config':
         specifier: workspace:*
         version: link:../config

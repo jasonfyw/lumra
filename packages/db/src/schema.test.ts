@@ -6,6 +6,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
+import { RATE_CARD_V1, type PlanRates } from '@lumra/config';
 import { DB_ENUMS } from './enums';
 import * as schema from './schema';
 
@@ -65,9 +66,9 @@ describe('SQL enums match TypeScript status sets', () => {
 describe('Drizzle schema mirrors SQL tables', () => {
   const fromSql = sqlTables();
 
-  it('has the same set of public tables (PRD §8 tables + rate_limit_buckets)', () => {
+  it('has the same set of public tables (PRD §8 + rate_limit_buckets + T27 metering)', () => {
     expect(drizzleTables.map((t) => t.name).sort()).toEqual(Object.keys(fromSql).sort());
-    expect(Object.keys(fromSql)).toHaveLength(17);
+    expect(Object.keys(fromSql)).toHaveLength(19);
   });
 
   for (const table of drizzleTables) {
@@ -85,5 +86,53 @@ describe('RLS coverage', () => {
       [...sql.matchAll(/alter table public\.(\w+) enable row level security/g)].map((m) => m[1]),
     );
     for (const table of Object.keys(sqlTables())) expect(enabled, table).toContain(table);
+  });
+});
+
+describe('rate card seed (T27)', () => {
+  // Column order of the `insert into public.plan_rate_versions (...)` seed in the T27 migration.
+  const columns: (keyof PlanRates)[] = [
+    'id',
+    'rateVersion',
+    'monthlyFeeMicroUsd',
+    'maxActiveGalleries',
+    'maxStorageBytes',
+    'maxDeliveryBytesPerMonth',
+    'includedStorageGbMonth',
+    'includedDeliveryGb',
+    'storageOverageMicroUsdPerGbMonth',
+    'deliveryOverageMicroUsdPerGb',
+    'defaultOverageCapMicroUsd',
+    'brandingVisible',
+  ];
+
+  function seededRows(table: string): Record<string, unknown>[] {
+    const m = new RegExp(`insert into public\\.${table} \\([^)]*\\) values([\\s\\S]*?);`).exec(sql);
+    expect(m, `${table} seed`).not.toBeNull();
+    // Each row's rate columns are on its first line: `('pro', 1, 2000000, ...`.
+    return [...m![1]!.matchAll(/\('(free|pro)',([^\n]*)/g)].map((row) => {
+      const values = [row[1]!, ...row[2]!.split(',').map((v) => v.replace(/\)$/, '').trim())];
+      const parsed = values.map((v) =>
+        v === 'null'
+          ? null
+          : v === 'true'
+            ? true
+            : v === 'false'
+              ? false
+              : /^\d+$/.test(v)
+                ? Number(v)
+                : v,
+      );
+      return Object.fromEntries(columns.map((c, i) => [c, parsed[i]]));
+    });
+  }
+
+  it('plan_rate_versions v1 equals RATE_CARD_V1 exactly (PRD §9.2 proposed defaults)', () => {
+    const rows = seededRows('plan_rate_versions');
+    expect(rows).toEqual([RATE_CARD_V1.free, RATE_CARD_V1.pro]);
+  });
+
+  it('plans seed equals RATE_CARD_V1 (the projection of the current version)', () => {
+    expect(seededRows('plans')).toEqual([RATE_CARD_V1.free, RATE_CARD_V1.pro]);
   });
 });

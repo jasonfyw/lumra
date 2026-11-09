@@ -4,7 +4,9 @@ import { BYTES_PER_GB } from './limits';
  * Launch rate card (PRD §9.2). Money is integer micro-USD (1 USD = 1_000_000).
  * Only `monthlyFeeMicroUsd` for Pro is a confirmed decision; the rest are Proposed
  * and must be validated against unit economics before live billing (PRD §17).
- * The authoritative copy will live in the `plans` table (T27); this is the seed/default.
+ * The authoritative, versioned copy lives in the `plan_rate_versions` table (T27; `plans` points
+ * at the current version). This constant is the v1 seed and the default for pure tests;
+ * `packages/db/src/schema.test.ts` checks the migration seed matches it exactly.
  */
 export const MICRO_USD_PER_USD = 1_000_000;
 
@@ -49,7 +51,7 @@ export const RATE_CARD_V1: Record<PlanId, PlanRates> = {
     maxActiveGalleries: null,
     maxStorageBytes: null,
     maxDeliveryBytesPerMonth: null,
-    includedStorageGbMonth: 2,
+    includedStorageGbMonth: 20, // confirmed by owner 2026-11-09
     includedDeliveryGb: 5,
     storageOverageMicroUsdPerGbMonth: 100_000, // $0.10
     deliveryOverageMicroUsdPerGb: 30_000, // $0.03
