@@ -4,9 +4,8 @@ import { useEffect, useState } from 'react';
 import { buttonClass } from '@/components/ui';
 import { formatBytes } from '@/lib/format';
 import type { UploadItemSnapshot, UploadSnapshot } from '@/lib/upload';
+import { PREVIEWABLE_TYPES } from './upload-bridge';
 import { useThrottledAnnouncement } from './use-throttled-announcement';
-
-const PREVIEWABLE = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 export function statusText(item: UploadItemSnapshot): string {
   switch (item.state) {
@@ -69,7 +68,7 @@ function ProgressBar({ value, label, large }: { value: number; label: string; la
 function Thumb({ file, type }: { file: File | null; type: string }) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
-    if (!file || !PREVIEWABLE.has(type) || typeof URL.createObjectURL !== 'function') return;
+    if (!file || !PREVIEWABLE_TYPES.has(type) || typeof URL.createObjectURL !== 'function') return;
     const objectUrl = URL.createObjectURL(file);
     setUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);

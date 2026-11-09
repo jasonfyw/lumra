@@ -191,6 +191,38 @@ export function ownerRefFromKey(galleryId: string, mediaId: string, key: string)
   return match[1] as string;
 }
 
+/** Stored preview derivatives per media id (unsorted). Chunked: never one huge IN list. */
+async function loadPreviewVariants(
+  db: Database,
+  galleryId: string,
+  mediaIds: readonly string[],
+  variants: readonly StoredVariant['variant'][] = PREVIEW_VARIANTS,
+): Promise<Map<string, StoredVariant[]>> {
+  const variantsByMedia = new Map<string, StoredVariant[]>();
+  for (let i = 0; i < mediaIds.length; i += 500) {
+    const chunk = mediaIds.slice(i, i + 500);
+    const variantRows = await db
+      .select({
+        mediaId: mediaVariants.mediaId,
+        variant: mediaVariants.variant,
+        width: mediaVariants.width,
+        objectKey: mediaVariants.objectKey,
+      })
+      .from(mediaVariants)
+      .where(
+        and(inArray(mediaVariants.mediaId, chunk), inArray(mediaVariants.variant, [...variants])),
+      );
+    for (const v of variantRows) {
+      const variantHash = variantHashFromKey(galleryId, v.mediaId, v.objectKey);
+      if (!variantHash) continue;
+      const list = variantsByMedia.get(v.mediaId) ?? [];
+      list.push({ variant: v.variant as StoredVariant['variant'], width: v.width, variantHash });
+      variantsByMedia.set(v.mediaId, list);
+    }
+  }
+  return variantsByMedia;
+}
+
 async function loadItems(
   db: Database,
   galleryId: string,
@@ -217,32 +249,7 @@ async function loadItems(
     .orderBy(asc(media.sortKey), asc(media.id));
 
   const readyIds = rows.filter((r) => r.status === 'ready').map((r) => r.id);
-  const variantsByMedia = new Map<string, StoredVariant[]>();
-  // Chunked so a 2,000-item gallery never builds one huge IN list.
-  for (let i = 0; i < readyIds.length; i += 500) {
-    const chunk = readyIds.slice(i, i + 500);
-    const variantRows = await db
-      .select({
-        mediaId: mediaVariants.mediaId,
-        variant: mediaVariants.variant,
-        width: mediaVariants.width,
-        objectKey: mediaVariants.objectKey,
-      })
-      .from(mediaVariants)
-      .where(
-        and(
-          inArray(mediaVariants.mediaId, chunk),
-          inArray(mediaVariants.variant, [...PREVIEW_VARIANTS]),
-        ),
-      );
-    for (const v of variantRows) {
-      const variantHash = variantHashFromKey(galleryId, v.mediaId, v.objectKey);
-      if (!variantHash) continue;
-      const list = variantsByMedia.get(v.mediaId) ?? [];
-      list.push({ variant: v.variant as StoredVariant['variant'], width: v.width, variantHash });
-      variantsByMedia.set(v.mediaId, list);
-    }
-  }
+  const variantsByMedia = await loadPreviewVariants(db, galleryId, readyIds);
 
   // Upload order = rank by creation time (hero fallback: first ready photo by upload order).
   const byCreation = [...rows].sort(
@@ -484,35 +491,61 @@ export async function unlockGallery(
   return { kind: 'unlocked', galleryId: gallery.id, expiresAt };
 }
 
+// ---------------------------------------------------------------------------------------------
+// owner thumbnails (editor)
+// ---------------------------------------------------------------------------------------------
+
 /**
- * Preview URLs for the creator's editor (T15 thumbnails). The CALLER must already have
- * authorized the owner: this bypasses publish/password/expiry checks, but tokens still carry the
- * current `access_version`, so the gateway applies the same revocation and deletion rules (a
- * draft has no KV document yet, so draft thumbnails only load once the gallery is published or
- * the editor gains its own path — see ADR-001).
+ * Derivative used for editor tiles: `w640` keeps ~300 CSS px tiles sharp on 2× screens at a
+ * fraction of the larger variants' bytes; smaller images (no `w640`) fall back to `w320`.
  */
-export async function mintOwnerPreviewUrls(
+export const OWNER_THUMBNAIL_VARIANTS = ['w640', 'w320'] as const;
+
+/**
+ * Owner-scoped thumbnail URLs for the creator's editor (ADR-001 "Owner previews"), keyed by
+ * media id. The CALLER must already have verified that the signed-in user owns this live
+ * gallery: this mints regardless of publish/password/expiry. Tokens carry `scope: 'owner'` and
+ * the current `access_version`, so the gateway still applies revocation, deletion and delivery
+ * suspension; only drafts (no KV document) and expiry are let through for the owner. Items
+ * without a stored derivative get no URL.
+ */
+export async function mintOwnerThumbnails(
   db: Database,
-  galleryId: string,
-  mediaIds: readonly string[],
+  gallery: { id: string; accessVersion: number },
+  readyMediaIds: readonly string[],
   deps: Omit<MintDeps, 'now'>,
   now: Date = new Date(),
-): Promise<MediaTokensResponse> {
-  const [gallery] = await db
-    .select({ id: galleries.id, accessVersion: galleries.accessVersion })
-    .from(galleries)
-    .where(and(eq(galleries.id, galleryId), isNull(galleries.deletedAt)))
-    .limit(1);
-  if (!gallery) throw notFoundError();
-  const items = mediaIds.length ? await loadItems(db, gallery.id, mediaIds) : [];
-  const byId = new Map(items.map((i) => [i.id, i]));
-  const minted: MintedMediaUrls[] = [];
-  const missing: string[] = [];
-  for (const id of mediaIds) {
-    const item = byId.get(id);
-    if (item?.status === 'ready') {
-      minted.push({ id, variants: await mintPreviews(gallery, item, { ...deps, now }) });
-    } else missing.push(id);
-  }
-  return { expiresAt: expiresAtIso(now), items: minted, missing };
+): Promise<Map<string, string>> {
+  const urls = new Map<string, string>();
+  if (readyMediaIds.length === 0) return urls;
+  const variantsByMedia = await loadPreviewVariants(
+    db,
+    gallery.id,
+    readyMediaIds,
+    OWNER_THUMBNAIL_VARIANTS,
+  );
+  await Promise.all(
+    readyMediaIds.map(async (mediaId) => {
+      const stored = variantsByMedia.get(mediaId) ?? [];
+      const pick = OWNER_THUMBNAIL_VARIANTS.map((name) =>
+        stored.find((v) => v.variant === name),
+      ).find((v) => v !== undefined);
+      if (!pick) return;
+      const token = await signMediaToken(
+        {
+          action: 'preview',
+          scope: 'owner',
+          gallery_id: gallery.id,
+          access_version: gallery.accessVersion,
+          media_id: mediaId,
+          variant: pick.variant,
+          variant_hash: pick.variantHash,
+        },
+        deps.keyring,
+        { now },
+      );
+      urls.set(mediaId, gatewayUrl(deps.mediaBaseUrl, token));
+    }),
+  );
+  return urls;
 }

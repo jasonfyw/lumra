@@ -200,7 +200,9 @@ export async function handleMediaRequest(
         : 'access_state_error';
     return deny(ctx, 503, reason, { 'Retry-After': '5' });
   }
-  const decision = evaluateGalleryAccess(state, claims.access_version, now);
+  const decision = evaluateGalleryAccess(state, claims.access_version, now, {
+    ownerPreview: claims.action === 'preview' && claims.scope === 'owner',
+  });
   if (decision === 'not_found') return deny(ctx, 404, 'gallery_not_found');
   if (decision !== 'allow') return deny(ctx, 403, `gallery_${decision}`);
 

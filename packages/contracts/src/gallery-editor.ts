@@ -30,8 +30,9 @@ export const editorMediaItemSchema = z.object({
   failureCode: z.string().nullable(),
   createdAt: z.iso.datetime(),
   /**
-   * Creator thumbnail via the media gateway. Always null until creator token minting lands
-   * (T20); the editor renders a status tile instead.
+   * Creator thumbnail: a short-lived (≤ 5 min) owner-scoped gateway URL for a small derivative
+   * of a `ready` item (ADR-001 "Owner previews"). Null for items that aren't ready, have no
+   * derivative, or when media delivery isn't configured; the editor then shows a status tile.
    */
   thumbnailUrl: z.string().nullable(),
 });
