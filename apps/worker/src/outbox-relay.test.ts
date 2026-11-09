@@ -32,7 +32,7 @@ describe('relayOutbox', () => {
     const repo = fakeRepo([row('a'), row('b')]);
     const queue = { sendBatch: vi.fn(async () => {}) };
     const result = await relayOutbox(repo, queue, silentLogger);
-    expect(result).toEqual({ published: 2, failed: 0 });
+    expect(result).toEqual({ claimed: 2, published: 2, failed: 0 });
     expect(queue.sendBatch).toHaveBeenCalledWith([
       {
         body: { type: 'media.uploaded', mediaId, traceId: 'req-a', dedupeKey: 'media.uploaded:a' },
@@ -59,7 +59,7 @@ describe('relayOutbox', () => {
     const repo = fakeRepo([row('a', { attemptCount: 2 })]);
     const queue = { sendBatch: vi.fn(async () => Promise.reject(new Error('queue down'))) };
     const result = await relayOutbox(repo, queue, silentLogger);
-    expect(result).toEqual({ published: 0, failed: 1 });
+    expect(result).toEqual({ claimed: 1, published: 0, failed: 1 });
     expect(repo.markPublished).not.toHaveBeenCalled();
     expect(repo.markFailed).toHaveBeenCalledWith('a', 'publish failed: queue down', 40);
   });
@@ -68,7 +68,7 @@ describe('relayOutbox', () => {
     const repo = fakeRepo([row('bad', { payload: { mediaId: 'nope' } }), row('ok')]);
     const queue = { sendBatch: vi.fn(async () => {}) };
     const result = await relayOutbox(repo, queue, silentLogger);
-    expect(result).toEqual({ published: 1, failed: 1 });
+    expect(result).toEqual({ claimed: 2, published: 1, failed: 1 });
     expect(repo.markFailed).toHaveBeenCalledWith('bad', 'invalid outbox payload', 3600);
     expect(repo.markPublished).toHaveBeenCalledWith(['ok']);
   });

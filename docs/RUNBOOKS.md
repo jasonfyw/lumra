@@ -68,21 +68,39 @@ all sessions of a gallery by bumping `galleries.access_version` (+ enqueue the K
 
 ## Queue backlog / dead-letter queue
 
-**Pipeline** (ADR-002): web finalize writes `job_outbox` → worker cron (`* * * * *`, polls ~50 s
-per tick) publishes to `lumra-jobs-<env>` → `media.uploaded` consumer → image-processor container
-→ derivatives in R2 + `media_variants`. Failed jobs retry with exponential backoff (20 s … 15 min)
-and after `max_retries: 5` land in `lumra-jobs-dlq-<env>`. Poison (schema-invalid) messages are
-logged as `invalid queue message` and acked, never retried. Valid messages whose type has no
-handler yet (e.g. `media.delete` until T13) are logged as `no handler registered` and retried
-every 60 s; after `max_retries` they sit in the DLQ — replay them once the handler ships.
+**Pipeline** (ADR-002): web finalize writes `job_outbox` and kicks the worker
+(`POST /internal/relay`, see below) → the worker publishes due rows to `lumra-jobs-<env>`; the cron
+(`* * * * *`, relays for ≤ 55 s per tick) is the fallback → `media.uploaded` consumer (batches of
+≤ 4, run concurrently on distinct processor slots) → image-processor container → derivatives in R2
+
+- `media_variants`. Failed jobs retry with exponential backoff (20 s … 15 min); jobs that hit a
+  deadline retry after 5 s, 15 s, 60 s, 180 s, 600 s. After `max_retries: 5` they land in
+  `lumra-jobs-dlq-<env>`. Poison (schema-invalid) messages are logged as `invalid queue message`
+  and acked, never retried. Valid messages whose type has no handler yet (e.g. `media.delete` until
+  T13) are logged as `no handler registered` and retried every 60 s; after `max_retries` they sit in
+  the DLQ — replay them once the handler ships.
+
+**Deadlines**: nothing in the worker may wait forever. Postgres: `connect_timeout` 5 s, idle 2 s,
+`fetch_types` off (direct connections also get `statement_timeout` 15 s; behind Hyperdrive the
+worker uses prepared statements and relies on its own deadlines). Each DB call ≤ 15 s, each R2 call
+≤ 20 s, each job ≤ 120 s, each relay pass ≤ 20 s, each cron tick ≤ 55 s, `sql.end` ≤ 2 s. A fired
+deadline logs `deadline exceeded` (warn) with `step`, `limitMs` and the step timings so far.
 
 **Symptoms**: oldest-message age on `lumra-jobs-*` > 30 min; DLQ message count growing; media stuck
-in `uploaded`/`processing`; unprocessed `job_outbox` rows.
+in `uploaded`/`processing`; unprocessed `job_outbox` rows. Workers Observability showing
+invocations with outcome `exceededWallTime` (≈ 900 s) on the cron or queue handler means a call
+hung without a deadline — that is a bug since the stall fix; look for the last log line of that
+invocation.
 
 **Look first**
 
 1. Worker logs (Workers Observability, `service: "worker"`): `job failed` entries grouped by
-   `type`/`error`; `outbox publish failed`; `invalid outbox row`.
+   `type`/`error`; `deadline exceeded` grouped by `step` (`db.*` ⇒ Postgres/Hyperdrive,
+   `r2.*`, `processor.process`, `relay pass (cron|kick)`); `outbox publish failed`;
+   `invalid outbox row`. Healthy traffic shows `cron tick started/finished` every minute,
+   `relay pass` with `claimed`/`published`/`ms`, and per job `job started` → `job finished` with
+   `steps` (`db.getForProcessing`, `r2.originals.get`, `processor.process`, `r2.derivatives.put`,
+   `db.complete`, in ms).
 2. Processor logs (`service: "image-processor"`): `process failed` with `code`. A burst of
    `processor_unavailable` means the image lost its HEVC decoder (bad deploy; roll back the
    container). `processor_busy` means too few instances: raise `max_instances` /
@@ -113,6 +131,19 @@ and updated_at < now() - interval '30 minutes' group by 1;` (T13 re-enqueues the
   CLOUDFLARE_ACCOUNT_ID=… CLOUDFLARE_API_TOKEN=… \
     node apps/worker/scripts/replay-dlq.mjs --from lumra-jobs-dlq-<env> --to lumra-jobs-<env>
   ```
+- Kick the relay by hand (publishes due outbox rows now instead of waiting for the cron; safe to
+  repeat — it only runs `relayOutbox`, rows are claimed with `SKIP LOCKED`):
+  ```sh
+  curl -fsS -X POST -H "Authorization: Bearer $WORKER_KICK_SECRET" \
+    https://<worker-host>/internal/relay   # 202 accepted | 401 bad token | 503 secret not set
+  ```
+  The web app sends the same request after every finalize when `WORKER_URL` and
+  `WORKER_KICK_SECRET` are set on Vercel; the worker needs the same `WORKER_KICK_SECRET`
+  (`wrangler secret put WORKER_KICK_SECRET --env production`, ≥ 32 characters). Kick failures
+  show as `worker relay kick failed/rejected` (warn) in web logs and cost only latency.
+- Media stuck in `uploaded` whose outbox row is already `processed_at` (message lost or DLQ'd):
+  re-enqueue by resetting the row, then kick:
+  `update public.job_outbox set processed_at = null, available_at = now() where event_name = 'media.uploaded' and aggregate_id in (select id from public.media where status in ('uploaded','processing') and updated_at < now() - interval '15 minutes');`
 - Outbox rows failing to publish: `last_error` says why; they retry on their own with backoff
   (capped at 1 h). To force an immediate retry after a fix:
   `update public.job_outbox set available_at = now() where processed_at is null and attempt_count > 0;`

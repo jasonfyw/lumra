@@ -37,6 +37,13 @@ image with a separate entry point. Containers scale to zero when idle.
   body (never buffered in the Worker). Workers reach the container through the Durable Object namespace
   `IMAGE_PROCESSOR` (pool of 4 named instances, `enableInternet = false`, no credentials in the container);
   local dev uses plain HTTP via `PROCESSOR_URL`. Both sit behind the `ProcessorClient` interface.
+- **Throughput and deadlines** (processing-stall fix): the consumer takes batches of ≤ 4 messages
+  (`max_batch_timeout: 1`) and runs them concurrently, each on its own pool slot (`image-processor-N`), so jobs
+  of one batch never collide with `processor_busy`. Instances sleep after 15 idle minutes. Every DB / R2 /
+  processor call has a deadline and each job is cut off at 120 s (`apps/worker/src/deadline.ts`); a timeout
+  retries after 5 s, 15 s, 60 s … instead of hanging the invocation until the 900 s wall-time kill. Finalize
+  kicks `POST /internal/relay` on the worker so the outbox is relayed within seconds; the per-minute cron relay
+  remains the fallback and the only other publish path.
 
 ### Response format: manifest-first `multipart/form-data`
 

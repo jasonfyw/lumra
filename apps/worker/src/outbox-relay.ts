@@ -16,6 +16,8 @@ export interface RelayOptions {
 }
 
 export interface RelayResult {
+  /** Rows claimed this pass (published + failed, including malformed rows). */
+  claimed: number;
   published: number;
   failed: number;
 }
@@ -39,11 +41,12 @@ export async function relayOutbox(
   const batchSize = Math.min(options.batchSize ?? 100, 100);
   const maxBatches = options.maxBatches ?? 10;
   const leaseSeconds = options.leaseSeconds ?? 60;
-  const result: RelayResult = { published: 0, failed: 0 };
+  const result: RelayResult = { claimed: 0, published: 0, failed: 0 };
 
   for (let batch = 0; batch < maxBatches; batch++) {
     const rows = await repo.claim(batchSize, leaseSeconds);
     if (rows.length === 0) break;
+    result.claimed += rows.length;
 
     const valid: { id: string; message: QueueMessage }[] = [];
     for (const row of rows) {

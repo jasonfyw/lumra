@@ -8,6 +8,7 @@ import {
   type OutboxRepository,
 } from '@lumra/db';
 import type postgres from 'postgres';
+import { DEADLINES } from './deadline';
 import type { Env } from './env';
 import { createProcessorClient, type Fetcher, type ProcessorClient } from './processor-client';
 
@@ -18,8 +19,13 @@ export interface Services {
   mediaRepo(): MediaPipelineRepository;
   outboxRepo(): OutboxRepository;
   accessStateRepo(): AccessStateRepository;
-  processor(): ProcessorClient;
-  /** Closes the DB pool; call once the invocation's work is done. */
+  /**
+   * Processor client. `slot` pins the container instance (0..PROCESSOR_POOL_SIZE-1) so the
+   * concurrent jobs of one batch never share an instance (`processor_busy`); without it the
+   * instance is chosen by media id.
+   */
+  processor(slot?: number): ProcessorClient;
+  /** Closes the DB pool (time-boxed); call once the invocation's work is done. */
   close(): Promise<void>;
 }
 
@@ -43,7 +49,7 @@ function poolIndex(key: string): number {
   return hash % PROCESSOR_POOL_SIZE;
 }
 
-export function processorFetcher(env: Env): Fetcher {
+export function processorFetcher(env: Env, slot?: number): Fetcher {
   if (env.PROCESSOR_URL) {
     const base = env.PROCESSOR_URL.replace(/\/$/, '');
     return (request) => {
@@ -54,25 +60,47 @@ export function processorFetcher(env: Env): Fetcher {
   const namespace = env.IMAGE_PROCESSOR;
   if (!namespace) throw new ConfigurationError('Neither IMAGE_PROCESSOR nor PROCESSOR_URL is set');
   return (request) => {
-    const mediaId = request.headers.get('x-lumra-media-id') ?? '';
+    const index =
+      slot === undefined
+        ? poolIndex(request.headers.get('x-lumra-media-id') ?? '')
+        : ((slot % PROCESSOR_POOL_SIZE) + PROCESSOR_POOL_SIZE) % PROCESSOR_POOL_SIZE;
     // Same addressing as `getContainer(namespace, name)` from @cloudflare/containers.
-    const stub = namespace.get(namespace.idFromName(`image-processor-${poolIndex(mediaId)}`));
+    const stub = namespace.get(namespace.idFromName(`image-processor-${index}`));
     return stub.fetch(request);
   };
 }
 
-/** Lazily created per invocation: no DB connection is opened unless a job needs one. */
+/**
+ * Lazily created per invocation: no DB connection is opened unless a job needs one.
+ *
+ * Behind Hyperdrive: prepared statements on (Cloudflare documents intermittent hangs with
+ * postgres.js `prepare: false`) and no startup `statement_timeout` (Hyperdrive pools origin
+ * connections across clients and doesn't document per-session settings) — the worker's own
+ * deadlines bound every call instead. A direct `DATABASE_URL` (local/tests) keeps the defaults.
+ */
 export function createServices(env: Env): Services {
   let sql: postgres.Sql | undefined;
-  const db = () => (sql ??= createSqlClient(databaseUrl(env), { max: 5 }));
-  let processor: ProcessorClient | undefined;
+  const hyperdrive = Boolean(env.HYPERDRIVE?.connectionString);
+  const db = () =>
+    (sql ??= createSqlClient(databaseUrl(env), {
+      max: 5,
+      ...(hyperdrive ? { prepare: true, statementTimeoutMs: 0 } : {}),
+    }));
+  const processors = new Map<number | undefined, ProcessorClient>();
   return {
     mediaRepo: () => createMediaPipelineRepository(db()),
     outboxRepo: () => createOutboxRepository(db()),
     accessStateRepo: () => createAccessStateRepository(db()),
-    processor: () => (processor ??= createProcessorClient(processorFetcher(env))),
+    processor: (slot) => {
+      let client = processors.get(slot);
+      if (!client) {
+        client = createProcessorClient(processorFetcher(env, slot));
+        processors.set(slot, client);
+      }
+      return client;
+    },
     async close() {
-      if (sql) await sql.end({ timeout: 5 });
+      if (sql) await sql.end({ timeout: DEADLINES.closeSeconds });
     },
   };
 }

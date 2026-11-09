@@ -66,7 +66,11 @@ All of these return `{data, error, requestId}` with `Cache-Control: no-store`.
    `completed`, and a `job_outbox` row is written: `media.uploaded`, with payload
    `{type, mediaId, traceId, dedupeKey}` and `dedupe_key = media.uploaded:{mediaId}`. The
    insert uses `ON CONFLICT DO NOTHING`. A replay returns the stored result and never writes a
-   second outbox row.
+   second outbox row. After the commit, the route schedules (Next `after()`, so the response is
+   not delayed) a best-effort `POST {WORKER_URL}/internal/relay` with
+   `Authorization: Bearer {WORKER_KICK_SECRET}` (3 s timeout, failures logged at warn and
+   swallowed). The worker runs one bounded outbox relay pass, so processing starts within seconds;
+   without the two env vars, or if the kick fails, the once-a-minute cron relay picks the row up.
 6. **Abort.** The session moves to `aborted`. The media moves to `deleting` (with `deleted_at` and
    `failure_code = upload_aborted`); PRD §7 allows any non-deleted state to move there. The guest
    reservation is released with `release_guest_upload`, and a `media.delete` outbox row (deduped)

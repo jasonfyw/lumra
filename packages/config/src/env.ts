@@ -115,6 +115,11 @@ export const webServerEnvSchema = z
     VERCEL_GIT_COMMIT_SHA: z.string().optional(), // Sentry release + /api/health `commit`
     VERCEL_ENV: z.enum(['production', 'preview', 'development']).optional(),
     LOG_LEVEL: logLevel.default('info'),
+    // Best-effort "kick" to the job worker after an upload finalizes (`POST {WORKER_URL}/internal/
+    // relay`), so processing starts within seconds instead of on the next cron relay. Both unset
+    // ⇒ no kick; the outbox relay cron still picks the job up.
+    WORKER_URL: url.optional(),
+    WORKER_KICK_SECRET: secret.optional(),
   })
   .superRefine((env, ctx) => {
     // Deployed environments must have auth configured (T05).
@@ -154,6 +159,11 @@ export const workerEnvSchema = z.object({
    * uses the Cloudflare Containers binding `IMAGE_PROCESSOR` (ADR-002).
    */
   PROCESSOR_URL: url.optional(),
+  /**
+   * Bearer secret for `POST /internal/relay` (immediate outbox relay after an upload finalizes).
+   * Same value as the web app's `WORKER_KICK_SECRET`. Unset ⇒ the endpoint fails closed (503).
+   */
+  WORKER_KICK_SECRET: secret.optional(),
   ...workerObservability,
 });
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;

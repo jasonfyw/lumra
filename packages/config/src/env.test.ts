@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EnvValidationError, parseEnv, webServerEnvSchema } from './env';
+import { EnvValidationError, parseEnv, webServerEnvSchema, workerEnvSchema } from './env';
 
 describe('parseEnv', () => {
   it('applies defaults for a minimal valid env', () => {
@@ -50,5 +50,28 @@ describe('parseEnv', () => {
         }),
       ).not.toThrow();
     }
+  });
+
+  it('accepts the optional worker kick settings and rejects short kick secrets', () => {
+    const secret = 'k'.repeat(32);
+    const web = parseEnv('web', webServerEnvSchema, {
+      NEXT_PUBLIC_APP_URL: 'http://localhost:3000',
+      WORKER_URL: 'https://lumra-worker.example.workers.dev',
+      WORKER_KICK_SECRET: secret,
+    });
+    expect(web.WORKER_URL).toBe('https://lumra-worker.example.workers.dev');
+    expect(parseEnv('worker', workerEnvSchema, { WORKER_KICK_SECRET: secret })).toMatchObject({
+      WORKER_KICK_SECRET: secret,
+    });
+    expect(parseEnv('worker', workerEnvSchema, {}).WORKER_KICK_SECRET).toBeUndefined();
+    expect(() => parseEnv('worker', workerEnvSchema, { WORKER_KICK_SECRET: 'short' })).toThrow(
+      /WORKER_KICK_SECRET/,
+    );
+    expect(() =>
+      parseEnv('web', webServerEnvSchema, {
+        NEXT_PUBLIC_APP_URL: 'http://localhost:3000',
+        WORKER_URL: 'not a url',
+      }),
+    ).toThrow(/WORKER_URL/);
   });
 });

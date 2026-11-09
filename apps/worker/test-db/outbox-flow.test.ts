@@ -4,10 +4,14 @@
  * published as a valid queue message, and handled into `ready` media with variant rows.
  */
 import { randomUUID } from 'node:crypto';
-import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { queueMessageSchema, toOutboxRecord, type QueueMessage } from '@lumra/contracts';
-import { createMediaPipelineRepository, createOutboxRepository } from '@lumra/db';
+import {
+  createMediaPipelineRepository,
+  createOutboxRepository,
+  createSqlClient,
+  pgArray,
+} from '@lumra/db';
 import { handleMediaUploaded } from '../src/handlers/media-uploaded';
 import { silentLogger } from '../src/log';
 import { relayOutbox } from '../src/outbox-relay';
@@ -15,7 +19,9 @@ import type { ProcessorClient } from '../src/processor-client';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-const sql = postgres(DATABASE_URL, { max: 4, prepare: false, onnotice: () => {} });
+// Production (Hyperdrive) client settings: prepared statements, no startup statement_timeout,
+// fetch_types off — so the array parameters in the repositories are exercised as deployed.
+const sql = createSqlClient(DATABASE_URL, { max: 4, prepare: true, statementTimeoutMs: 0 });
 const SHA = 'c'.repeat(64);
 
 let ownerId: string;
@@ -32,9 +38,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (galleries.length)
-    await sql`delete from public.galleries where id = any(${galleries}::uuid[])`;
+    await sql`delete from public.galleries where id = any(${pgArray(galleries)}::uuid[])`;
   if (outboxIds.length)
-    await sql`delete from public.job_outbox where id = any(${outboxIds}::uuid[])`;
+    await sql`delete from public.job_outbox where id = any(${pgArray(outboxIds)}::uuid[])`;
   await sql`delete from public.billing_accounts where user_id = ${ownerId}`.catch(() => {});
   await sql`delete from public.profiles where id = ${ownerId}`.catch(() => {});
   await sql`delete from auth.users where id = ${ownerId}`.catch(() => {});
