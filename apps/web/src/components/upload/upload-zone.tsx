@@ -1,6 +1,7 @@
 'use client';
 
 import { useId, useRef, useState, type DragEvent } from 'react';
+import { Icon, buttonClass } from '@/components/ui';
 import type { AddResult, Rejection } from '@/lib/upload';
 
 /** File picker `accept`: extensions plus MIME types so iOS/Android pickers offer photos (FR-M01). */
@@ -64,8 +65,17 @@ export function UploadZone({
         void handle(e.dataTransfer.files);
       }}
       data-dragging={dragging || undefined}
-      className="flex flex-col items-center gap-3 rounded-[var(--radius-control)] border-2 border-dashed border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-10 text-center transition-colors duration-[var(--duration-fast)] data-[dragging]:border-[var(--color-accent)] data-[dragging]:bg-white motion-reduce:transition-none"
+      className="lm-drop px-4 py-10 sm:py-12"
     >
+      <div className="lm-drop-icon" aria-hidden="true">
+        <Icon name="upload" size={22} />
+      </div>
+      <p className="lm-title-display-sm" aria-hidden="true">
+        <span className="pointer-coarse:hidden">
+          {dragging ? 'Release to upload' : 'Drop photos here'}
+        </span>
+        <span className="hidden pointer-coarse:inline">Add your photos</span>
+      </p>
       <input
         ref={inputRef}
         type="file"
@@ -86,25 +96,26 @@ export function UploadZone({
         disabled={disabled}
         aria-describedby={hintId}
         onClick={() => inputRef.current?.click()}
-        className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-6 font-medium text-white disabled:opacity-60"
+        className={buttonClass('primary', 'md', 'min-h-11 min-w-11 px-5')}
       >
+        <Icon name="image" size={18} />
         Choose photos
       </button>
-      <p id={hintId} className="text-sm text-[var(--color-ink-muted)]">
+      <p id={hintId} className="lm-field-hint">
         <span className="pointer-coarse:hidden">or drag them here. </span>
         JPEG, PNG, WebP or HEIC, up to 50 MB each.
       </p>
       {rejected.length > 0 && (
         <div
           role="alert"
-          className="w-full max-w-prose text-left text-sm text-[var(--color-danger)]"
+          className="lm-banner lm-banner-error w-full max-w-prose flex-col gap-1 text-left text-[13px] leading-[18px]"
         >
           <p className="font-medium">
             {rejected.length === 1
               ? '1 file wasn’t added:'
               : `${rejected.length} files weren’t added:`}
           </p>
-          <ul className="mt-1 list-disc pl-5">
+          <ul className="list-disc pl-5">
             {rejected.slice(0, 10).map((r, i) => (
               <li key={`${r.name}-${i}`}>{r.message}</li>
             ))}

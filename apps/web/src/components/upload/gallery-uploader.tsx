@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { buttonClass } from '@/components/ui';
 import { openDraftStore } from '@/lib/draft-store';
 import {
   baseConcurrency,
@@ -113,20 +114,14 @@ export function GalleryUploader({
   return (
     <div className="flex flex-col gap-6">
       {snapshot.authPrompt && (
-        <div
-          role="alert"
-          className="flex flex-col gap-3 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] p-4"
-        >
+        <div role="alert" className="lm-banner lm-banner-cap flex-col gap-3">
           <p className="font-medium">{snapshot.authPrompt.message}</p>
-          <p className="text-sm text-[var(--color-ink-muted)]">
+          <p className="text-[13px] leading-[18px]">
             Photos already uploaded stay in this draft. After signing in, choose the remaining files
             again to continue.
           </p>
           <div>
-            <Link
-              href={signInHref}
-              className="inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-6 font-medium text-white"
-            >
+            <Link href={signInHref} className={buttonClass('primary')}>
               Sign in to keep uploading
             </Link>
           </div>
@@ -134,7 +129,7 @@ export function GalleryUploader({
       )}
 
       {awaiting.length > 0 && (
-        <div className="flex flex-col gap-3 rounded-[var(--radius-control)] border border-[var(--color-line)] p-4">
+        <div className="lm-banner flex-col gap-3">
           <p className="font-medium">
             {awaiting.length === 1
               ? '1 upload was interrupted.'
@@ -160,14 +155,14 @@ export function GalleryUploader({
             <button
               type="button"
               onClick={() => resumeInput.current?.click()}
-              className="inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-5 font-medium text-white"
+              className={buttonClass('primary')}
             >
               Choose files to resume
             </button>
             <button
               type="button"
               onClick={() => engine.discardAwaiting()}
-              className="inline-flex min-h-11 items-center justify-center px-4 underline-offset-4 hover:underline"
+              className={buttonClass('ghost')}
             >
               Discard interrupted uploads
             </button>

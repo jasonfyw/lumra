@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { buttonClass } from '@/components/ui';
 
 /**
  * Small accessible modal for destructive confirmations: `role="dialog"` + `aria-modal`, focus
@@ -64,7 +65,7 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-[var(--color-scrim)] motion-safe:animate-[lumra-fade-in_var(--duration-fast)_var(--ease-standard)] sm:items-center sm:p-6"
       onKeyDown={onKeyDown}
     >
       <div
@@ -73,21 +74,21 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descId}
-        className="flex w-full max-w-md flex-col gap-4 rounded-[var(--radius-control)] bg-[var(--color-canvas)] p-6 shadow-xl"
+        className="lm-dialog pb-[max(env(safe-area-inset-bottom),32px)] sm:pb-8"
       >
-        <h2 id={titleId} className="text-lg font-semibold">
+        <h2 id={titleId} className="lm-title-display-sm break-words">
           {title}
         </h2>
         <div id={descId} className="flex flex-col gap-3 text-[var(--color-ink-muted)]">
           {children}
         </div>
-        <div className="flex flex-wrap justify-end gap-3">
+        <div className="mt-2 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <button
             ref={cancelRef}
             type="button"
             onClick={onCancel}
             disabled={busy}
-            className="min-h-11 rounded-[var(--radius-control)] border border-[var(--color-line)] px-5"
+            className={buttonClass('secondary', 'md', 'min-h-12 sm:min-h-11')}
           >
             Cancel
           </button>
@@ -95,7 +96,7 @@ export function ConfirmDialog({
             type="button"
             onClick={onConfirm}
             disabled={busy || confirmDisabled}
-            className="min-h-11 rounded-[var(--radius-control)] bg-[var(--color-danger)] px-5 font-medium text-white disabled:opacity-60"
+            className={buttonClass('danger', 'md', 'min-h-12 sm:min-h-11')}
           >
             {busy ? 'Working…' : confirmLabel}
           </button>

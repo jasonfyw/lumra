@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react';
 import type { EditorMediaItem, MediaStatus } from '@lumra/contracts';
+import { Icon } from '@/components/ui';
 
 /** Creator-facing tile labels: the creator sees pipeline states, incl. recoverable failures. */
 export const STATUS_LABEL: Record<MediaStatus, string> = {
@@ -27,8 +28,8 @@ export function moveItem<T>(list: readonly T[], from: number, to: number): T[] {
 const LONG_PRESS_MS = 400;
 const DRAG_SLOP_PX = 6;
 
-const small =
-  'inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 text-sm disabled:opacity-40';
+/** Tile controls: 36px icon buttons on fine pointers, the full 44px tap target on touch. */
+const small = 'lm-iconbtn size-9 pointer-coarse:size-11';
 
 interface DragState {
   from: number;
@@ -132,7 +133,7 @@ export function MediaGrid({
 
   if (items.length === 0) {
     return (
-      <p className="rounded-[var(--radius-control)] border border-dashed border-[var(--color-line)] p-8 text-center text-[var(--color-ink-muted)]">
+      <p className="rounded-[var(--radius-md)] border border-dashed border-[var(--color-border)] bg-[var(--color-sunken)] p-8 text-center text-[var(--color-ink-muted)]">
         No photos yet.
       </p>
     );
@@ -141,7 +142,7 @@ export function MediaGrid({
   return (
     <ol
       aria-label="Photos in this gallery"
-      className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4"
+      className="grid grid-cols-2 gap-x-1 gap-y-3 sm:grid-cols-3 xl:grid-cols-4"
     >
       {items.map((item, index) => {
         const isCover = coverMediaId === item.id;
@@ -153,35 +154,45 @@ export function MediaGrid({
             data-tile-index={index}
             aria-label={`${item.filename}, ${STATUS_LABEL[item.status]}, position ${position}`}
             className={[
-              'flex flex-col overflow-hidden rounded-[var(--radius-control)] border bg-[var(--color-surface)]',
-              dragOver === index && dragFrom !== null && dragFrom !== index
-                ? 'border-[var(--color-focus)] ring-2 ring-[var(--color-focus)]'
-                : 'border-[var(--color-line)]',
-              dragFrom === index ? 'opacity-50' : '',
+              'relative flex flex-col transition-opacity duration-[var(--duration-fast)]',
+              dragFrom === index ? 'opacity-35' : '',
             ].join(' ')}
           >
-            <div className="relative flex aspect-[4/3] items-center justify-center bg-[var(--color-line)]">
+            <div
+              className={`relative flex aspect-[4/3] items-center justify-center ${item.status === 'failed' ? 'bg-[var(--color-danger-soft)]' : 'bg-[var(--color-sunken)]'}`}
+            >
+              {dragOver === index && dragFrom !== null && dragFrom !== index && (
+                // The ink drop line marks where the dragged photo lands.
+                <span
+                  aria-hidden="true"
+                  className={`absolute inset-y-0 z-10 w-[3px] bg-[var(--color-ink)] shadow-[0_0_0_1px_var(--color-surface)] ${dragFrom < index ? '-right-0.5' : '-left-0.5'}`}
+                />
+              )}
               {item.thumbnailUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element -- short-lived gateway URL
                 <img src={item.thumbnailUrl} alt="" className="h-full w-full object-cover" />
               ) : (
                 <span
-                  className={`px-2 text-center text-sm ${item.status === 'failed' ? 'text-[var(--color-danger)]' : 'text-[var(--color-ink-muted)]'}`}
+                  className={`px-2 text-center text-[12px] leading-4 font-medium ${item.status === 'failed' ? 'text-[var(--color-danger)]' : 'text-[var(--color-ink-muted)]'}`}
                 >
                   {STATUS_LABEL[item.status]}
                 </span>
               )}
               {isHero && (
-                <span className="absolute left-2 top-2 rounded bg-[var(--color-accent)] px-2 py-0.5 text-xs text-white">
+                <span className="lm-tag lm-tag-surface absolute top-2 right-2 shadow-[var(--shadow-raised)]">
+                  <Icon name="star" size={14} />
                   {isCover ? 'Cover' : 'Cover (auto)'}
                 </span>
               )}
             </div>
-            <div className="flex flex-col gap-2 p-2">
-              <p className="truncate text-sm" title={item.filename}>
+            <div className="flex flex-col gap-0.5 pt-1.5">
+              <p
+                className="truncate text-[12px] leading-4 text-[var(--color-ink-muted)]"
+                title={item.filename}
+              >
                 {item.filename}
               </p>
-              <div className="flex flex-wrap gap-1">
+              <div className="-ml-1.5 flex flex-wrap items-center">
                 <button
                   type="button"
                   className={`${small} cursor-grab touch-none select-none`}
@@ -194,7 +205,7 @@ export function MediaGrid({
                   onPointerCancel={reset}
                   onContextMenu={(e) => e.preventDefault()}
                 >
-                  <span aria-hidden="true">⠿</span>
+                  <Icon name="grip" size={18} />
                 </button>
                 <button
                   type="button"
@@ -203,7 +214,7 @@ export function MediaGrid({
                   disabled={disabled || index === 0}
                   onClick={() => onMove(index, index - 1)}
                 >
-                  <span aria-hidden="true">←</span>
+                  <Icon name="chevron-left" size={18} />
                 </button>
                 <button
                   type="button"
@@ -212,11 +223,11 @@ export function MediaGrid({
                   disabled={disabled || index === items.length - 1}
                   onClick={() => onMove(index, index + 1)}
                 >
-                  <span aria-hidden="true">→</span>
+                  <Icon name="chevron-right" size={18} />
                 </button>
                 <button
                   type="button"
-                  className={small}
+                  className={`${small} aria-pressed:bg-[var(--color-lumen-soft)] aria-pressed:text-[var(--color-lumen-ink)]`}
                   aria-pressed={isCover}
                   aria-label={
                     isCover ? `Unset ${item.filename} as cover` : `Use ${item.filename} as cover`
@@ -224,16 +235,16 @@ export function MediaGrid({
                   disabled={disabled}
                   onClick={() => onSetCover(isCover ? null : item.id)}
                 >
-                  {isCover ? 'Cover ✓' : 'Cover'}
+                  <Icon name="star" size={18} />
                 </button>
                 <button
                   type="button"
-                  className={`${small} text-[var(--color-danger)]`}
+                  className={`${small} ml-auto text-[var(--color-danger)]`}
                   aria-label={`Delete ${item.filename}`}
                   disabled={disabled}
                   onClick={() => onDelete(item)}
                 >
-                  Delete
+                  <Icon name="trash" size={18} />
                 </button>
               </div>
             </div>

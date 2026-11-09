@@ -11,6 +11,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
+import { Icon } from '@/components/ui';
 import { altText, devicePixelRatio, itemLabel, responsiveImageFor } from './media';
 
 export interface LightboxProps {
@@ -166,13 +167,16 @@ export function Lightbox({ items, index, onIndexChange, onClose }: LightboxProps
       aria-modal="true"
       aria-labelledby={titleId}
       data-testid="lightbox"
-      className="fixed inset-0 z-50 flex flex-col bg-[var(--color-canvas)] motion-safe:animate-[lumra-fade-in_var(--duration-base)_var(--ease-standard)]"
+      className="lm-on-night fixed inset-0 z-50 flex flex-col bg-[var(--color-night)] text-[var(--color-on-night)] motion-safe:animate-[lumra-fade-in_var(--duration-base)_var(--ease-standard)]"
     >
       <div
-        className="flex shrink-0 items-center justify-between gap-4 px-2 sm:px-4"
+        className="flex shrink-0 items-center justify-between gap-4 px-3 sm:px-4"
         style={{ height: HEADER_PX }}
       >
-        <p aria-live="polite" className="px-2 text-sm text-[var(--color-ink-muted)] tabular-nums">
+        <p
+          aria-live="polite"
+          className="rounded-full bg-[var(--color-night-raised)] px-3 py-1 text-[13px] leading-[18px] text-[var(--color-on-night-muted)] tabular-nums"
+        >
           {(index + 1).toLocaleString('en-US')} of {items.length.toLocaleString('en-US')}
         </p>
         <IconButton ref={closeRef} label="Close" onClick={onClose}>
@@ -203,14 +207,14 @@ export function Lightbox({ items, index, onIndexChange, onClose }: LightboxProps
             decoding="async"
             draggable={false}
             onLoad={() => setLoadedId(item.id)}
-            className="block bg-[var(--color-surface)] object-contain opacity-0 transition-opacity duration-[var(--duration-slow)] ease-[var(--ease-standard)] data-[loaded]:opacity-100"
+            className="block bg-[var(--color-night-raised)] object-contain opacity-0 transition-opacity duration-[var(--duration-slow)] ease-[var(--ease-standard)] data-[loaded]:opacity-100"
             data-loaded={loadedId === item.id ? '' : undefined}
             style={{ width: box.width, height: box.height }}
           />
         ) : (
           <div
             key={item.id}
-            className="flex items-center justify-center bg-[var(--color-surface)] px-6 text-center text-sm text-[var(--color-ink-muted)]"
+            className="flex items-center justify-center bg-[var(--color-night-raised)] px-6 text-center text-sm text-[var(--color-on-night-muted)]"
             style={{ width: box.width, height: box.height }}
           >
             {item.status === 'pending'
@@ -225,7 +229,7 @@ export function Lightbox({ items, index, onIndexChange, onClose }: LightboxProps
           label="Previous photo"
           onClick={() => go(-1)}
           disabled={!hasPrev}
-          className="absolute top-1/2 left-2 -translate-y-1/2 sm:left-4"
+          className="absolute top-1/2 left-2 -translate-y-1/2 sm:left-6"
         >
           <path d="M15 5l-7 7 7 7" />
         </IconButton>
@@ -233,7 +237,7 @@ export function Lightbox({ items, index, onIndexChange, onClose }: LightboxProps
           label="Next photo"
           onClick={() => go(1)}
           disabled={!hasNext}
-          className="absolute top-1/2 right-2 -translate-y-1/2 sm:right-4"
+          className="absolute top-1/2 right-2 -translate-y-1/2 sm:right-6"
         >
           <path d="M9 5l7 7-7 7" />
         </IconButton>
@@ -243,23 +247,28 @@ export function Lightbox({ items, index, onIndexChange, onClose }: LightboxProps
         className="flex shrink-0 items-center justify-between gap-4 px-4"
         style={{ height: FOOTER_PX }}
       >
-        <h2 id={titleId} className="min-w-0 truncate text-sm font-medium">
+        <h2
+          id={titleId}
+          className="min-w-0 truncate text-[13px] leading-[18px] font-medium text-[var(--color-on-night-muted)]"
+        >
           {label}
         </h2>
         {currentReady && item.downloadUrl ? (
           <a
             href={item.downloadUrl}
             download
-            className="inline-flex min-h-11 shrink-0 items-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-4 text-sm font-medium text-white"
+            className="lm-btn min-h-11 shrink-0 bg-[var(--color-night-raised)] text-[var(--color-on-night)] hover:text-[var(--color-lumen)]"
           >
+            <Icon name="download" size={18} />
             Download original
           </a>
         ) : (
           <button
             type="button"
             disabled
-            className="inline-flex min-h-11 shrink-0 cursor-not-allowed items-center rounded-[var(--radius-control)] border border-[var(--color-line)] px-4 text-sm font-medium text-[var(--color-ink-muted)]"
+            className="lm-btn min-h-11 shrink-0 bg-[var(--color-night-raised)] text-[var(--color-on-night)]"
           >
+            <Icon name="download" size={18} />
             Download original
           </button>
         )}
@@ -317,7 +326,7 @@ function IconButton({ label, onClick, disabled, className = '', children, ref }:
       aria-label={label}
       onClick={onClick}
       disabled={disabled}
-      className={`inline-flex size-12 items-center justify-center rounded-full bg-[var(--color-canvas)]/90 text-[var(--color-ink)] shadow-sm ring-1 ring-[var(--color-line)] transition-opacity duration-[var(--duration-fast)] disabled:pointer-events-none disabled:opacity-0 ${className}`}
+      className={`lm-iconbtn lm-iconbtn-night size-12 disabled:pointer-events-none disabled:opacity-0 ${className}`}
     >
       <svg
         aria-hidden="true"

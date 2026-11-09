@@ -1,26 +1,91 @@
 /*
- * Lumra design tokens (light theme only — PRD §4). Consumed by Tailwind v4 via `@theme`.
- * Images are the hero; chrome stays neutral and quiet.
+ * Lumra design tokens — light theme only (PRD §4). Source: the Lumra design system
+ * (`tokens.json`). Consumed by Tailwind v4 via `@theme`, so every token is both a CSS variable
+ * (`var(--color-ink)`) and a utility (`bg-paper`, `text-ink-muted`, `rounded-md`, `shadow-raised`).
+ *
+ * Photos are the most colourful thing on any screen: chrome is `ink` on `paper`, and `lumen`
+ * (the brand's one hue) is reserved for progress, selection and the wordmark dot.
  */
-@theme {
-  --color-canvas: #ffffff;
-  --color-surface: #f7f7f5;
-  --color-ink: #111111;
-  --color-ink-muted: #5c5c58;
-  --color-line: #e6e6e1;
-  --color-accent: #1d1d1b;
-  --color-focus: #2563eb;
-  --color-danger: #b42318;
+@theme static {
+  /* Grounds */
+  --color-paper: #faf9f7; /* page ground, creator and recipient */
+  --color-surface: #ffffff; /* panels, dialogs, tables, inputs */
+  --color-sunken: #f2f0ec; /* placeholders, drop zone, row hover */
+  --color-hairline: #e6e3dd; /* dividers, panel edges (decorative only) */
+  --color-border: #8f8a81; /* control boundaries, 3.3:1 on paper */
 
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-display: 'Inter Tight', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  /* Text */
+  --color-ink: #1b1a18; /* primary text, primary button fill, focus ring */
+  --color-ink-muted: #5e5a53; /* metadata, 6:1 on paper/surface/sunken */
+  --color-ink-hover: #34322e; /* primary button hover/pressed */
 
-  --radius-control: 0.625rem;
+  /* Brand light: never a text colour on light grounds; text on it is always ink */
+  --color-lumen: #f0b43c;
+  --color-lumen-soft: #fcefd2;
+  --color-lumen-ink: #7a4e00; /* text on lumen-soft */
 
+  /* Status — always paired with a word */
+  --color-success: #1e6b47;
+  --color-success-soft: #e3f1e8;
+  --color-danger: #b3261e;
+  --color-danger-soft: #fbe9e7;
+
+  /* Lightbox: the only dark surface */
+  --color-night: #0f0e0d;
+  --color-night-raised: #262422;
+  --color-on-night: #f4f2ee;
+  --color-on-night-muted: #a8a39a;
+  --color-scrim: rgb(15 14 13 / 0.48);
+
+  /* Deprecated aliases (pre-reskin names) — prefer the tokens above in new code. */
+  --color-canvas: #faf9f7; /* = paper */
+  --color-line: #e6e3dd; /* = hairline */
+  --color-accent: #1b1a18; /* = ink */
+  --color-focus: #1b1a18; /* = ink */
+
+  /* Type: next/font sets --font-hanken / --font-instrument on <html> (apps/web layout). */
+  --font-sans: var(--font-hanken), 'Hanken Grotesk', 'Helvetica Neue', Arial, sans-serif;
+  --font-display: var(--font-instrument), 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+
+  /* Shape: photos are never rounded */
+  --radius-none: 0;
+  --radius-sm: 6px; /* buttons, inputs, tags, segmented control */
+  --radius-md: 12px; /* panels, dialogs, drop zone, selection bar */
+  --radius-lg: 20px; /* top corners of mobile sheets */
+  --radius-pill: 999px; /* selection check, counters, progress */
+  --radius-control: 6px; /* deprecated alias of radius-sm */
+
+  /* Depth: flat UI with hairlines; shadows only over photos and for overlays */
+  --shadow-raised: 0 1px 2px rgb(27 26 24 / 0.06), 0 4px 16px rgb(27 26 24 / 0.06);
+  --shadow-overlay: 0 2px 6px rgb(27 26 24 / 0.08), 0 16px 48px rgb(27 26 24 / 0.18);
+
+  /* Motion: 180–320 ms microinteractions, ease-out */
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --duration-fast: 180ms;
   --duration-base: 240ms;
   --duration-slow: 320ms;
+}
+
+:root {
+  /* Spacing: 4px base (space-1 … space-9) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px; /* mobile page gutter */
+  --space-5: 24px; /* panel padding, gap between fields */
+  --space-6: 32px; /* desktop page gutter, gap between sections */
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+
+  /* Layout */
+  --row-height: 240px;
+  --row-height-mobile: 150px;
+  --grid-gap: 4px;
+  --content-max: 1600px; /* public grid */
+  --app-max: 1200px; /* creator screens */
+  --panel-width: 360px; /* editor settings aside */
+  --tap-target: 44px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -28,6 +93,7 @@
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
