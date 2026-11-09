@@ -26,3 +26,16 @@ const dateFormat = new Intl.DateTimeFormat('en-US', {
 export function formatDate(iso: string): string {
   return dateFormat.format(new Date(iso));
 }
+
+const gbFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
+
+/**
+ * Bytes as decimal GB (1 GB = 1,000,000,000 bytes) for usage summaries: at most two decimals,
+ * and "< 0.01 GB" for small non-zero amounts so stored photos never read as zero.
+ */
+export function formatGigabytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 GB';
+  const hundredths = Math.round(bytes / 10_000_000);
+  if (hundredths === 0) return '< 0.01 GB';
+  return `${gbFormat.format(hundredths / 100)} GB`;
+}

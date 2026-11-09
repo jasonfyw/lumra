@@ -20,7 +20,7 @@ import type {
   UploadStateResponse,
 } from '@lumra/contracts';
 import { toOutboxRecord } from '@lumra/contracts';
-import { checkAdmission, estimateStoredFootprintBytes } from '@lumra/billing';
+import { checkAdmission, currentBillingPeriod, estimateStoredFootprintBytes } from '@lumra/billing';
 import {
   billingAccounts,
   galleries,
@@ -177,12 +177,6 @@ function planRatesFromRow(row: typeof plans.$inferSelect): PlanRates {
   };
 }
 
-function calendarMonth(now: Date): { start: Date; end: Date } {
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-  return { start, end };
-}
-
 /**
  * Plan admission for account-owned galleries (FR-G07, PRD §9.4, T28). Runs inside the intent
  * transaction with the billing account row locked, so concurrent intents for one account are
@@ -206,10 +200,7 @@ async function admitAccountUpload(tx: Tx, userId: string, size: number, now: Dat
   if (!planRow) throw new Error('plan row missing');
   const plan = planRatesFromRow(planRow);
 
-  const period =
-    account?.billingPeriodStart && account.billingPeriodEnd
-      ? { start: account.billingPeriodStart, end: account.billingPeriodEnd }
-      : calendarMonth(now);
+  const period = currentBillingPeriod(account, now);
 
   // Committed = objects that exist (or existed and are not yet removed); pending = live intents.
   const [usage] = await tx.execute<{
