@@ -1,6 +1,7 @@
 'use client';
 
 import { useActionState, useEffect, useRef, useState } from 'react';
+import { buttonClass } from '@/components/ui';
 import type { AuthFlowParams } from '@/lib/return-to';
 import { sendOtpAction, verifyOtpAction, type AuthFormState } from './actions';
 
@@ -15,10 +16,9 @@ const initialState: AuthFormState = {
   sentAt: null,
 };
 
-const button =
-  'inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-6 font-medium text-white disabled:opacity-60';
-const input =
-  'min-h-11 w-full rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white px-3 text-base';
+const button = buttonClass('primary', 'lg', 'mt-3 w-full');
+const input = 'lm-input';
+const textButton = buttonClass('ghost', 'sm', '-mx-2 min-h-11');
 
 function useCooldown(sentAt: number | null): number {
   const [now, setNow] = useState(() => Date.now());
@@ -67,12 +67,12 @@ export function AuthForm({
   }, [onCodeStep, sendState.sentAt]);
 
   return (
-    <div className="flex flex-col gap-6">
-      <div aria-live="polite" role="status" className="min-h-6 text-[var(--color-ink-muted)]">
+    <div className="flex flex-col gap-4">
+      <div aria-live="polite" role="status" className="text-[var(--color-ink-muted)] empty:hidden">
         {notice}
       </div>
       {error && (
-        <p role="alert" className="text-[var(--color-danger)]">
+        <p role="alert" className="lm-banner lm-banner-error">
           {error}
         </p>
       )}
@@ -83,11 +83,11 @@ export function AuthForm({
             setEditingEmail(false);
             return send(formData);
           }}
-          className="flex flex-col gap-3"
+          className="flex flex-col gap-2"
           noValidate
         >
           <FlowFields flow={flow} />
-          <label htmlFor="email" className="font-medium">
+          <label htmlFor="email" className="lm-field-label">
             Email
           </label>
           <input
@@ -107,10 +107,10 @@ export function AuthForm({
         </form>
       ) : (
         <div className="flex flex-col gap-4">
-          <form action={verify} className="flex flex-col gap-3" noValidate>
+          <form action={verify} className="flex flex-col gap-2" noValidate>
             <FlowFields flow={flow} />
             <input type="hidden" name="email" value={sendState.email} />
-            <label htmlFor="code" className="font-medium">
+            <label htmlFor="code" className="lm-field-label">
               6-digit code
             </label>
             <input
@@ -125,32 +125,28 @@ export function AuthForm({
               required
               aria-invalid={!!verifyState.error}
               aria-describedby="code-help"
-              className={`${input} tracking-[0.4em]`}
+              className={`${input} lm-num min-h-[52px] text-center text-[22px] font-medium tracking-[0.5em]`}
             />
-            <p id="code-help" className="text-sm text-[var(--color-ink-muted)]">
+            <p id="code-help" className="lm-field-hint">
               Or open the link in the email on this device.
             </p>
             <button type="submit" disabled={verifying} className={button}>
               {verifying ? 'Checking…' : 'Sign in'}
             </button>
           </form>
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <form action={send}>
               <FlowFields flow={flow} />
               <input type="hidden" name="email" value={sendState.email} />
               <button
                 type="submit"
                 disabled={sending || cooldown > 0}
-                className="min-h-11 underline-offset-4 hover:underline disabled:text-[var(--color-ink-muted)] disabled:no-underline"
+                className={`${textButton} lm-num`}
               >
                 {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
               </button>
             </form>
-            <button
-              type="button"
-              onClick={() => setEditingEmail(true)}
-              className="min-h-11 underline-offset-4 hover:underline"
-            >
+            <button type="button" onClick={() => setEditingEmail(true)} className={textButton}>
               Use a different email
             </button>
           </div>

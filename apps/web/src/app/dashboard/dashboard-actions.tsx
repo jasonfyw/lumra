@@ -4,9 +4,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
 import type { ApiResponse, CreateGalleryResponse } from '@lumra/contracts';
+import { Icon, buttonClass } from '@/components/ui';
 
-const primary =
-  'inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-5 font-medium text-white disabled:opacity-60';
+const primary = buttonClass('primary', 'md', 'min-h-11');
 
 /** Creates a gallery (POST /api/v1/galleries) and opens the editor. */
 export function NewGalleryButton() {
@@ -42,12 +42,13 @@ export function NewGalleryButton() {
   }
 
   return (
-    <div className="flex flex-col items-start gap-2">
+    <div className="flex flex-col items-end gap-2">
       <button type="button" onClick={create} disabled={busy} className={primary}>
+        <Icon name="plus" size={18} />
         {busy ? 'Creating…' : 'New gallery'}
       </button>
       {error && (
-        <p role="alert" className="text-sm text-[var(--color-danger)]">
+        <p role="alert" className="lm-field-error max-w-xs text-right">
           {error}{' '}
           <Link href="/pricing" className="underline underline-offset-4">
             See plans
@@ -73,18 +74,19 @@ export function CopyLinkButton({ url, label }: { url: string; label: string }) {
   }
 
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className="inline-flex items-center justify-end gap-2">
+      <span aria-live="polite" className="text-[13px] text-[var(--color-ink-muted)]">
+        {status === 'copied' ? 'Copied' : status === 'failed' ? url : ''}
+      </span>
       <button
         type="button"
         onClick={copy}
         aria-label={`Copy link to ${label}`}
-        className="min-h-11 underline-offset-4 hover:underline"
+        className={buttonClass('ghost', 'sm', 'min-h-11')}
       >
+        <Icon name={status === 'copied' ? 'check' : 'link'} size={16} />
         Copy link
       </button>
-      <span aria-live="polite" className="text-sm text-[var(--color-ink-muted)]">
-        {status === 'copied' ? 'Copied' : status === 'failed' ? url : ''}
-      </span>
     </span>
   );
 }

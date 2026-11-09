@@ -6,6 +6,7 @@ import { serverEnv } from '@/lib/env';
 import { formatBytes, formatDate } from '@/lib/format';
 import { listGalleriesForOwner } from '@/lib/galleries';
 import { signOutAction } from '../auth/actions';
+import { AppHeader, Icon, Tag, buttonClass } from '@/components/ui';
 import { CopyLinkButton, NewGalleryButton } from './dashboard-actions';
 
 export const metadata = { title: 'Galleries' };
@@ -38,113 +39,141 @@ export default async function DashboardPage({
   const appUrl = serverEnv().NEXT_PUBLIC_APP_URL;
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col gap-8 px-4 py-10">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="font-[family-name:var(--font-display)] text-3xl font-semibold tracking-tight">
-          Galleries
-        </h1>
-        <div className="flex flex-wrap items-center gap-4">
-          <Link
-            href="/account"
-            className="min-h-11 content-center underline-offset-4 hover:underline"
-          >
-            Account
-          </Link>
-          <form action={signOutAction}>
-            <button type="submit" className="min-h-11 underline-offset-4 hover:underline">
-              Sign out
-            </button>
-          </form>
+    <div className="flex min-h-dvh flex-col">
+      <AppHeader
+        actions={
+          <>
+            <nav aria-label="Account" className="flex items-center gap-1">
+              <Link href="/account" className={buttonClass('ghost')}>
+                Account
+              </Link>
+            </nav>
+            <form action={signOutAction}>
+              <button type="submit" className={buttonClass('ghost')}>
+                Sign out
+              </button>
+            </form>
+          </>
+        }
+      />
+      <main className="mx-auto flex w-full max-w-[var(--app-max)] flex-col gap-6 px-4 py-8 sm:px-8 sm:py-10">
+        <header className="flex flex-wrap items-end justify-between gap-4">
+          <h1 className="lm-title-1">Galleries</h1>
           <NewGalleryButton />
-        </div>
-      </header>
+        </header>
 
-      {page.items.length === 0 && !cursor ? (
-        <section className="flex flex-col items-start gap-3 rounded-[var(--radius-control)] border border-[var(--color-line)] p-8">
-          <h2 className="text-xl font-semibold">No galleries yet</h2>
-          <p className="text-[var(--color-ink-muted)]">
-            Create a gallery, add photos and share one link.
-          </p>
-        </section>
-      ) : (
-        <section aria-label="Your galleries" className="overflow-x-auto">
-          <table className="w-full min-w-[640px] border-collapse text-left">
-            <thead className="text-sm text-[var(--color-ink-muted)]">
-              <tr className="border-b border-[var(--color-line)]">
-                <th scope="col" className="py-2 pr-4 font-medium">
-                  Name
-                </th>
-                <th scope="col" className="py-2 pr-4 font-medium">
-                  Status
-                </th>
-                <th scope="col" className="py-2 pr-4 font-medium">
-                  Items
-                </th>
-                <th scope="col" className="py-2 pr-4 font-medium">
-                  Size
-                </th>
-                <th scope="col" className="py-2 pr-4 font-medium">
-                  Created (UTC)
-                </th>
-                <th scope="col" className="py-2 pr-4 font-medium">
-                  Updated (UTC)
-                </th>
-                <th scope="col" className="py-2 font-medium">
-                  <span className="sr-only">Link</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {page.items.map((g) => (
-                <tr key={g.id} className="border-b border-[var(--color-line)] align-middle">
-                  <th scope="row" className="py-2 pr-4 font-medium">
-                    <Link
-                      href={`/dashboard/galleries/${g.id}`}
-                      className="inline-flex min-h-11 items-center underline-offset-4 hover:underline"
-                    >
-                      {g.title}
-                    </Link>
+        {page.items.length === 0 && !cursor ? (
+          <section className="lm-panel flex flex-col items-center gap-3 px-6 py-16 text-center">
+            <div className="lm-gate-icon">
+              <Icon name="image" size={24} />
+            </div>
+            <h2 className="lm-title-display-sm">No galleries yet</h2>
+            <p className="max-w-sm text-[var(--color-ink-muted)]">
+              Create a gallery, add photos and share one link.
+            </p>
+          </section>
+        ) : (
+          <section
+            aria-label="Your galleries"
+            className="overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-hairline)] bg-[var(--color-surface)]"
+          >
+            <table className="w-full min-w-[720px] border-collapse text-left">
+              <thead className="text-[13px] leading-[18px] text-[var(--color-ink-muted)]">
+                <tr className="border-b border-[var(--color-hairline)]">
+                  <th scope="col" className={th}>
+                    Name
                   </th>
-                  <td className="py-2 pr-4">{STATUS_LABEL[g.status]}</td>
-                  <td className="py-2 pr-4 tabular-nums">{g.itemCount}</td>
-                  <td className="py-2 pr-4 tabular-nums">{formatBytes(g.storedBytes)}</td>
-                  <td className="py-2 pr-4">{formatDate(g.createdAt)}</td>
-                  <td className="py-2 pr-4">{formatDate(g.updatedAt)}</td>
-                  <td className="py-2">
-                    {g.status === 'draft' ? (
-                      <span className="text-sm text-[var(--color-ink-muted)]">Not published</span>
-                    ) : (
-                      <CopyLinkButton
-                        url={new URL(`/g/${g.slug}`, appUrl).toString()}
-                        label={g.title}
-                      />
-                    )}
-                  </td>
+                  <th scope="col" className={th}>
+                    Status
+                  </th>
+                  <th scope="col" className={`${th} text-right`}>
+                    Items
+                  </th>
+                  <th scope="col" className={`${th} text-right`}>
+                    Size
+                  </th>
+                  <th scope="col" className={th}>
+                    Created (UTC)
+                  </th>
+                  <th scope="col" className={th}>
+                    Updated (UTC)
+                  </th>
+                  <th scope="col" className={th}>
+                    <span className="sr-only">Link</span>
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
+              </thead>
+              <tbody>
+                {page.items.map((g) => (
+                  <tr
+                    key={g.id}
+                    className="border-b border-[var(--color-hairline)] align-middle transition-colors duration-[var(--duration-fast)] last:border-b-0 hover:bg-[var(--color-paper)]"
+                  >
+                    <th scope="row" className="px-4 py-1 font-semibold">
+                      <Link
+                        href={`/dashboard/galleries/${g.id}`}
+                        className="inline-flex min-h-11 items-center underline-offset-4 hover:underline"
+                      >
+                        {g.title}
+                      </Link>
+                    </th>
+                    <td className={td}>
+                      <Tag
+                        tone={g.status === 'published' ? 'published' : undefined}
+                        icon={g.status === 'expired' ? 'clock' : undefined}
+                        dot={g.status !== 'expired'}
+                      >
+                        {STATUS_LABEL[g.status]}
+                      </Tag>
+                    </td>
+                    <td className={`${td} text-right`}>{g.itemCount}</td>
+                    <td className={`${td} text-right`}>{formatBytes(g.storedBytes)}</td>
+                    <td className={`${td} text-[var(--color-ink-muted)]`}>
+                      {formatDate(g.createdAt)}
+                    </td>
+                    <td className={`${td} text-[var(--color-ink-muted)]`}>
+                      {formatDate(g.updatedAt)}
+                    </td>
+                    <td className={`${td} text-right`}>
+                      {g.status === 'draft' ? (
+                        <span className="text-[13px] text-[var(--color-ink-muted)]">
+                          Not published
+                        </span>
+                      ) : (
+                        <CopyLinkButton
+                          url={new URL(`/g/${g.slug}`, appUrl).toString()}
+                          label={g.title}
+                        />
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        )}
 
-      <nav aria-label="Pagination" className="flex gap-6">
-        {cursor && (
-          <Link
-            href="/dashboard"
-            className="min-h-11 content-center underline-offset-4 hover:underline"
-          >
-            Newest
-          </Link>
-        )}
-        {page.nextCursor && (
-          <Link
-            href={`/dashboard?cursor=${encodeURIComponent(page.nextCursor)}`}
-            className="min-h-11 content-center underline-offset-4 hover:underline"
-          >
-            Older galleries
-          </Link>
-        )}
-      </nav>
-    </main>
+        <nav aria-label="Pagination" className="flex gap-2">
+          {cursor && (
+            <Link href="/dashboard" className={buttonClass('secondary', 'sm')}>
+              <Icon name="chevron-left" size={16} />
+              Newest
+            </Link>
+          )}
+          {page.nextCursor && (
+            <Link
+              href={`/dashboard?cursor=${encodeURIComponent(page.nextCursor)}`}
+              className={buttonClass('secondary', 'sm')}
+            >
+              Older galleries
+              <Icon name="chevron-right" size={16} />
+            </Link>
+          )}
+        </nav>
+      </main>
+    </div>
   );
 }
+
+const th = 'px-4 py-3 font-medium whitespace-nowrap';
+const td = 'lm-num px-4 py-1 whitespace-nowrap';

@@ -4,6 +4,7 @@ import { getActiveGuestSession, getAuthenticatedUser } from '@/lib/actor';
 import { getClaimTarget } from '@/lib/galleries';
 import { parseAuthFlowParams, type AuthFlowParams } from '@/lib/return-to';
 import { isSupabaseConfigured } from '@/lib/supabase/server';
+import { Icon, Wordmark, buttonClass } from '@/components/ui';
 import { AuthForm } from './auth-form';
 import { ClaimDraft } from './claim-draft';
 
@@ -40,7 +41,7 @@ export default async function AuthPage({ searchParams }: { searchParams: Promise
       {isSupabaseConfigured() ? (
         <AuthForm flow={flow} initialError={ERRORS[errorKey] ?? null} />
       ) : (
-        <p role="alert" className="text-[var(--color-danger)]">
+        <p role="alert" className="lm-banner lm-banner-error">
           Sign-in is not available right now. Please try again later.
         </p>
       )}
@@ -86,10 +87,7 @@ async function ResumePublish({
         For your security, a draft can only be moved into your account from the browser that created
         it. Open Lumra there, press Publish again and sign in with the same email.
       </p>
-      <Link
-        href="/dashboard"
-        className="min-h-11 content-center underline-offset-4 hover:underline"
-      >
+      <Link href="/dashboard" className={buttonClass('secondary', 'md', 'self-start')}>
         Go to your galleries
       </Link>
     </Shell>
@@ -98,11 +96,21 @@ async function ResumePublish({
 
 function Shell({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center gap-6 px-4 py-16">
-      <h1 className="font-[family-name:var(--font-display)] text-3xl font-semibold tracking-tight">
-        {title}
-      </h1>
-      {children}
-    </main>
+    <div className="flex min-h-dvh flex-col">
+      <header className="px-4 py-3 sm:px-8 sm:py-4">
+        <Link href="/" className="-my-1 inline-flex min-h-11 items-center rounded-sm">
+          <Wordmark size={28} />
+        </Link>
+      </header>
+      <main className="flex flex-1 items-start justify-center px-4 pt-6 pb-16 sm:items-center sm:pt-0">
+        <div className="lm-panel flex w-full max-w-[440px] flex-col gap-5 sm:p-8">
+          <div className="lm-gate-icon size-11">
+            <Icon name="mail" size={20} />
+          </div>
+          <h1 className="lm-title-display-sm">{title}</h1>
+          {children}
+        </div>
+      </main>
+    </div>
   );
 }

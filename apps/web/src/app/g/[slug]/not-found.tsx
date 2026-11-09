@@ -10,6 +10,7 @@ export const metadata: Metadata = {
 export default function GalleryNotFound() {
   return (
     <GalleryNotice
+      icon="image"
       title="Gallery not found"
       body="This link doesn’t point to an available gallery. Check that you copied the whole link, or ask the person who shared it for a new one."
     />

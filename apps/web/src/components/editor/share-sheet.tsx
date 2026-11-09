@@ -2,6 +2,7 @@
 
 import { create as createQr } from 'qrcode';
 import { useMemo, useRef, useState } from 'react';
+import { Icon, buttonClass } from '@/components/ui';
 
 /** Module matrix for `text` (pure; no canvas needed, so it renders in SSR and tests too). */
 export function qrMatrix(text: string): boolean[][] {
@@ -32,10 +33,8 @@ async function qrPng(matrix: boolean[][], scale = 12): Promise<Blob | null> {
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
 }
 
-const button =
-  'inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] border border-[var(--color-line)] px-4 font-medium';
-const primary =
-  'inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-5 font-medium text-white';
+const button = buttonClass('secondary', 'sm', 'min-h-11');
+const primary = buttonClass('primary', 'sm', 'min-h-11');
 
 /**
  * Share sheet (T21, PRD §4 "Sharing UI"): Copy link is primary; a QR code (downloadable PNG);
@@ -102,45 +101,60 @@ export function ShareSheet({ url, title }: { url: string; title: string }) {
     .join('');
 
   return (
-    <section aria-labelledby="share-heading" className="flex flex-col gap-4">
-      <h2 id="share-heading" className="text-lg font-semibold">
+    <section aria-labelledby="share-heading" className="flex flex-col gap-3">
+      <h2 id="share-heading" className="lm-title-2">
         Share
       </h2>
-      <label className="flex flex-col gap-1 text-sm text-[var(--color-ink-muted)]">
+      <label className="lm-field lm-field-label">
         Share link
-        <input
-          ref={inputRef}
-          readOnly
-          value={url}
-          onFocus={(e) => e.currentTarget.select()}
-          className="min-h-11 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] px-3 text-base text-[var(--color-ink)]"
-        />
+        <span className="relative flex items-center">
+          <Icon
+            name="link"
+            size={18}
+            className="pointer-events-none absolute left-3 text-[var(--color-ink-muted)]"
+          />
+          <input
+            ref={inputRef}
+            readOnly
+            value={url}
+            onFocus={(e) => e.currentTarget.select()}
+            className="lm-input lm-num truncate pl-9 font-normal"
+          />
+        </span>
       </label>
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap gap-2">
         <button type="button" onClick={copy} className={primary}>
+          <Icon name="copy" size={16} />
           Copy link
         </button>
         {canShare && (
           <button type="button" onClick={share} className={button}>
+            <Icon name="share" size={16} />
             Share…
           </button>
         )}
-        <button type="button" onClick={downloadQr} className={button}>
-          Download QR code
-        </button>
       </div>
-      <svg
-        role="img"
-        aria-label={`QR code for ${url}`}
-        data-qr-url={url}
-        viewBox={`0 0 ${n} ${n}`}
-        shapeRendering="crispEdges"
-        className="h-40 w-40 rounded border border-[var(--color-line)]"
-      >
-        <rect width={n} height={n} fill="#fff" />
-        <path d={path} fill="#000" />
-      </svg>
-      <p aria-live="polite" role="status" className="min-h-5 text-sm text-[var(--color-ink-muted)]">
+      <div className="flex items-center gap-4 border-t border-[var(--color-hairline)] pt-4">
+        <svg
+          role="img"
+          aria-label={`QR code for ${url}`}
+          data-qr-url={url}
+          viewBox={`0 0 ${n} ${n}`}
+          shapeRendering="crispEdges"
+          className="size-24 shrink-0 border border-[var(--color-hairline)] bg-white"
+        >
+          <rect width={n} height={n} fill="#fff" />
+          <path d={path} fill="#000" />
+        </svg>
+        <div className="flex min-w-0 flex-col items-start gap-1">
+          <p className="font-semibold">QR code</p>
+          <button type="button" onClick={downloadQr} className={`${button} mt-1`}>
+            <Icon name="download" size={16} />
+            Download QR code
+          </button>
+        </div>
+      </div>
+      <p aria-live="polite" role="status" className="lm-field-hint empty:hidden">
         {status}
       </p>
     </section>

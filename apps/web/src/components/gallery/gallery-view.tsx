@@ -55,7 +55,7 @@ export function GalleryView({
     <>
       <div inert={open}>
         <GalleryHero gallery={gallery} items={items} />
-        <main className="px-1 pb-10 sm:px-4 lg:px-6">
+        <main className="mx-auto w-full max-w-[var(--content-max)] px-1 pb-10 sm:px-8">
           {items.length > 0 ? (
             <JustifiedGrid
               ref={gridRef}
@@ -64,13 +64,13 @@ export function GalleryView({
               onVisibleItemsChange={onVisibleItemsChange}
             />
           ) : (
-            <p className="px-3 py-16 text-center text-[var(--color-ink-muted)]">
+            <p className="lm-title-display-sm px-3 py-24 text-center text-[var(--color-ink-muted)]">
               No photos in this gallery yet.
             </p>
           )}
         </main>
         {gallery.brandingVisible ? (
-          <footer className="flex justify-center pb-6">
+          <footer className="mx-auto flex w-full max-w-[var(--content-max)] px-4 pb-6 sm:px-8">
             <LumraBadge />
           </footer>
         ) : null}
