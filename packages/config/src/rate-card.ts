@@ -51,7 +51,7 @@ export const RATE_CARD_V1: Record<PlanId, PlanRates> = {
     maxActiveGalleries: null,
     maxStorageBytes: null,
     maxDeliveryBytesPerMonth: null,
-    includedStorageGbMonth: 2,
+    includedStorageGbMonth: 20, // confirmed by owner 2026-11-09
     includedDeliveryGb: 5,
     storageOverageMicroUsdPerGbMonth: 100_000, // $0.10
     deliveryOverageMicroUsdPerGb: 30_000, // $0.03

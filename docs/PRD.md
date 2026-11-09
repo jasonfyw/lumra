@@ -224,7 +224,7 @@ Indexes: `(galleries.owner_id, updated_at DESC)`, `(media.gallery_id, sort_key)`
 |---|---|---|
 | Base subscription | $0 | **$2.00/month**, confirmed |
 | Active galleries | **2** max | Unlimited subject to fair use |
-| Included stored content | **1 GB total hard cap** | **2 GB-month per billing period** |
+| Included stored content | **1 GB total hard cap** | **20 GB-month per billing period** |
 | Included delivery | **3 GB/month hard cap for Free** (Proposed) | **5 GB/month** |
 | Storage above included | Not permitted | **$0.10 per GB-month** (Proposed) |
 | Media delivery above included | Not permitted | **$0.03 per GB served** (Proposed) |
@@ -238,7 +238,7 @@ Indexes: `(galleries.owner_id, updated_at DESC)`, `(media.gallery_id, sort_key)`
 
 ### 9.3 Provisional monthly bill example
 
-Pro creator uses average 12 GB-month stored and 45 GB of data delivered: `$2.00 + (12 - 2)×$0.10 + (45 - 5)×$0.03 = $4.20` before applicable tax. Values illustrative, price settings live in versioned database/config and surfaced before upgrade. No hidden minimum beyond subscription.
+Pro creator uses average 30 GB-month stored and 45 GB of data delivered: `$2.00 + (30 - 20)×$0.10 + (45 - 5)×$0.03 = $4.20` before applicable tax. Values illustrative, price settings live in versioned database/config and surfaced before upgrade. No hidden minimum beyond subscription.
 
 ### 9.4 Spending safeguards and overdue policy
 
@@ -457,7 +457,7 @@ Every task must include: functional implementation; typed interface and input va
 | Public link abuse | High delivery costs even with low user count. | Rate limits, cap guards, view throttles. |
 | Privacy/rights | Photos may contain sensitive personal data. | Clear consent/terms, deletion, retention, minimal telemetry. |
 
-**Commercial settings tagged Proposed:** free active galleries=2; free monthly delivery=3 GB; Pro included storage=2 GB-month; Pro included delivery=5 GB; storage overage=$0.10/GB-month; delivery overage=$0.03/GB; Pro default overage cap=$10; cap grace/tolerance policy; past-due grace=7 days, retention=30 days; archive partitions 500 items/2 GB; measured performance thresholds. These are defaults to validate with unit-economics and usability tests, not a claim of user approval.
+**Commercial settings tagged Proposed:** free active galleries=2; free monthly delivery=3 GB; Pro included delivery=5 GB; storage overage=$0.10/GB-month; delivery overage=$0.03/GB; Pro default overage cap=$10; cap grace/tolerance policy; past-due grace=7 days, retention=30 days; archive partitions 500 items/2 GB; measured performance thresholds. These are defaults to validate with unit-economics and usability tests, not a claim of user approval.
 
 **Architecture decision records required:** ADR-001 private media gateway vs presigned URLs; ADR-002 image processor/container/queue; ADR-003 ZIP implementation and partition sizes; ADR-004 billing rating/Stripe meter mapping; ADR-005 RLS and guest claim security; ADR-006 video provider decision before v1.1. None should trigger a new product interview unless contradicting confirmed user choices.
 

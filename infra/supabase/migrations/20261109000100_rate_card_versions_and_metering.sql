@@ -94,9 +94,9 @@ insert into public.plan_rate_versions (
 ) values
   ('free', 1, 0, 2, 1000000000, 3000000000, 0, 0, null, null, null, true, 'proposed',
    'PRD §9.2 launch rate card. Proposed: 2 active galleries, 3 GB/month delivery cap.'),
-  ('pro', 1, 2000000, null, null, null, 2, 5, 100000, 30000, 10000000, false, 'proposed',
-   'PRD §9.2 launch rate card. Confirmed: $2.00/month base. Proposed: 2 GB-month and 5 GB '
-   'included, $0.10/GB-month, $0.03/GB, $10 default overage cap.');
+  ('pro', 1, 2000000, null, null, null, 20, 5, 100000, 30000, 10000000, false, 'proposed',
+   'PRD §9.2 launch rate card. Confirmed: $2.00/month base and 20 GB-month '
+   'included storage. Proposed: 5 GB delivery included, $0.10/GB-month, $0.03/GB, $10 default overage cap.');
 
 -- plans.rate_version must name an existing version; its rate columns are a projection of it.
 alter table public.plans
@@ -134,6 +134,10 @@ $$;
 
 create trigger plans_apply_rate_version before insert or update on public.plans
   for each row execute function public.plans_apply_rate_version();
+
+-- Re-project the existing plan rows from their current rate version (picks up v1 values such as
+-- Pro's 20 GB-month included storage, which differ from the core-schema seed).
+update public.plans set rate_version = rate_version;
 
 -- Public read, like `plans`: the pricing page shows the versioned rate card.
 alter table public.plan_rate_versions enable row level security;

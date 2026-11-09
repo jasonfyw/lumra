@@ -107,10 +107,10 @@ describe('integrateStorage', () => {
 });
 
 describe('rateInvoice', () => {
-  it('reproduces the PRD §9.3 example: Pro, 12 GB-month, 45 GB ⇒ $4.20', () => {
+  it('reproduces the PRD §9.3 example: Pro, 30 GB-month, 45 GB ⇒ $4.20', () => {
     const invoice = rateInvoice({
       plan: pro,
-      storageGbMonthMicro: storageGbMonthMicroUnits(12n * BigInt(GB) * BigInt(MONTH_S)),
+      storageGbMonthMicro: storageGbMonthMicroUnits(30n * BigInt(GB) * BigInt(MONTH_S)),
       deliveryBytes: 45 * GB,
       rateVersion: pro.rateVersion,
     });
@@ -221,7 +221,7 @@ describe('checkAdmission', () => {
   });
 
   it('denies Pro uploads whose conservative projection exceeds the spend cap', () => {
-    // Half the period left: 1 TB held for 15 days = 500 GB-month → 498 × $0.10 = $49.80 overage
+    // Half the period left: 1 TB held for 15 days = 500 GB-month → 480 × $0.10 = $48.00 overage
     const input = baseAdmission({ requested: { kind: 'upload', bytes: 1_000 * GB } });
     const decision = checkAdmission(input);
     expect(decision).toMatchObject({
@@ -229,7 +229,7 @@ describe('checkAdmission', () => {
       reason: 'spend_cap',
       remainingCapMicroUsd: 0,
     });
-    expect(decision.projectedOverageMicroUsd).toBe(49_800_000);
+    expect(decision.projectedOverageMicroUsd).toBe(48_000_000);
     expect(checkAdmission({ ...input, capMicroUsd: 50 * 1_000_000 }).allowed).toBe(true);
   });
 

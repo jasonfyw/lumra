@@ -144,7 +144,7 @@ describe('planStorageAccrual', () => {
 
   it('estimates marginal cost: zero inside the allowance, rate × overage beyond it', () => {
     const month = 30 * 86_400;
-    const included = 2n * BigInt(GB) * BigInt(month); // 2 GB-month
+    const included = 20n * BigInt(GB) * BigInt(month); // 20 GB-month
     // Already at the allowance; one more GB held for a full 30-day month = 1 GB-month = $0.10.
     const start = new Date('2026-11-01T00:00:00Z');
     const result = planStorageAccrual({
@@ -243,10 +243,10 @@ describe('ledger coverage', () => {
   });
 
   it('metered rows for the PRD §9.3 example rate to exactly $4.20', () => {
-    // 12 GB stored for a whole 30-day month, accrued hourly; 45 GB delivered in 45 responses.
+    // 30 GB stored for a whole 30-day month, accrued hourly; 45 GB delivered in 45 responses.
     const month = 30 * 24;
     const start = new Date('2026-11-01T00:00:00Z');
-    let cursor = { accruedThrough: start, storedBytes: 12 * GB };
+    let cursor = { accruedThrough: start, storedBytes: 30 * GB };
     const rows = [];
     let toDate = 0n;
     for (let h = 1; h <= month; h++) {
@@ -255,7 +255,7 @@ describe('ledger coverage', () => {
         account: null,
         plan: pro,
         cursor,
-        storedBytesNow: 12 * GB,
+        storedBytesNow: 30 * GB,
         windowEnd: new Date(start.getTime() + h * HOUR),
         byteSecondsToDate: toDate,
       })!;
