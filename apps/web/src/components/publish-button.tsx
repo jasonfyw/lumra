@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import type { PublishGalleryRequest, PublishGalleryResponse } from '@lumra/contracts';
+import { Icon, buttonClass } from '@/components/ui';
 import { authUrlForPublish, claimGuestDraftRequest } from '@/lib/claim-client';
 import { publishGalleryRequest } from '@/lib/editor-client';
 
@@ -75,12 +76,13 @@ export function PublishButton({
         type="button"
         onClick={publish}
         disabled={busy || disabled}
-        className="inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-6 font-medium text-white disabled:opacity-60"
+        className={buttonClass('primary', 'lg', 'w-full sm:w-auto sm:self-start')}
       >
+        <Icon name="share" size={18} />
         {busy ? 'Publishing…' : 'Publish'}
       </button>
       {error && (
-        <p role="alert" className="text-sm text-[var(--color-danger)]">
+        <p role="alert" className="lm-field-error">
           {error}
         </p>
       )}

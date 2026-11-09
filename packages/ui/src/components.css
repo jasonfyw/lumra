@@ -1,0 +1,540 @@
+/*
+ * Lumra component styles (class prefix `lm-`), ported from the Lumra design system's
+ * `bundle.css`. Every value comes from tokens.css. Kept in the `components` layer so Tailwind
+ * utilities on the same element still win (e.g. `lm-btn w-full`).
+ */
+@layer components {
+  .lm-num {
+    font-variant-numeric: tabular-nums;
+  }
+  .lm-muted {
+    color: var(--color-ink-muted);
+  }
+  .lm-serif {
+    font-family: var(--font-display);
+    font-weight: 400;
+  }
+
+  /* ---- Type styles ------------------------------------------------------------------- */
+  .lm-hero-title {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 44px;
+    line-height: 46px;
+    letter-spacing: -0.01em;
+  }
+  @media (min-width: 640px) {
+    .lm-hero-title {
+      font-size: 72px;
+      line-height: 72px;
+    }
+  }
+  .lm-title-1 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 32px;
+    line-height: 36px;
+    letter-spacing: -0.005em;
+  }
+  @media (min-width: 640px) {
+    .lm-title-1 {
+      font-size: 40px;
+      line-height: 44px;
+    }
+  }
+  .lm-title-display-sm {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 28px;
+    line-height: 32px;
+  }
+  .lm-title-2 {
+    font-size: 18px;
+    line-height: 24px;
+    font-weight: 600;
+  }
+  .lm-body-lg {
+    font-size: 17px;
+    line-height: 26px;
+  }
+  .lm-label {
+    font-size: 13px;
+    line-height: 18px;
+    font-weight: 500;
+  }
+  .lm-caption {
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+
+  /* ---- Icon & wordmark --------------------------------------------------------------- */
+  .lm-icon {
+    flex: none;
+    display: inline-block;
+    vertical-align: middle;
+  }
+  .lm-wordmark {
+    font-family: var(--font-display);
+    font-weight: 400;
+    letter-spacing: -0.01em;
+    color: var(--color-ink);
+    line-height: 1;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .lm-wordmark-dot {
+    display: inline-block;
+    width: 0.22em;
+    height: 0.22em;
+    border-radius: var(--radius-pill);
+    background: var(--color-lumen);
+    margin-left: 0.06em;
+    vertical-align: baseline;
+  }
+
+  /* ---- Button ------------------------------------------------------------------------ */
+  .lm-btn {
+    appearance: none;
+    font: inherit;
+    font-size: 15px;
+    line-height: 20px;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    min-height: 40px;
+    padding: 0 var(--space-4);
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    text-decoration: none;
+    transition:
+      background-color var(--duration-fast) var(--ease-standard),
+      border-color var(--duration-fast) var(--ease-standard),
+      color var(--duration-fast) var(--ease-standard);
+  }
+  .lm-btn-primary {
+    background: var(--color-ink);
+    color: var(--color-surface);
+  }
+  .lm-btn-primary:hover:not(:disabled) {
+    background: var(--color-ink-hover);
+  }
+  .lm-btn-secondary {
+    background: var(--color-surface);
+    color: var(--color-ink);
+    border-color: var(--color-border);
+  }
+  .lm-btn-secondary:hover:not(:disabled) {
+    background: var(--color-sunken);
+  }
+  .lm-btn-ghost {
+    background: transparent;
+    color: var(--color-ink);
+  }
+  .lm-btn-ghost:hover:not(:disabled),
+  .lm-btn-ghost[aria-current='page'] {
+    background: var(--color-sunken);
+  }
+  .lm-btn-danger {
+    background: var(--color-danger);
+    color: var(--color-surface);
+  }
+  .lm-btn-danger-text {
+    color: var(--color-danger);
+  }
+  .lm-btn-lumen {
+    background: var(--color-lumen);
+    color: var(--color-ink);
+  }
+  .lm-btn-sm {
+    min-height: 32px;
+    padding: 0 var(--space-3);
+    font-size: 13px;
+    line-height: 18px;
+    gap: 6px;
+  }
+  .lm-btn-lg {
+    min-height: 48px;
+    padding: 0 var(--space-5);
+    font-size: 16px;
+  }
+  .lm-btn-block {
+    width: 100%;
+  }
+  .lm-btn:disabled,
+  .lm-btn[aria-disabled='true'] {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  /* On touch, every button (small ones included) reaches the 44px tap target. */
+  @media (pointer: coarse) {
+    .lm-btn,
+    .lm-btn-sm {
+      min-height: var(--tap-target);
+    }
+  }
+
+  /* ---- IconButton -------------------------------------------------------------------- */
+  .lm-iconbtn {
+    appearance: none;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--color-ink);
+    width: var(--tap-target);
+    height: var(--tap-target);
+    border-radius: var(--radius-sm);
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    transition:
+      background-color var(--duration-fast) var(--ease-standard),
+      color var(--duration-fast) var(--ease-standard),
+      opacity var(--duration-fast) var(--ease-standard);
+  }
+  .lm-iconbtn:hover:not(:disabled) {
+    background: var(--color-sunken);
+  }
+  .lm-iconbtn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .lm-iconbtn-outline {
+    border-color: var(--color-border);
+    background: var(--color-surface);
+  }
+  .lm-iconbtn-night {
+    background: var(--color-night-raised);
+    color: var(--color-on-night);
+    border-radius: var(--radius-pill);
+  }
+  .lm-iconbtn-night:hover:not(:disabled) {
+    background: var(--color-night-raised);
+    color: var(--color-lumen);
+  }
+  /* On night the focus ring switches to on-night. */
+  .lm-on-night :focus-visible {
+    outline-color: var(--color-on-night);
+  }
+
+  /* ---- Tag --------------------------------------------------------------------------- */
+  .lm-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: 13px;
+    line-height: 18px;
+    font-weight: 500;
+    padding: 1px var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--color-sunken);
+    color: var(--color-ink-muted);
+    white-space: nowrap;
+  }
+  .lm-tag-published,
+  .lm-tag-ready {
+    background: var(--color-success-soft);
+    color: var(--color-success);
+  }
+  .lm-tag-failed {
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+  }
+  .lm-tag-pro {
+    background: var(--color-lumen-soft);
+    color: var(--color-lumen-ink);
+  }
+  .lm-tag-surface {
+    background: var(--color-surface);
+    color: var(--color-ink);
+  }
+  .lm-tag-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--radius-pill);
+    background: currentColor;
+  }
+
+  /* ---- Progress ---------------------------------------------------------------------- */
+  .lm-progress {
+    height: 4px;
+    width: 100%;
+    border-radius: var(--radius-pill);
+    background: var(--color-hairline);
+    overflow: hidden;
+  }
+  .lm-progress > span {
+    display: block;
+    height: 100%;
+    background: var(--color-lumen);
+    border-radius: var(--radius-pill);
+    transition: width var(--duration-slow) var(--ease-standard);
+  }
+  .lm-progress-lg {
+    height: 6px;
+  }
+
+  /* ---- Banner / panel ---------------------------------------------------------------- */
+  .lm-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--color-sunken);
+    color: var(--color-ink);
+  }
+  .lm-banner-error {
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+  }
+  .lm-banner-cap {
+    background: var(--color-lumen-soft);
+    color: var(--color-lumen-ink);
+  }
+  .lm-panel {
+    background: var(--color-surface);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-md);
+    padding: var(--space-5);
+  }
+
+  /* ---- Fields ------------------------------------------------------------------------ */
+  .lm-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .lm-field-label {
+    font-size: 13px;
+    line-height: 18px;
+    font-weight: 500;
+    color: var(--color-ink);
+  }
+  .lm-field-hint {
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--color-ink-muted);
+  }
+  .lm-field-error {
+    font-size: 13px;
+    line-height: 18px;
+    color: var(--color-danger);
+    font-weight: 500;
+  }
+  .lm-input {
+    font: inherit;
+    font-size: 16px; /* ≥16px stops iOS zooming on focus */
+    min-height: var(--tap-target);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    color: var(--color-ink);
+    width: 100%;
+    transition: border-color var(--duration-fast) var(--ease-standard);
+  }
+  .lm-input::placeholder {
+    color: var(--color-ink-muted);
+  }
+  .lm-input[aria-invalid='true'] {
+    border-color: var(--color-danger);
+  }
+  .lm-input:read-only {
+    background: var(--color-paper);
+  }
+  .lm-titleinput {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 32px;
+    line-height: 36px;
+    border: 0;
+    border-bottom: 1px solid var(--color-hairline);
+    border-radius: 0;
+    background: transparent;
+    color: var(--color-ink);
+    padding: 0 0 var(--space-1);
+    width: 100%;
+  }
+  @media (min-width: 640px) {
+    .lm-titleinput {
+      font-size: 40px;
+      line-height: 44px;
+    }
+  }
+  .lm-titleinput::placeholder {
+    color: var(--color-ink-muted);
+  }
+  .lm-titleinput:focus-visible {
+    outline: none;
+    border-bottom-color: var(--color-ink);
+    box-shadow: 0 1px 0 var(--color-ink);
+  }
+
+  /* ---- Drop zone --------------------------------------------------------------------- */
+  .lm-drop {
+    border: 1.5px dashed var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-sunken);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: var(--space-3);
+    padding: var(--space-7) var(--space-5);
+    color: var(--color-ink);
+    transition:
+      background-color var(--duration-fast) var(--ease-standard),
+      border-color var(--duration-fast) var(--ease-standard);
+  }
+  .lm-drop[data-dragging] {
+    border-color: var(--color-ink);
+    border-style: solid;
+    background: var(--color-lumen-soft);
+  }
+  .lm-drop-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-pill);
+    background: var(--color-surface);
+    border: 1px solid var(--color-hairline);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* ---- Gate / message page ----------------------------------------------------------- */
+  .lm-gate {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: var(--space-8) var(--space-5);
+    background: var(--color-paper);
+    gap: var(--space-5);
+  }
+  .lm-gate-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-pill);
+    background: var(--color-surface);
+    border: 1px solid var(--color-hairline);
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-ink);
+  }
+  .lm-gate-body {
+    color: var(--color-ink-muted);
+    max-width: 360px;
+  }
+
+  /* ---- Dialog ------------------------------------------------------------------------ */
+  .lm-dialog {
+    background: var(--color-surface);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    box-shadow: var(--shadow-overlay);
+    padding: var(--space-5) var(--space-4) var(--space-6);
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  @media (min-width: 640px) {
+    .lm-dialog {
+      border-radius: var(--radius-md);
+      padding: var(--space-6);
+      max-width: 440px;
+    }
+  }
+
+  /* ---- Lumra badge (Free plan) ------------------------------------------------------- */
+  .lm-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    color: var(--color-ink-muted);
+    text-decoration: none;
+    padding: 6px var(--space-3);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-pill);
+    background: var(--color-surface);
+    transition: color var(--duration-fast) var(--ease-standard);
+  }
+  .lm-badge:hover {
+    color: var(--color-ink);
+  }
+  @media (pointer: coarse) {
+    .lm-badge {
+      min-height: var(--tap-target);
+    }
+  }
+
+  /* ---- App header -------------------------------------------------------------------- */
+  .lm-appbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 56px;
+    padding: 0 var(--space-4);
+    border-bottom: 1px solid var(--color-hairline);
+    background: var(--color-paper);
+  }
+  @media (min-width: 640px) {
+    .lm-appbar {
+      min-height: 64px;
+      gap: var(--space-4);
+      padding: 0 var(--space-6);
+    }
+  }
+
+  /* ---- Pending tile shimmer ---------------------------------------------------------- */
+  .lm-shimmer {
+    position: relative;
+    overflow: hidden;
+    background: var(--color-sunken);
+  }
+  .lm-shimmer::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      100deg,
+      transparent 30%,
+      rgb(255 255 255 / 0.55) 50%,
+      transparent 70%
+    );
+    background-size: 220% 100%;
+    animation: lm-shimmer 1.6s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lm-shimmer::after {
+      animation: none;
+      display: none;
+    }
+  }
+}
+
+@keyframes lm-shimmer {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}

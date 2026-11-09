@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { EditorMediaItem, GalleryDetail, MediaStatus } from '@lumra/contracts';
@@ -15,6 +14,7 @@ import {
   updateGalleryRequest,
   utcIsoToLocalInput,
 } from '@/lib/editor-client';
+import { AppHeader, Icon, Tag, buttonClass } from '@/components/ui';
 import { ConfirmDialog } from './confirm-dialog';
 import { MediaGrid, moveItem } from './media-grid';
 import { ShareSheet } from './share-sheet';
@@ -22,14 +22,13 @@ import { ShareSheet } from './share-sheet';
 const IN_FLIGHT: readonly MediaStatus[] = ['reserved', 'uploading', 'uploaded', 'processing'];
 const POLL_MS = 5_000;
 
+/** Aside section: stacked on phones, separated by hairlines in the settings panel. */
 const card =
-  'flex flex-col gap-4 rounded-[var(--radius-control)] border border-[var(--color-line)] p-5';
-const field =
-  'min-h-11 rounded-[var(--radius-control)] border border-[var(--color-line)] px-3 text-base';
-const secondary =
-  'inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] border border-[var(--color-line)] px-4 font-medium disabled:opacity-60';
-const primary =
-  'inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-5 font-medium text-white disabled:opacity-60';
+  'flex flex-col gap-3 border-b border-[var(--color-hairline)] pb-5 last:border-b-0 last:pb-0';
+const field = 'lm-input';
+const secondary = buttonClass('secondary', 'md', 'min-h-11');
+const primary = buttonClass('primary', 'md', 'min-h-11');
+const heading = 'lm-title-2';
 
 const STATE_LABEL = { draft: 'Draft', published: 'Published', expired: 'Expired' } as const;
 
@@ -230,270 +229,285 @@ export function GalleryEditor({
   const isDraft = gallery.status === 'draft';
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col gap-8 px-4 py-10">
-      <nav>
-        <Link
-          href="/dashboard"
-          className="inline-flex min-h-11 items-center underline-offset-4 hover:underline"
-        >
-          ← Galleries
-        </Link>
-      </nav>
-
-      <header className="flex flex-col gap-2">
-        {editingTitle ? (
-          <form
-            className="flex flex-wrap items-end gap-3"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void saveTitle();
-            }}
+    <div className="flex min-h-dvh flex-col">
+      <AppHeader back={{ href: '/dashboard', label: 'Galleries' }}>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <Tag
+            tone={gallery.accessState === 'published' ? 'published' : undefined}
+            icon={gallery.accessState === 'expired' ? 'clock' : undefined}
+            dot={gallery.accessState !== 'expired'}
           >
-            <label className="flex flex-col gap-1 text-sm text-[var(--color-ink-muted)]">
-              Gallery title
-              <input
-                autoFocus
-                value={titleDraft}
-                maxLength={200}
-                onChange={(e) => setTitleDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') {
+            {STATE_LABEL[gallery.accessState]}
+          </Tag>
+          {gallery.hasPassword && (
+            <Tag icon="lock" className="hidden sm:inline-flex">
+              Password
+            </Tag>
+          )}
+        </span>
+      </AppHeader>
+      <div className="grid w-full flex-1 lg:grid-cols-[minmax(0,1fr)_var(--panel-width)]">
+        <main className="flex min-w-0 flex-col gap-6 px-4 py-6 sm:px-8 sm:py-8">
+          <header className="flex flex-col gap-2">
+            {editingTitle ? (
+              <form
+                className="flex flex-wrap items-end gap-3"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void saveTitle();
+                }}
+              >
+                <label className="lm-field lm-field-label min-w-0 flex-1 basis-72">
+                  Gallery title
+                  <input
+                    autoFocus
+                    value={titleDraft}
+                    maxLength={200}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        setTitleDraft(gallery.title);
+                        setEditingTitle(false);
+                      }
+                    }}
+                    className="lm-titleinput"
+                  />
+                </label>
+                <div className="flex gap-2">
+                  <button type="submit" className={primary} disabled={busy === 'title'}>
+                    Save title
+                  </button>
+                  <button
+                    type="button"
+                    className={secondary}
+                    onClick={() => {
+                      setTitleDraft(gallery.title);
+                      setEditingTitle(false);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <h1 className="lm-title-1 min-w-0 break-words">{gallery.title}</h1>
+                <button
+                  type="button"
+                  className={buttonClass('ghost', 'sm', 'min-h-11')}
+                  onClick={() => {
                     setTitleDraft(gallery.title);
-                    setEditingTitle(false);
-                  }
-                }}
-                className={`${field} w-72 max-w-full text-[var(--color-ink)]`}
-              />
-            </label>
-            <button type="submit" className={primary} disabled={busy === 'title'}>
-              Save title
-            </button>
-            <button
-              type="button"
-              className={secondary}
-              onClick={() => {
-                setTitleDraft(gallery.title);
-                setEditingTitle(false);
-              }}
-            >
-              Cancel
-            </button>
-          </form>
-        ) : (
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="font-[family-name:var(--font-display)] text-3xl font-semibold tracking-tight">
-              {gallery.title}
-            </h1>
-            <button
-              type="button"
-              className={secondary}
-              onClick={() => {
-                setTitleDraft(gallery.title);
-                setEditingTitle(true);
-              }}
-            >
-              Rename
-            </button>
-          </div>
-        )}
-        <p className="text-[var(--color-ink-muted)]">
-          {STATE_LABEL[gallery.accessState]} · {gallery.itemCount}{' '}
-          {gallery.itemCount === 1 ? 'photo' : 'photos'}
-          {gallery.hasPassword ? ' · Password protected' : ''}
-          {gallery.expiresAt ? ` · Expires ${new Date(gallery.expiresAt).toLocaleString()}` : ''}
-        </p>
-      </header>
+                    setEditingTitle(true);
+                  }}
+                >
+                  Rename
+                </button>
+              </div>
+            )}
+            <p className="lm-num text-[var(--color-ink-muted)]">
+              {STATE_LABEL[gallery.accessState]} · {gallery.itemCount}{' '}
+              {gallery.itemCount === 1 ? 'photo' : 'photos'}
+              {gallery.hasPassword ? ' · Password protected' : ''}
+              {gallery.expiresAt
+                ? ` · Expires ${new Date(gallery.expiresAt).toLocaleString()}`
+                : ''}
+            </p>
+          </header>
 
-      <p role="status" aria-live="polite" className="sr-only">
-        {announcement}
-      </p>
-      {error && (
-        <p role="alert" className="text-sm text-[var(--color-danger)]">
-          {error}
-        </p>
-      )}
-
-      {gallery.shareUrl && (
-        <div className={card}>
-          <ShareSheet url={gallery.shareUrl} title={gallery.title} />
-        </div>
-      )}
-
-      <section aria-labelledby="add-photos-heading" className="flex flex-col gap-3">
-        <h2 id="add-photos-heading" className="text-lg font-semibold">
-          Add photos
-        </h2>
-        {uploadSlot ?? (
-          <div
-            data-slot="upload-zone"
-            className="rounded-[var(--radius-control)] border border-dashed border-[var(--color-line)] p-6 text-[var(--color-ink-muted)]"
-          >
-            Adding photos from the editor arrives with the upload zone (T14).
-          </div>
-        )}
-      </section>
-
-      <section aria-labelledby="photos-heading" className="flex flex-col gap-3">
-        <h2 id="photos-heading" className="text-lg font-semibold">
-          Photos
-        </h2>
-        <MediaGrid
-          items={gallery.items}
-          coverMediaId={gallery.coverMediaId}
-          effectiveCoverMediaId={gallery.effectiveCoverMediaId}
-          disabled={busy === 'cover' || busy === 'media'}
-          onMove={move}
-          onSetCover={setCover}
-          onDelete={setToDelete}
-        />
-      </section>
-
-      {isDraft ? (
-        <section aria-labelledby="publish-heading" className={card}>
-          <h2 id="publish-heading" className="text-lg font-semibold">
-            Publish
-          </h2>
-          <p className="text-sm text-[var(--color-ink-muted)]">
-            You get the link right away; photos still uploading appear as they finish.
+          <p role="status" aria-live="polite" className="sr-only">
+            {announcement}
           </p>
-          <label className="flex flex-col gap-1 text-sm">
-            Link expires (optional, your local time)
-            <input
-              type="datetime-local"
-              value={expiryLocal}
-              onChange={(e) => setExpiryLocal(e.target.value)}
-              className={`${field} w-64 max-w-full`}
+          {error && (
+            <p role="alert" className="lm-banner lm-banner-error text-[13px] leading-[18px]">
+              {error}
+            </p>
+          )}
+
+          <section aria-labelledby="add-photos-heading" className="flex flex-col gap-3">
+            <h2 id="add-photos-heading" className={heading}>
+              Add photos
+            </h2>
+            {uploadSlot ?? (
+              <div data-slot="upload-zone" className="lm-drop text-[var(--color-ink-muted)]">
+                Adding photos from the editor arrives with the upload zone (T14).
+              </div>
+            )}
+          </section>
+
+          <section aria-labelledby="photos-heading" className="flex flex-col gap-3">
+            <h2 id="photos-heading" className={heading}>
+              Photos
+            </h2>
+            <MediaGrid
+              items={gallery.items}
+              coverMediaId={gallery.coverMediaId}
+              effectiveCoverMediaId={gallery.effectiveCoverMediaId}
+              disabled={busy === 'cover' || busy === 'media'}
+              onMove={move}
+              onSetCover={setCover}
+              onDelete={setToDelete}
             />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            Password (optional, at least 4 characters)
-            <input
-              type="password"
-              autoComplete="new-password"
-              value={publishPassword}
-              onChange={(e) => setPublishPassword(e.target.value)}
-              className={`${field} w-64 max-w-full`}
-            />
-          </label>
-          <PublishButton
-            galleryId={galleryId}
-            signedIn
-            isGuestDraft={false}
-            returnTo={`/dashboard/galleries/${galleryId}`}
-            disabled={publishPassword.length > 0 && publishPassword.length < 4}
-            settings={{
-              ...(publishExpiry ? { expiresAt: publishExpiry } : {}),
-              ...(publishPassword ? { password: publishPassword } : {}),
-            }}
-            onPublished={() => {
-              setPublishPassword('');
-              announce('Published. Your share link is ready.');
-              void refresh();
-            }}
-          />
-        </section>
-      ) : (
-        <section aria-labelledby="access-heading" className={card}>
-          <h2 id="access-heading" className="text-lg font-semibold">
-            Access
-          </h2>
-          <form
-            className="flex flex-wrap items-end gap-3"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void saveExpiry(localInputToUtcIso(expiryLocal));
-            }}
-          >
-            <label className="flex flex-col gap-1 text-sm">
-              Link expires (your local time)
-              <input
-                type="datetime-local"
-                value={expiryLocal}
-                onChange={(e) => setExpiryLocal(e.target.value)}
-                className={`${field} w-64 max-w-full`}
+          </section>
+        </main>
+
+        <aside
+          aria-label="Gallery settings"
+          className="flex flex-col gap-5 border-t border-[var(--color-hairline)] bg-[var(--color-surface)] px-4 py-6 sm:px-8 lg:border-t-0 lg:border-l lg:px-6 lg:py-8"
+        >
+          {gallery.shareUrl && (
+            <div className={card}>
+              <ShareSheet url={gallery.shareUrl} title={gallery.title} />
+            </div>
+          )}
+          {isDraft ? (
+            <section aria-labelledby="publish-heading" className={card}>
+              <h2 id="publish-heading" className={heading}>
+                Publish
+              </h2>
+              <p className="lm-field-hint">
+                You get the link right away; photos still uploading appear as they finish.
+              </p>
+              <label className="lm-field lm-field-label w-full">
+                Link expires (optional, your local time)
+                <input
+                  type="datetime-local"
+                  value={expiryLocal}
+                  onChange={(e) => setExpiryLocal(e.target.value)}
+                  className={field}
+                />
+              </label>
+              <label className="lm-field lm-field-label w-full">
+                Password (optional, at least 4 characters)
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={publishPassword}
+                  onChange={(e) => setPublishPassword(e.target.value)}
+                  className={field}
+                />
+              </label>
+              <PublishButton
+                galleryId={galleryId}
+                signedIn
+                isGuestDraft={false}
+                returnTo={`/dashboard/galleries/${galleryId}`}
+                disabled={publishPassword.length > 0 && publishPassword.length < 4}
+                settings={{
+                  ...(publishExpiry ? { expiresAt: publishExpiry } : {}),
+                  ...(publishPassword ? { password: publishPassword } : {}),
+                }}
+                onPublished={() => {
+                  setPublishPassword('');
+                  announce('Published. Your share link is ready.');
+                  void refresh();
+                }}
               />
-            </label>
-            <button
-              type="submit"
-              className={secondary}
-              disabled={busy === 'expiry' || !expiryLocal}
-            >
-              Save expiry
-            </button>
-            {gallery.expiresAt && (
-              <button
-                type="button"
-                className={secondary}
-                disabled={busy === 'expiry'}
-                onClick={() => {
-                  setExpiryLocal('');
-                  void saveExpiry(null);
+            </section>
+          ) : (
+            <section aria-labelledby="access-heading" className={card}>
+              <h2 id="access-heading" className={heading}>
+                Access
+              </h2>
+              <form
+                className="flex flex-wrap items-end gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void saveExpiry(localInputToUtcIso(expiryLocal));
                 }}
               >
-                Never expire
-              </button>
-            )}
-          </form>
-          <form
-            className="flex flex-wrap items-end gap-3"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void savePassword(newPassword);
-            }}
-          >
-            <label className="flex flex-col gap-1 text-sm">
-              {gallery.hasPassword ? 'New password' : 'Password'}
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={newPassword}
-                minLength={4}
-                maxLength={200}
-                onChange={(e) => setNewPassword(e.target.value)}
-                className={`${field} w-64 max-w-full`}
-              />
-            </label>
-            <button
-              type="submit"
-              className={secondary}
-              disabled={busy === 'password' || newPassword.length < 4}
-            >
-              {gallery.hasPassword ? 'Change password' : 'Set password'}
-            </button>
-            {gallery.hasPassword && (
+                <label className="lm-field lm-field-label w-full">
+                  Link expires (your local time)
+                  <input
+                    type="datetime-local"
+                    value={expiryLocal}
+                    onChange={(e) => setExpiryLocal(e.target.value)}
+                    className={field}
+                  />
+                </label>
+                <button
+                  type="submit"
+                  className={secondary}
+                  disabled={busy === 'expiry' || !expiryLocal}
+                >
+                  Save expiry
+                </button>
+                {gallery.expiresAt && (
+                  <button
+                    type="button"
+                    className={secondary}
+                    disabled={busy === 'expiry'}
+                    onClick={() => {
+                      setExpiryLocal('');
+                      void saveExpiry(null);
+                    }}
+                  >
+                    Never expire
+                  </button>
+                )}
+              </form>
+              <form
+                className="flex flex-wrap items-end gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void savePassword(newPassword);
+                }}
+              >
+                <label className="lm-field lm-field-label w-full">
+                  {gallery.hasPassword ? 'New password' : 'Password'}
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={newPassword}
+                    minLength={4}
+                    maxLength={200}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className={field}
+                  />
+                </label>
+                <button
+                  type="submit"
+                  className={secondary}
+                  disabled={busy === 'password' || newPassword.length < 4}
+                >
+                  {gallery.hasPassword ? 'Change password' : 'Set password'}
+                </button>
+                {gallery.hasPassword && (
+                  <button
+                    type="button"
+                    className={secondary}
+                    disabled={busy === 'password'}
+                    onClick={() => void savePassword(null)}
+                  >
+                    Remove password
+                  </button>
+                )}
+              </form>
+            </section>
+          )}
+
+          <section aria-labelledby="danger-heading" className={card}>
+            <h2 id="danger-heading" className={heading}>
+              Delete gallery
+            </h2>
+            <p className="lm-field-hint">
+              The link stops working immediately and all photos are permanently removed.
+            </p>
+            <div>
               <button
                 type="button"
-                className={secondary}
-                disabled={busy === 'password'}
-                onClick={() => void savePassword(null)}
+                onClick={() => {
+                  setDeleteConfirmText('');
+                  setDeleteOpen(true);
+                }}
+                className={buttonClass('ghost', 'md', 'lm-btn-danger-text -ml-3 min-h-11')}
               >
-                Remove password
+                <Icon name="trash" size={18} />
+                Delete gallery…
               </button>
-            )}
-          </form>
-        </section>
-      )}
-
-      <section aria-labelledby="danger-heading" className={card}>
-        <h2 id="danger-heading" className="text-lg font-semibold">
-          Delete gallery
-        </h2>
-        <p className="text-sm text-[var(--color-ink-muted)]">
-          The link stops working immediately and all photos are permanently removed.
-        </p>
-        <div>
-          <button
-            type="button"
-            onClick={() => {
-              setDeleteConfirmText('');
-              setDeleteOpen(true);
-            }}
-            className="inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] border border-[var(--color-danger)] px-5 font-medium text-[var(--color-danger)]"
-          >
-            Delete gallery…
-          </button>
-        </div>
-      </section>
+            </div>
+          </section>
+        </aside>
+      </div>
 
       <ConfirmDialog
         open={toDelete !== null}
@@ -522,7 +536,7 @@ export function GalleryEditor({
           This can’t be undone. The share link stops working right away, and all {gallery.itemCount}{' '}
           photos and any download archives are deleted.
         </p>
-        <label className="flex flex-col gap-1 text-sm text-[var(--color-ink)]">
+        <label className="lm-field lm-field-label">
           Type “delete” to confirm
           <input
             value={deleteConfirmText}
@@ -532,6 +546,6 @@ export function GalleryEditor({
           />
         </label>
       </ConfirmDialog>
-    </main>
+    </div>
   );
 }
