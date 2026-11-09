@@ -81,7 +81,7 @@
         { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives" },
         { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives" },
       ],
-      "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "HYPERDRIVE_ID_PRODUCTION" }],
+      "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "57fc2b98a702423a9bea23c5f79c96d0" }],
       "containers": [
         {
           "class_name": "ImageProcessorContainer",
