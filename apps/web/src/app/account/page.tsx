@@ -6,6 +6,7 @@ import { getDb } from '@/lib/db';
 import { formatDate, formatGigabytes } from '@/lib/format';
 import { getAccountUsageSummary } from '@/server/account';
 import { signOutAction } from '../auth/actions';
+import { AppHeader, Tag, buttonClass } from '@/components/ui';
 
 export const metadata = { title: 'Account' };
 // Per-user, auth-gated: never prerendered or cached.
@@ -19,11 +20,8 @@ const STATUS_NOTE: Partial<Record<AccountUsageSummary['billingStatus'], string>>
   canceled: 'Canceled',
 };
 
-const section =
-  'flex flex-col gap-4 rounded-[var(--radius-control)] border border-[var(--color-line)] p-6';
-const link = 'min-h-11 content-center underline-offset-4 hover:underline';
-const disabledButton =
-  'inline-flex min-h-11 items-center justify-center self-start rounded-[var(--radius-control)] border border-[var(--color-line)] px-5 font-medium disabled:opacity-60';
+const section = 'lm-panel flex flex-col gap-4 p-6';
+const disabledButton = buttonClass('secondary', 'md', 'self-start');
 
 function UsageRow({ label, meter, extra }: { label: string; meter: UsageMeter; extra?: string }) {
   let value: string;
@@ -62,96 +60,102 @@ export default async function AccountPage() {
   const items = summary.storage.itemCount;
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col gap-8 px-4 py-10">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="font-[family-name:var(--font-display)] text-3xl font-semibold tracking-tight">
-          Account
-        </h1>
-        <div className="flex flex-wrap items-center gap-4">
-          <Link href="/dashboard" className={link}>
-            Galleries
-          </Link>
-          <form action={signOutAction}>
-            <button type="submit" className="min-h-11 underline-offset-4 hover:underline">
-              Sign out
-            </button>
-          </form>
-        </div>
-      </header>
-
-      <section aria-labelledby="account-profile" className={section}>
-        <h2 id="account-profile" className="text-xl font-semibold">
-          Profile
-        </h2>
-        <dl className="grid gap-4 sm:grid-cols-2">
-          <div className="flex flex-col gap-1">
-            <dt className="text-sm text-[var(--color-ink-muted)]">Email</dt>
-            <dd className="break-all">{summary.email ?? 'Unknown'}</dd>
-          </div>
-          <div className="flex flex-col gap-1">
-            <dt className="text-sm text-[var(--color-ink-muted)]">Plan</dt>
-            <dd>
-              {PLAN_LABEL[summary.plan]}
-              {statusNote && (
-                <span className="text-[var(--color-danger)]"> · {statusNote}</span>
-              )}{' '}
-              <Link href="/pricing" className="underline underline-offset-4">
-                See plans
+    <div className="flex min-h-dvh flex-col">
+      <AppHeader
+        actions={
+          <>
+            <nav aria-label="Account" className="flex items-center gap-1">
+              <Link href="/dashboard" className={buttonClass('ghost')}>
+                Galleries
               </Link>
-            </dd>
-          </div>
-        </dl>
-      </section>
+            </nav>
+            <form action={signOutAction}>
+              <button type="submit" className={buttonClass('ghost')}>
+                Sign out
+              </button>
+            </form>
+          </>
+        }
+      />
+      <main className="mx-auto flex w-full max-w-[var(--app-max)] flex-col gap-6 px-4 py-8 sm:px-8 sm:py-10">
+        <h1 className="lm-title-1">Account</h1>
 
-      <section aria-labelledby="account-usage" className={section}>
-        <div className="flex flex-col gap-1">
-          <h2 id="account-usage" className="text-xl font-semibold">
-            Usage
+        <section aria-labelledby="account-profile" className={section}>
+          <h2 id="account-profile" className="text-xl font-semibold">
+            Profile
           </h2>
-          <p className="text-sm text-[var(--color-ink-muted)]">
-            Billing period {formatDate(summary.period.start)} – {formatDate(summary.period.end)}{' '}
-            (UTC). Decimal units: 1 GB = 1,000,000,000 bytes.
-          </p>
-        </div>
-        <dl className="grid gap-4 sm:grid-cols-2">
-          <UsageRow
-            label="Storage"
-            meter={summary.storage}
-            extra={`${items} ${items === 1 ? 'photo' : 'photos'}`}
-          />
-          <UsageRow label="Delivery this period" meter={summary.delivery} />
-        </dl>
-      </section>
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-1">
+              <dt className="text-sm text-[var(--color-ink-muted)]">Email</dt>
+              <dd className="break-all">{summary.email ?? 'Unknown'}</dd>
+            </div>
+            <div className="flex flex-col gap-1">
+              <dt className="text-sm text-[var(--color-ink-muted)]">Plan</dt>
+              <dd>
+                <Tag tone={summary.plan === 'pro' ? 'pro' : 'surface'}>
+                  {PLAN_LABEL[summary.plan]}
+                </Tag>
+                {statusNote && <span className="text-[var(--color-danger)]"> · {statusNote}</span>}{' '}
+                <Link href="/pricing" className="underline underline-offset-4">
+                  See plans
+                </Link>
+              </dd>
+            </div>
+          </dl>
+        </section>
 
-      <section aria-labelledby="account-billing" className={section}>
-        <div className="flex flex-col gap-1">
-          <h2 id="account-billing" className="text-xl font-semibold">
-            Billing
-          </h2>
-          <p className="text-sm text-[var(--color-ink-muted)]">Available when paid plans launch.</p>
-        </div>
-        <div className="grid gap-6 sm:grid-cols-2">
-          <div className="flex flex-col gap-2">
-            <h3 className="font-medium">Invoices</h3>
+        <section aria-labelledby="account-usage" className={section}>
+          <div className="flex flex-col gap-1">
+            <h2 id="account-usage" className="text-xl font-semibold">
+              Usage
+            </h2>
             <p className="text-sm text-[var(--color-ink-muted)]">
-              Monthly invoices and receipts will be listed here.
+              Billing period {formatDate(summary.period.start)} – {formatDate(summary.period.end)}{' '}
+              (UTC). Decimal units: 1 GB = 1,000,000,000 bytes.
             </p>
-            <button type="button" disabled className={disabledButton}>
-              View invoices
-            </button>
           </div>
-          <div className="flex flex-col gap-2">
-            <h3 className="font-medium">Spending cap and alerts</h3>
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <UsageRow
+              label="Storage"
+              meter={summary.storage}
+              extra={`${items} ${items === 1 ? 'photo' : 'photos'}`}
+            />
+            <UsageRow label="Delivery this period" meter={summary.delivery} />
+          </dl>
+        </section>
+
+        <section aria-labelledby="account-billing" className={section}>
+          <div className="flex flex-col gap-1">
+            <h2 id="account-billing" className="text-xl font-semibold">
+              Billing
+            </h2>
             <p className="text-sm text-[var(--color-ink-muted)]">
-              Pro accounts will set a monthly overage cap and get email alerts at 50%, 80% and 100%
-              of it.
+              Available when paid plans launch.
             </p>
-            <button type="button" disabled className={disabledButton}>
-              Set spending cap
-            </button>
           </div>
-        </div>
-      </section>
-    </main>
+          <div className="grid gap-6 sm:grid-cols-2">
+            <div className="flex flex-col gap-2">
+              <h3 className="font-medium">Invoices</h3>
+              <p className="text-sm text-[var(--color-ink-muted)]">
+                Monthly invoices and receipts will be listed here.
+              </p>
+              <button type="button" disabled className={disabledButton}>
+                View invoices
+              </button>
+            </div>
+            <div className="flex flex-col gap-2">
+              <h3 className="font-medium">Spending cap and alerts</h3>
+              <p className="text-sm text-[var(--color-ink-muted)]">
+                Pro accounts will set a monthly overage cap and get email alerts at 50%, 80% and
+                100% of it.
+              </p>
+              <button type="button" disabled className={disabledButton}>
+                Set spending cap
+              </button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
   );
 }
