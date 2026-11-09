@@ -8,6 +8,7 @@ import { assertSameOrigin } from '@/lib/origin';
 import { parseJsonBody } from '@/lib/request-guards';
 import type { RouteScope } from '@/lib/route';
 import type { EditorDeps } from './gallery-editor';
+import { optionalMintDeps } from './public-context';
 
 export const NO_STORE = { 'Cache-Control': 'no-store' } as const;
 
@@ -40,6 +41,7 @@ export async function editorRequestContext(
       log: scope.log,
       requestId: scope.requestId,
       appUrl: serverEnv().NEXT_PUBLIC_APP_URL,
+      media: optionalMintDeps(),
     },
   };
 }

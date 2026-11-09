@@ -16,6 +16,103 @@ export const STATUS_LABEL: Record<MediaStatus, string> = {
   deleted: 'Removed',
 };
 
+/** Pipeline states shown as a spinner overlay (still uploading or processing). */
+const IN_PROGRESS: ReadonlySet<MediaStatus> = new Set([
+  'reserved',
+  'uploading',
+  'uploaded',
+  'processing',
+  'deleting',
+]);
+
+/** Short overlay label (visually hidden; announced with the spinner). */
+const PENDING_LABEL: Partial<Record<MediaStatus, string>> = {
+  reserved: 'Waiting to upload',
+  uploading: 'Uploading',
+  uploaded: 'Processing',
+  processing: 'Processing',
+  deleting: 'Removing',
+};
+
+/**
+ * The picture area of one tile:
+ * - ready → the owner thumbnail only (no badge); without one, a neutral image placeholder;
+ * - uploading/processing → spinner overlay over the local preview (if the uploader on this page
+ *   still holds the file) or over the neutral shimmer; static icon under reduced motion;
+ * - failed → icon + short text, full message as tooltip (never colour alone).
+ */
+export function TileMedia({
+  item,
+  localPreview,
+  onThumbnailError,
+}: {
+  item: EditorMediaItem;
+  localPreview?: string;
+  onThumbnailError?: (mediaId: string) => void;
+}) {
+  // The `src` that failed to load; a newer URL from the next refresh renders again.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+
+  if (item.status === 'failed') {
+    return (
+      <div
+        className="flex h-full w-full flex-col items-center justify-center gap-1 bg-[var(--color-danger-soft)] px-2 text-center text-[var(--color-danger)]"
+        title={STATUS_LABEL.failed}
+        data-testid="tile-failed"
+      >
+        <Icon name="alert" size={22} />
+        <span className="text-[13px] leading-[18px] font-medium">Unavailable</span>
+        <span className="text-[12px] leading-4">Re-upload or delete</span>
+      </div>
+    );
+  }
+
+  const pending = IN_PROGRESS.has(item.status);
+  const remote = item.status === 'ready' ? item.thumbnailUrl : null;
+  const src = remote && remote !== failedSrc ? remote : (localPreview ?? null);
+
+  return (
+    <div className="relative h-full w-full">
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element -- short-lived gateway URL / local blob
+        <img
+          key={src}
+          src={src}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          className={`h-full w-full object-cover ${pending ? 'lm-tile-pending-img' : ''}`}
+          data-testid="tile-thumbnail"
+          onError={() => {
+            if (src !== remote) return;
+            setFailedSrc(src);
+            onThumbnailError?.(item.id);
+          }}
+        />
+      ) : pending ? (
+        <span aria-hidden="true" className="lm-shimmer block h-full w-full" />
+      ) : (
+        <span
+          aria-hidden="true"
+          className="flex h-full w-full items-center justify-center bg-[var(--color-sunken)] text-[var(--color-ink-muted)]"
+        >
+          <Icon name="image" size={24} />
+        </span>
+      )}
+      {pending && (
+        <span className="lm-tile-status" data-testid="tile-pending">
+          <span className="lm-tile-status-chip">
+            <span className="lm-spinner" aria-hidden="true" />
+            <Icon name="clock" size={20} className="lm-spinner-static" />
+            <span className="sr-only">{PENDING_LABEL[item.status] ?? 'Processing'}</span>
+          </span>
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** Returns a copy of `list` with the element at `from` moved to index `to`. */
 export function moveItem<T>(list: readonly T[], from: number, to: number): T[] {
   const next = [...list];
@@ -41,7 +138,7 @@ interface DragState {
 }
 
 /**
- * Editor grid (T15): status tiles, cover selection, delete, and reorder by drag (mouse/pen:
+ * Editor grid (T15): photo thumbnails with status overlays, cover selection, delete, and reorder by drag (mouse/pen:
  * drag the handle; touch: long-press the handle, then drag) with accessible "Move earlier /
  * Move later" buttons as the non-drag alternative (PRD §4).
  */
@@ -53,11 +150,17 @@ export function MediaGrid({
   onMove,
   onSetCover,
   onDelete,
+  localPreviews,
+  onThumbnailError,
 }: {
   items: readonly EditorMediaItem[];
   coverMediaId: string | null;
   effectiveCoverMediaId: string | null;
   disabled?: boolean;
+  /** Object URLs of files still held by the uploader on this page, by media id. */
+  localPreviews?: ReadonlyMap<string, string>;
+  /** A ready tile's gateway thumbnail failed to load (e.g. its token expired). */
+  onThumbnailError?: (mediaId: string) => void;
   onMove: (from: number, to: number) => void;
   onSetCover: (mediaId: string | null) => void;
   onDelete: (item: EditorMediaItem) => void;
@@ -159,7 +262,9 @@ export function MediaGrid({
             ].join(' ')}
           >
             <div
-              className={`relative flex aspect-[4/3] items-center justify-center ${item.status === 'failed' ? 'bg-[var(--color-danger-soft)]' : 'bg-[var(--color-sunken)]'}`}
+              className="relative aspect-[4/3] bg-[var(--color-sunken)]"
+              data-testid="media-tile"
+              data-status={item.status}
             >
               {dragOver === index && dragFrom !== null && dragFrom !== index && (
                 // The ink drop line marks where the dragged photo lands.
@@ -168,16 +273,11 @@ export function MediaGrid({
                   className={`absolute inset-y-0 z-10 w-[3px] bg-[var(--color-ink)] shadow-[0_0_0_1px_var(--color-surface)] ${dragFrom < index ? '-right-0.5' : '-left-0.5'}`}
                 />
               )}
-              {item.thumbnailUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element -- short-lived gateway URL
-                <img src={item.thumbnailUrl} alt="" className="h-full w-full object-cover" />
-              ) : (
-                <span
-                  className={`px-2 text-center text-[12px] leading-4 font-medium ${item.status === 'failed' ? 'text-[var(--color-danger)]' : 'text-[var(--color-ink-muted)]'}`}
-                >
-                  {STATUS_LABEL[item.status]}
-                </span>
-              )}
+              <TileMedia
+                item={item}
+                localPreview={localPreviews?.get(item.id)}
+                onThumbnailError={onThumbnailError}
+              />
               {isHero && (
                 <span className="lm-tag lm-tag-surface absolute top-2 right-2 shadow-[var(--shadow-raised)]">
                   <Icon name="star" size={14} />

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { buttonClass } from '@/components/ui';
 import { openDraftStore } from '@/lib/draft-store';
 import {
@@ -13,6 +13,7 @@ import {
   type UploadApi,
 } from '@/lib/upload';
 import { PHOTO_ACCEPT, UploadZone } from './upload-zone';
+import { UploadBridgeContext } from './upload-bridge';
 import { UploadList } from './upload-list';
 
 function connection(): ConnectionInfo | undefined {
@@ -108,6 +109,17 @@ export function GalleryUploader({
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [busy]);
+
+  // Let the surrounding editor (if any) preview local files and pick up new photos.
+  const bridge = useContext(UploadBridgeContext);
+  useEffect(() => {
+    if (!bridge) return;
+    bridge.report(
+      snapshot.items.flatMap((i) =>
+        i.mediaId ? [{ mediaId: i.mediaId, state: i.state, file: engine.getFile(i.clientId) }] : [],
+      ),
+    );
+  }, [bridge, engine, snapshot]);
 
   const awaiting = snapshot.items.filter((i) => i.state === 'awaiting_file');
 

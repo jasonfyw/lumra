@@ -95,6 +95,26 @@ deliverySuspended, updatedAt}` stored as JSON in KV namespace `ACCESS_STATE`, ke
 - All public responses are `Cache-Control: private, no-store` and rate limited per IP
   (`publicGalleryRead`, `publicMediaTokens`).
 
+### Owner previews (editor thumbnails)
+
+- The owner's editor (`GET`/`PATCH /api/v1/galleries/{id}` and the `/dashboard/galleries/[id]` page)
+  returns one `thumbnailUrl` per `ready` item: a `preview` token for `w640` (else `w320`) carrying
+  `scope: 'owner'` and the current `access_version`. It is minted only after the request has been
+  authorized as the gallery's owner in Postgres (signed-in Supabase user, `owner_id` match, live
+  gallery); every other caller gets the editor's 401/concealed 404 and no URLs.
+- The gateway applies the normal rule to owner previews with two relaxations
+  (`evaluateGalleryAccess(…, { ownerPreview: true })`): a **missing** KV document is allowed (drafts
+  never get one), and **expiry** is ignored (the creator still manages an expired gallery). A
+  tombstone (deleted), any `access_version` mismatch and `deliverySuspended` deny owner previews too.
+  `scope` exists only on `preview` claims, so originals and archives are unaffected.
+- Bounded exposure: a leaked owner token is one derivative of one item for ≤ 5 min, the same as any
+  recipient token. Owner previews are delivery like any other preview (one `delivery.served` event).
+- The editor keeps the URL a tile first rendered with; when an image fails to load (typically an
+  expired token on a lazily loaded tile) it refetches the detail once per item per minute and
+  swaps in the fresh URL.
+- Deploy order: the gateway first. An older gateway ignores `scope` and keeps 404ing draft
+  thumbnails (the editor then shows a neutral placeholder); published galleries work either way.
+
 ### Cache policy
 
 - Previews: `private, max-age=300`, `inline`, `Content-Type` restricted to `image/*` (else

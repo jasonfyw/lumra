@@ -81,7 +81,14 @@ Auth-gated server page (`redirect` to `/auth?returnTo=…`; other users get `not
 
 - inline title edit (Enter saves, Escape cancels);
 - `uploadSlot` prop, marked `data-slot="upload-zone"`, where the T14 upload zone mounts;
-- status tiles (processing / failed visible to the creator), cover toggle, delete with confirmation;
+- photo tiles: ready items show only their owner-scoped thumbnail (no badge); uploading/processing
+  items show a spinner overlay (static clock icon under `prefers-reduced-motion`, visually hidden
+  label such as "Processing") over the local file preview when the uploader on the page still holds
+  the file, otherwise over the neutral shimmer; failed items show an alert icon, "Unavailable / Re-upload
+  or delete" and the full message as a tooltip. The tile's accessible name keeps the status. Cover
+  toggle, delete with confirmation;
+- the uploader reports new media ids to the editor (`UploadBridgeContext`), which refetches so new
+  uploads appear in the grid and polling starts;
 - reorder by dragging the handle (mouse/pen; long-press on touch) **or** the "Move earlier/later"
   buttons. The order updates optimistically and saves are serialised: the latest order wins, and a
   409 reloads. The grid polls every 5 s while items are still uploading or processing;
@@ -97,5 +104,6 @@ All controls are ≥ 44 px, keyboard operable, and announced through a polite `a
 
 ## Not here
 
-Public gallery reads, the unlock endpoint and session cookie, media tokens, the KV writer and the
-creator thumbnails (`thumbnailUrl` is `null` until T20) belong to the recipient side and T20.
+Public gallery reads, the unlock endpoint and session cookie, media tokens and the KV writer belong
+to the recipient side and T20. Creator thumbnails are owner-scoped preview tokens minted by the
+detail endpoint (ADR-001 "Owner previews").
