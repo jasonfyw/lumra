@@ -33,3 +33,17 @@ Every rounding step is **half up** and applied once.
 Admission reason codes: `free_storage_cap`, `free_delivery_cap`, `spend_cap`, `past_due`, `account_canceled`;
 gallery creation: `free_gallery_cap`. Past-due timeline (`deriveBillingRestrictions`): uploads and new archives
 stop immediately, public delivery is suspended after 7 days, and media is retained for 30 more days.
+
+## Account page (`/account`, `GET /api/v1/billing/usage`)
+
+Read-only summary for the signed-in owner (FR-N03), built by `getAccountUsageSummary`
+(`apps/web/src/server/account.ts`) with the rules in `@lumra/billing` (`currentBillingPeriod`, `summarizeUsage`):
+
+- **Plan / status:** `profiles.plan_id` and `billing_accounts.status` (both created by `handle_new_user`).
+- **Period:** `billing_accounts.billing_period_start/end`, else the UTC calendar month (same rule as admission).
+- **Storage:** bytes of stored originals (`uploaded`/`processing`/`ready`) plus generated derivatives in the owner's
+  non-deleted galleries — the dashboard's per-gallery size summed. Free shows it against the 1 GB hard cap
+  (admission additionally reserves an estimate for not-yet-generated derivatives).
+- **Delivery:** `usage_ledger` `delivery_bytes` for the current period. Shown as "Not yet tracked" until the ledger
+  holds any delivery row for the account (gateway metering lands with T27).
+- **Invoices, spending cap and alerts:** rendered disabled ("available when paid plans launch") until T29–T32.

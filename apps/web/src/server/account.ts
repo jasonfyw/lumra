@@ -1,0 +1,118 @@
+import 'server-only';
+import { sql } from 'drizzle-orm';
+import { currentBillingPeriod, summarizeUsage } from '@lumra/billing';
+import type { AccountUsageSummary } from '@lumra/contracts';
+import type { Database } from '@lumra/db';
+
+/**
+ * Account page / `GET /api/v1/billing/usage` (PRD §4, FR-N03). Read-only. The caller has already
+ * authenticated the user; every query is scoped to `userId`, so no other account's rows are read.
+ * Figures come from data that exists today:
+ *  - storage: bytes of stored originals plus generated derivatives in non-deleted galleries
+ *    (the same definition as the dashboard's per-gallery size);
+ *  - delivery: `usage_ledger` delivery bytes for the current period, reported as untracked until
+ *    the ledger holds any delivery row for the account (delivery metering lands with T27).
+ * Rules (period, limits, percentages) live in `@lumra/billing`.
+ */
+
+interface AccountRow extends Record<string, unknown> {
+  email: string | null;
+  plan_id: 'free' | 'pro' | null;
+  max_storage_bytes: string | null;
+  max_delivery_bytes_per_month: string | null;
+  status: AccountUsageSummary['billingStatus'] | null;
+  billing_period_start: Date | string | null;
+  billing_period_end: Date | string | null;
+}
+
+interface StorageRow extends Record<string, unknown> {
+  item_count: string;
+  original_bytes: string;
+  variant_bytes: string;
+}
+
+interface DeliveryRow extends Record<string, unknown> {
+  period_bytes: string;
+  has_delivery: boolean;
+}
+
+const toDate = (v: Date | string | null): Date | null =>
+  v === null ? null : v instanceof Date ? v : new Date(v);
+const toBytes = (v: string | null): number | null => (v === null ? null : Number(v));
+
+export async function getAccountUsageSummary(
+  db: Database,
+  user: { userId: string; email: string | null },
+  now = new Date(),
+): Promise<AccountUsageSummary> {
+  const { userId } = user;
+
+  // Plan limits come from the `plans` row (authoritative copy of the rate card).
+  const [account] = (await db.execute<AccountRow>(sql`
+    select p.email, p.plan_id,
+           pl.max_storage_bytes::text as max_storage_bytes,
+           pl.max_delivery_bytes_per_month::text as max_delivery_bytes_per_month,
+           ba.status, ba.billing_period_start, ba.billing_period_end
+    from (select ${userId}::uuid as user_id) u
+    left join public.profiles p on p.user_id = u.user_id
+    left join public.plans pl on pl.id = coalesce(p.plan_id, 'free')
+    left join public.billing_accounts ba on ba.user_id = u.user_id
+  `)) as unknown as AccountRow[];
+
+  const period = currentBillingPeriod(
+    {
+      billingPeriodStart: toDate(account?.billing_period_start ?? null),
+      billingPeriodEnd: toDate(account?.billing_period_end ?? null),
+    },
+    now,
+  );
+
+  const [storage] = (await db.execute<StorageRow>(sql`
+    select count(*)::text as item_count,
+           coalesce(sum(m.byte_size), 0)::text as original_bytes,
+           coalesce((
+             select sum(mv.byte_size)
+             from public.media_variants mv
+             join public.media mm on mm.id = mv.media_id
+             join public.galleries gg on gg.id = mm.gallery_id
+             where gg.owner_id = ${userId}::uuid and gg.deleted_at is null
+               and mm.deleted_at is null
+           ), 0)::text as variant_bytes
+    from public.media m
+    join public.galleries g on g.id = m.gallery_id
+    where g.owner_id = ${userId}::uuid and g.deleted_at is null and m.deleted_at is null
+      and m.status in ('uploaded', 'processing', 'ready')
+  `)) as unknown as StorageRow[];
+
+  const [delivery] = (await db.execute<DeliveryRow>(sql`
+    select
+      coalesce(sum(quantity_micro_units) filter (
+        where period_start = ${period.start.toISOString()}::timestamptz
+      ), 0)::text as period_bytes,
+      count(*) > 0 as has_delivery
+    from public.usage_ledger
+    where account_id = ${userId}::uuid and metric = 'delivery_bytes'
+  `)) as unknown as DeliveryRow[];
+
+  const storedBytes = Number(storage?.original_bytes ?? 0) + Number(storage?.variant_bytes ?? 0);
+  // Compensating rows can be negative; a period total never shows below zero.
+  const deliveryBytes = delivery?.has_delivery ? Math.max(0, Number(delivery.period_bytes)) : null;
+
+  const usage = summarizeUsage({
+    plan: {
+      maxStorageBytes: toBytes(account?.max_storage_bytes ?? null),
+      maxDeliveryBytesPerMonth: toBytes(account?.max_delivery_bytes_per_month ?? null),
+    },
+    storedBytes,
+    deliveryBytes,
+  });
+
+  return {
+    email: user.email ?? account?.email ?? null,
+    plan: account?.plan_id ?? 'free',
+    billingStatus: account?.status ?? 'free',
+    period: { start: period.start.toISOString(), end: period.end.toISOString() },
+    storage: { ...usage.storage, itemCount: Number(storage?.item_count ?? 0) },
+    delivery: usage.delivery,
+  };
+}

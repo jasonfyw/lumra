@@ -11,3 +11,4 @@ export type * from './ports';
 export * from './rating';
 export * from './storage';
 export * from './units';
+export * from './usage-summary';

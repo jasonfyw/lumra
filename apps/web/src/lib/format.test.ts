@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { formatBytes, formatDate } from './format';
+import { formatBytes, formatDate, formatGigabytes } from './format';
+
+describe('formatGigabytes (decimal GB)', () => {
+  it.each([
+    [0, '0 GB'],
+    [-5, '0 GB'],
+    [1, '< 0.01 GB'],
+    [4_999_999, '< 0.01 GB'],
+    [5_000_000, '0.01 GB'],
+    [250_000_000, '0.25 GB'],
+    [1_000_000_000, '1 GB'],
+    [1_234_567_890, '1.23 GB'],
+    [1_500_000_000_000, '1,500 GB'],
+  ])('%d → %s', (bytes, text) => {
+    expect(formatGigabytes(bytes)).toBe(text);
+  });
+});
 
 describe('formatBytes (decimal units)', () => {
   it.each([
