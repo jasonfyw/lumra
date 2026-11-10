@@ -15,19 +15,19 @@ match the bucket/queue names in the two `wrangler.jsonc` files.
 | R2 bucket | `lumra-temp-archives[-<env>]`               | Private. No CORS. Lifecycle: delete objects after 1 day (FR-D04).                         |
 | Queue     | `lumra-jobs[-<env>]` + `lumra-jobs-dlq[-…]` | Messages carry IDs only.                                                                  |
 | API token | `lumra-web-presign-<env>`                   | Object Read & Write on `originals` only; used by Vercel to presign PUTs (dashboard step). |
-| Gateway   | `lumra-media-gateway` on `*.workers.dev`    | No custom media domain while the app runs on `lumra-ten.vercel.app`.                      |
+| Gateway   | `lumra-media-gateway` on `*.workers.dev`    | No custom media domain yet (app: `www.lumra.photos`, DNS on Vercel).                      |
 
 No bucket has `r2.dev` public access or a custom domain: the only read path is the media gateway
 (R2 binding), and the only write path from browsers is a presigned URL (PRD §6.1–6.2, §11).
 
 ## Files
 
-| File                           | Applied to      | Purpose                                                                                                                                                                                                                               |
-| ------------------------------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cors.originals.<env>.json`    | originals       | Allow `PUT`/`HEAD` with `content-type` from the env's app origin only (dev/staging: `http://localhost:3000`; production: `https://lumra-ten.vercel.app`); expose `ETag` (needed to complete multipart uploads); preflight cached 1 h. |
-| `lifecycle.originals.json`     | originals       | Abort incomplete multipart uploads after 2 days (abandoned uploads still bill storage).                                                                                                                                               |
-| `lifecycle.temp-archives.json` | temp-archives   | Delete archive objects (and abort their multipart uploads) after 1 day.                                                                                                                                                               |
-| `setup.sh`                     | one env per run | Creates missing buckets/queues, disables `r2.dev`, applies CORS + lifecycle, prints verification. Idempotent.                                                                                                                         |
+| File                           | Applied to      | Purpose                                                                                                                                                                                                                                                                                                              |
+| ------------------------------ | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cors.originals.<env>.json`    | originals       | Allow `PUT`/`HEAD` with `content-type` from the env's app origin only (dev/staging: `http://localhost:3000`; production: `https://www.lumra.photos`, `https://lumra.photos` and, during the transition, `https://lumra-ten.vercel.app`); expose `ETag` (needed to complete multipart uploads); preflight cached 1 h. |
+| `lifecycle.originals.json`     | originals       | Abort incomplete multipart uploads after 2 days (abandoned uploads still bill storage).                                                                                                                                                                                                                              |
+| `lifecycle.temp-archives.json` | temp-archives   | Delete archive objects (and abort their multipart uploads) after 1 day.                                                                                                                                                                                                                                              |
+| `setup.sh`                     | one env per run | Creates missing buckets/queues, disables `r2.dev`, applies CORS + lifecycle, prints verification. Idempotent.                                                                                                                                                                                                        |
 
 The staging app origin is added to `cors.originals.staging.json` once the stable staging alias exists
 (T38). CORS is not access control — presigned URLs are — but keeping origins tight limits which

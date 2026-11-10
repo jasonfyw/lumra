@@ -38,8 +38,11 @@
       "queues": { "producers": [{ "binding": "USAGE", "queue": "lumra-usage-staging" }] },
     },
     "production": {
-      // Served on the Worker's workers.dev URL; no custom media domain while on vercel.app.
-      "vars": { "APP_ORIGIN": "https://lumra-ten.vercel.app" },
+      // Canonical app origin is www.lumra.photos (apex 308s to www); lumra-ten.vercel.app is kept
+      // during the domain transition. Served on the Worker's workers.dev URL.
+      "vars": {
+        "APP_ORIGIN": "https://www.lumra.photos,https://lumra.photos,https://lumra-ten.vercel.app",
+      },
       "r2_buckets": [
         { "binding": "ORIGINALS", "bucket_name": "lumra-originals" },
         { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives" },
