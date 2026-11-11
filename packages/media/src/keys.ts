@@ -30,6 +30,21 @@ export function archivePartKey(galleryId: string, jobId: string, partNo: number)
   return `archives/${galleryId}/${jobId}/${partNo}.zip`;
 }
 
+/**
+ * Prefix of every derivative of one gallery (`derivatives/{galleryId}/`), for the deletion purge
+ * (T13, FR-G06): listing it also finds variants that never got a `media_variants` row.
+ */
+export function derivativeGalleryPrefix(galleryId: string): string {
+  assertOpaque('galleryId', galleryId);
+  return `derivatives/${galleryId}/`;
+}
+
+/** Prefix of every temp-archive part of one gallery (`archives/{galleryId}/`), see above. */
+export function archiveGalleryPrefix(galleryId: string): string {
+  assertOpaque('galleryId', galleryId);
+  return `archives/${galleryId}/`;
+}
+
 const ID = '[A-Za-z0-9-]{8,64}';
 const STORAGE_KEY_PATTERNS = [
   new RegExp(`^originals/${ID}/${ID}/${ID}/source$`),

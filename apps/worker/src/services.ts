@@ -1,11 +1,13 @@
 import {
   createAccessStateRepository,
   createBillingRepository,
+  createDeletionRepository,
   createMediaPipelineRepository,
   createOutboxRepository,
   createSqlClient,
   type AccessStateRepository,
   type BillingRepository,
+  type DeletionRepository,
   type MediaPipelineRepository,
   type OutboxRepository,
 } from '@lumra/db';
@@ -23,6 +25,8 @@ export interface Services {
   accessStateRepo(): AccessStateRepository;
   /** Rate card, usage ledger and metering reads/writes (T27). */
   billingRepo(): BillingRepository;
+  /** Physical deletion: purge reads/marks and the backstop sweep (T13). */
+  deletionRepo(): DeletionRepository;
   /**
    * Processor client. `slot` pins the container instance (0..PROCESSOR_POOL_SIZE-1) so the
    * concurrent jobs of one batch never share an instance (`processor_busy`); without it the
@@ -96,6 +100,7 @@ export function createServices(env: Env): Services {
     outboxRepo: () => createOutboxRepository(db()),
     accessStateRepo: () => createAccessStateRepository(db()),
     billingRepo: () => createBillingRepository(db()),
+    deletionRepo: () => createDeletionRepository(db()),
     processor: (slot) => {
       let client = processors.get(slot);
       if (!client) {

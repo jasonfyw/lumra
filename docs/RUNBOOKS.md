@@ -5,6 +5,7 @@ Filled in as the relevant systems land (T13, T38). Each runbook: symptom → das
 - [x] [Queue backlog > 30 min / DLQ growth (T12)](#queue-backlog--dead-letter-queue)
 - [ ] Upload finalize error rate > 2% (T10)
 - [x] [Gallery access state out of sync / gateway 403s (T20)](#gallery-access-state-kv-sync-t20)
+- [x] [Deleted media / galleries not purged from R2 (T13)](#physical-deletion-purge-t13)
 - [ ] Media gateway 5xx > 1% for 10 min (T20)
 - [ ] Stripe webhook unresolved > 15 min (T29)
 - [ ] Billed vs provider consumption drift > 10% (T31)
@@ -76,9 +77,11 @@ all sessions of a gallery by bumping `galleries.access_version` (+ enqueue the K
 - `media_variants`. Failed jobs retry with exponential backoff (20 s … 15 min); jobs that hit a
   deadline retry after 5 s, 15 s, 60 s, 180 s, 600 s. After `max_retries: 5` they land in
   `lumra-jobs-dlq-<env>`. Poison (schema-invalid) messages are logged as `invalid queue message`
-  and acked, never retried. Valid messages whose type has no handler yet (e.g. `media.delete` until
-  T13) are logged as `no handler registered` and retried every 60 s; after `max_retries` they sit in
-  the DLQ — replay them once the handler ships.
+  and acked, never retried. Valid messages whose type has no handler (e.g. `guest.expire` today)
+  are logged as `no handler registered; message dropped` (error, with `type` and `dedupeKey`, plus a
+  Sentry event) and acked — retrying could never succeed and only parked them in the DLQ, which has
+  no consumer. Once the handler ships, re-queue them from the outbox:
+  `update public.job_outbox set processed_at = null, available_at = now() where event_name = '<type>' and …;`
 
 **Deadlines**: nothing in the worker may wait forever. Postgres: `connect_timeout` 5 s, idle 2 s,
 `fetch_types` off (direct connections also get `statement_timeout` 15 s; behind Hyperdrive the
@@ -154,6 +157,44 @@ and updated_at < now() - interval '30 minutes' group by 1;` (T13 re-enqueues the
 
 **Follow-up**: record the incident, the replay counts printed by the script, and whether alert
 thresholds need tuning.
+
+## Physical deletion purge (T13)
+
+**Pipeline** (FR-G06): deleting a photo (or aborting an upload) sets media `deleting` + `deleted_at`
+and writes `media.delete:{mediaId}`; deleting a gallery sets it `deleted` and writes
+`gallery.access_changed` + `gallery.delete:{galleryId}`. The worker's `media.delete` handler deletes
+the original (`ORIGINALS`, `media.original_key`) and every variant (`DERIVATIVES`,
+`media_variants.object_key`), then marks the row `deleted` (variant rows are kept). `gallery.delete`
+writes the KV tombstone, then purges every media of the gallery in batches of 200, everything left
+under `derivatives/{galleryId}/` and `archives/{galleryId}/` (`ARCHIVES`), and marks its
+`archive_jobs` `deleted`; a run that exceeds 90 s retries and continues where it stopped. Marking
+`deleted` frees plan admission (`deleting` media with a completed upload still count).
+
+**Backstop sweep** (`*/15 * * * *`, ≤ 50 s per tick): media soft-deleted more than 1 h ago and not
+`deleted` (index `media_purge_pending_idx`), and galleries deleted more than 1 h ago that still have
+non-`deleted` media or archive jobs (10 per tick, oldest first), are purged the same way. Logs:
+`deletion sweep finished` with `galleries`, `purged`, `objectKeys`, `invalidKeys`,
+`galleriesFailed`, `mediaBatchesFailed`, `budgetExhausted`; per job `media purge finished` /
+`gallery purge finished`. Logs carry ids and counts only, never object keys.
+
+**Symptoms**: rows in `deleting` for more than a few hours; `deletion sweep finished` with
+`galleriesFailed`/`mediaBatchesFailed` > 0 or `budgetExhausted: true` on consecutive ticks;
+`purge refused: … is not deleted` (a message named live data — a producer bug).
+
+```sql
+select count(*), min(deleted_at) from public.media where deleted_at is not null and status <> 'deleted';
+select g.id, g.deleted_at from public.galleries g where g.deleted_at is not null
+  and exists (select 1 from public.media m where m.gallery_id = g.id and m.status <> 'deleted');
+```
+
+**Mitigate**: R2/Postgres outage → nothing to do; the sweep catches up once healthy (the purge is
+idempotent and safe to run concurrently). `purge skipped invalid object keys` means a stored key
+doesn't match the key scheme; those objects are left for the R2 orphan reconcile — inspect the row.
+
+**Gateway window**: the gateway does not check per-media deletion. A media token issued before the
+delete (≤ 5 min TTL) can fetch the object only until the purge removes it (normally within a minute
+of the delete; the gateway then answers 404 `object_missing`). Gallery deletion is enforced at once
+through the KV tombstone and the `access_version` bump.
 
 ## Observability (T04)
 

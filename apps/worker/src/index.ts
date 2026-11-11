@@ -17,6 +17,7 @@ import type { Env } from './env';
 import { syncGalleryAccessState } from './handlers/access-state';
 import { handleMediaUploaded } from './handlers/media-uploaded';
 import { ingestDeliveryEvents, runStorageAccrual } from './handlers/metering';
+import { purgeGallery, purgeMedia, sweepDeletions, type PurgeDeps } from './handlers/purge';
 import { bounded, type StepTimings } from './instrument';
 import { loggerFor, type Logger } from './log';
 import { relayOutbox, type QueueProducer, type RelayResult } from './outbox-relay';
@@ -41,8 +42,8 @@ export type JobHandler = (message: QueueMessage, ctx: JobContext) => Promise<unk
 
 /**
  * Handlers are registered per message type as their tasks land (T12, T13, T24, T06).
- * A type without a handler (e.g. `media.delete` until T13) is retried after 60 s each time and
- * reaches the DLQ after `max_retries`; it never hot-loops and can be replayed once T13 ships.
+ * A valid message whose type has no handler is logged as an error and acked (see `runJob`):
+ * retrying it could never succeed and only parked it in the consumer-less DLQ.
  *
  * Every dependency a handler touches is wrapped by `bounded()`: each DB / R2 / processor call
  * has its own deadline and the whole job is cut off at `DEADLINES.jobMs`.
@@ -67,9 +68,9 @@ export const handlers: Partial<Record<QueueMessage['type'], JobHandler>> = {
     log.info('media.uploaded handled', { mediaId: message.mediaId, outcome, slot });
   },
   'gallery.access_changed': accessStateJob,
-  // Tombstones the gateway's access state immediately (FR-G06). TODO(T13): also enqueue/perform
-  // the R2 cleanup here; until then the nightly orphan sweep removes the objects.
-  'gallery.delete': accessStateJob,
+  // FR-G06: KV tombstone first, then the R2 purge (T13).
+  'gallery.delete': galleryDeleteJob,
+  'media.delete': mediaDeleteJob,
 };
 
 /** `gallery.access_changed` / `gallery.delete`: rewrite the gateway's KV access state (T20). */
@@ -84,13 +85,76 @@ async function accessStateJob(message: QueueMessage, ctx: JobContext) {
   log.info('access state synced', { galleryId: message.galleryId, outcome });
 }
 
+/** Purge dependencies, each call bounded by its own deadline (T13). */
+function purgeDeps(
+  env: Env,
+  services: Services,
+  log: Logger,
+  opts: { signal?: AbortSignal; timings?: StepTimings },
+  now: () => number = Date.now,
+): PurgeDeps {
+  return {
+    repo: bounded(services.deletionRepo(), 'db', DEADLINES.dbStepMs, opts),
+    originals: bounded(env.ORIGINALS, 'r2.originals', DEADLINES.r2StepMs, opts),
+    derivatives: bounded(env.DERIVATIVES, 'r2.derivatives', DEADLINES.r2StepMs, opts),
+    archives: bounded(env.ARCHIVES, 'r2.archives', DEADLINES.r2StepMs, opts),
+    log,
+    now,
+  };
+}
+
+/** Thrown when a purge ran out of time: the queue retries and the next run continues. */
+export class PurgeIncompleteError extends Error {
+  constructor(readonly galleryId: string) {
+    super('gallery purge incomplete; will continue on retry');
+    this.name = 'PurgeIncompleteError';
+  }
+}
+
+/** Gallery purge budget inside one job, leaving headroom under `DEADLINES.jobMs`. */
+export const GALLERY_PURGE_BUDGET_MS = 90_000;
+
+/** `media.delete`: remove the original + derivatives from R2, then mark the row `deleted`. */
+async function mediaDeleteJob(message: QueueMessage, ctx: JobContext) {
+  if (message.type !== 'media.delete') return;
+  const { env, services, log, signal, timings } = ctx;
+  const result = await purgeMedia(
+    [message.mediaId],
+    purgeDeps(env, services, log, { signal, timings }),
+  );
+  log.info('media purge finished', { mediaId: message.mediaId, ...result });
+}
+
+/** `gallery.delete`: KV tombstone (gateway denies at once), then purge every object (FR-G06). */
+async function galleryDeleteJob(message: QueueMessage, ctx: JobContext) {
+  if (message.type !== 'gallery.delete') return;
+  await accessStateJob(message, ctx);
+  const { env, services, log, signal, timings } = ctx;
+  const result = await purgeGallery(
+    message.galleryId,
+    purgeDeps(env, services, log, { signal, timings }),
+    { budgetMs: GALLERY_PURGE_BUDGET_MS },
+  );
+  log.info('gallery purge finished', {
+    galleryId: message.galleryId,
+    outcome: result.outcome,
+    archiveObjects: result.archiveObjects,
+    archiveJobs: result.archiveJobs,
+    derivativePrefixObjects: result.derivativePrefixObjects,
+    ...result.media,
+  });
+  if (result.outcome === 'incomplete') throw new PurgeIncompleteError(message.galleryId);
+}
+
 /** Cron that drives the outbox relay (wrangler.jsonc `triggers.crons`). */
 export const OUTBOX_RELAY_CRON = '* * * * *';
 /** Within one cron tick the relay keeps polling for this long, so pickup latency is ~seconds. */
 export const OUTBOX_RELAY_WINDOW_MS = DEADLINES.relayTickMs;
 export const OUTBOX_RELAY_IDLE_MS = 3_000;
-/** Delay before re-delivering a message whose type has no handler yet. */
-export const UNHANDLED_RETRY_SECONDS = 60;
+/** Backstop deletion sweep (T13, FR-G06): stuck `deleting` media and deleted galleries. */
+export const DELETION_SWEEP_CRON = '*/15 * * * *';
+/** Wall-time budget for one sweep; the rest of the backlog is picked up 15 minutes later. */
+export const DELETION_SWEEP_BUDGET_MS = 50_000;
 /** Hourly storage GB-month accrual (T27), off the hour and away from the other crons. */
 export const STORAGE_ACCRUAL_CRON = '7 * * * *';
 /** Wall-time budget for one accrual run; unfinished accounts are picked up next hour. */
@@ -219,8 +283,19 @@ export function createWorker(options: WorkerOptions = {}) {
     const jobLog = log.child({ traceId, type, messageId: message.id });
     const handler = handlers[type];
     if (!handler) {
-      jobLog.warn('no handler registered', { attempt: message.attempts });
-      message.retry({ delaySeconds: UNHANDLED_RETRY_SECONDS });
+      // Ack, don't retry: redelivery can't succeed and the DLQ has no consumer. The error log +
+      // Sentry event are the record; the outbox row (same dedupeKey) can be re-queued once a
+      // handler ships.
+      jobLog.error('no handler registered; message dropped', {
+        attempt: message.attempts,
+        dedupeKey: parsed.data.dedupeKey,
+      });
+      Sentry.withScope((scope) => {
+        scope.setTag('requestId', traceId);
+        scope.setTag('jobType', type);
+        Sentry.captureMessage(`no handler registered for ${type}`, 'error');
+      });
+      message.ack();
       return;
     }
 
@@ -333,6 +408,26 @@ export function createWorker(options: WorkerOptions = {}) {
       budgetMs: STORAGE_ACCRUAL_BUDGET_MS,
     });
     log.info('storage accrual finished', { ...result, ms: now() - started, steps: timings });
+  }
+
+  /** Backstop deletion sweep (T13). Per-item failures are logged inside the sweep. */
+  async function deletionSweepTick(env: Env, services: Services, log: Logger): Promise<void> {
+    const started = now();
+    const timings: StepTimings = {};
+    const result = await sweepDeletions(purgeDeps(env, services, log, { timings }, now), {
+      budgetMs: DELETION_SWEEP_BUDGET_MS,
+      nowDate: new Date(now()),
+    });
+    log.info('deletion sweep finished', {
+      galleries: result.galleries,
+      galleriesIncomplete: result.galleriesIncomplete,
+      galleriesFailed: result.galleriesFailed,
+      mediaBatchesFailed: result.mediaBatchesFailed,
+      budgetExhausted: result.budgetExhausted,
+      ...result.media,
+      ms: now() - started,
+      steps: timings,
+    });
   }
 
   return {
@@ -459,8 +554,21 @@ export function createWorker(options: WorkerOptions = {}) {
         }
         return;
       }
+      if (controller.cron === DELETION_SWEEP_CRON) {
+        const services = makeServices(env);
+        try {
+          await deletionSweepTick(env, services, log);
+        } catch (error) {
+          log.error('deletion sweep failed', { err: error });
+          Sentry.captureException(error);
+          throw error;
+        } finally {
+          await closeServices(services, log, ctx);
+        }
+        return;
+      }
       if (controller.cron !== OUTBOX_RELAY_CRON) {
-        // Reconcilers / cleanup land with T13.
+        // Nightly R2 orphan reconcile and guest-draft expiry: remaining T13 work.
         log.info('scheduled tick', { cron: controller.cron });
         return;
       }

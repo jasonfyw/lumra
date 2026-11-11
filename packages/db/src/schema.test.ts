@@ -132,7 +132,13 @@ describe('rate card seed (T27)', () => {
     expect(rows).toEqual([RATE_CARD_V1.free, RATE_CARD_V1.pro]);
   });
 
-  it('plans seed equals RATE_CARD_V1 (the projection of the current version)', () => {
-    expect(seededRows('plans')).toEqual([RATE_CARD_V1.free, RATE_CARD_V1.pro]);
+  it('plans are re-projected from their rate version (the core seed predates v1 changes)', () => {
+    // The core-schema `plans` seed is historical; the rate-card migration's trigger copies the
+    // current version's columns onto each plan, and its `update` re-projects the seeded rows.
+    expect(seededRows('plans').map((r) => [r.id, r.rateVersion])).toEqual([
+      ['free', RATE_CARD_V1.free.rateVersion],
+      ['pro', RATE_CARD_V1.pro.rateVersion],
+    ]);
+    expect(sql).toMatch(/update public\.plans set rate_version = rate_version;/);
   });
 });

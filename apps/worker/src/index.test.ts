@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RATE_CARD_V1 } from '@lumra/config';
 import { DEADLINES } from './deadline';
 import worker, {
+  DELETION_SWEEP_CRON,
   OUTBOX_RELAY_CRON,
   RELAY_KICK_PATH,
   STORAGE_ACCRUAL_CRON,
@@ -97,6 +98,9 @@ function fakeServices(claimBatches: number) {
     billingRepo: () => {
       throw new Error('unused');
     },
+    deletionRepo: () => {
+      throw new Error('unused');
+    },
     close,
   } as Services;
   return { services, outbox, close };
@@ -164,20 +168,72 @@ describe('queue consumer', () => {
     expect(retryDelaySeconds(10)).toBe(900);
   });
 
-  it('retries messages with no registered handler with a fixed delay (→ DLQ, no hot loop)', async () => {
+  it('registers the deletion handlers (T13)', () => {
+    expect(handlers['media.delete']).toBeTypeOf('function');
+    expect(handlers['gallery.delete']).toBeTypeOf('function');
+  });
+
+  it('purges a media.delete message end to end and acks it', async () => {
+    const mediaId = '0b6f3c2e-8a51-4c1e-9d7a-2f4b5c6d7e8f';
+    const galleryId = '1c7f4d3f-9b62-4d2f-8e8b-3a5c6d7e8f90';
+    const repo = {
+      getMediaForPurge: vi.fn(async () => [
+        {
+          id: mediaId,
+          galleryId,
+          status: 'deleting',
+          originalKey: `originals/owner-12345678/${galleryId}/${mediaId}/source`,
+          mediaDeleted: true,
+          galleryDeleted: false,
+          variantKeys: [`derivatives/${galleryId}/${mediaId}/w640q80.webp`],
+        },
+      ]),
+      markMediaDeleted: vi.fn(async (ids: string[]) => ids),
+    };
+    const { services } = fakeServices(0);
+    services.deletionRepo = () => repo as unknown as ReturnType<Services['deletionRepo']>;
+    const originals = { delete: vi.fn(async () => {}) };
+    const derivatives = { delete: vi.fn(async () => {}) };
+    const w = createWorker({ createServices: () => services });
     const msg = fakeMessage({
       type: 'media.delete',
-      mediaId: '0b6f3c2e-8a51-4c1e-9d7a-2f4b5c6d7e8f',
-      traceId: 'req-3',
-      dedupeKey: 'media.delete:0b6f',
+      mediaId,
+      traceId: 'req-9',
+      dedupeKey: `media.delete:${mediaId}`,
     });
-    expect(handlers['media.delete']).toBeUndefined();
-    await worker.queue(batchOf(msg), env, ctx);
-    expect(msg.retry).toHaveBeenCalledWith({ delaySeconds: 60 });
-    expect(msg.ack).not.toHaveBeenCalled();
-    expect(events().find((e) => e.msg === 'no handler registered')).toMatchObject({
-      level: 'warn',
+    await w.queue(
+      batchOf(msg),
+      { ORIGINALS: originals, DERIVATIVES: derivatives, ARCHIVES: {} } as unknown as Env,
+      ctx,
+    );
+    expect(msg.ack).toHaveBeenCalledOnce();
+    expect(originals.delete).toHaveBeenCalledWith([
+      `originals/owner-12345678/${galleryId}/${mediaId}/source`,
+    ]);
+    expect(derivatives.delete).toHaveBeenCalledOnce();
+    expect(repo.markMediaDeleted).toHaveBeenCalledWith([mediaId]);
+    const finished = events().find((e) => e.msg === 'media purge finished');
+    expect(finished).toMatchObject({ mediaId, purged: 1, objectKeys: 2 });
+    // Logs carry ids and counts only, never object keys.
+    expect(lines.join('\n')).not.toContain('originals/');
+  });
+
+  it('acks (drops) valid messages with no registered handler instead of retrying into the DLQ', async () => {
+    const msg = fakeMessage({
+      type: 'guest.expire',
+      guestSessionId: '0b6f3c2e-8a51-4c1e-9d7a-2f4b5c6d7e8f',
       traceId: 'req-3',
+      dedupeKey: 'guest.expire:0b6f',
+    });
+    expect(handlers['guest.expire']).toBeUndefined();
+    await worker.queue(batchOf(msg), env, ctx);
+    expect(msg.ack).toHaveBeenCalledOnce();
+    expect(msg.retry).not.toHaveBeenCalled();
+    expect(events().find((e) => e.msg === 'no handler registered; message dropped')).toMatchObject({
+      level: 'error',
+      traceId: 'req-3',
+      type: 'guest.expire',
+      dedupeKey: 'guest.expire:0b6f',
     });
   });
 });
@@ -253,10 +309,41 @@ describe('scheduled outbox relay', () => {
     expect(events().some((e) => e.msg === 'storage accrual finished')).toBe(true);
   });
 
-  it('ignores other crons (T13)', async () => {
+  it('runs the deletion sweep on its */15 cron (T13) and closes the pool', async () => {
+    const { services, outbox, close } = fakeServices(1);
+    const repo = {
+      listStuckGalleries: vi.fn(async () => []),
+      listStuckMedia: vi.fn(async () => []),
+    };
+    services.deletionRepo = () => repo as unknown as ReturnType<Services['deletionRepo']>;
+    const w = createWorker({
+      createServices: () => services,
+      now: () => Date.parse('2026-11-11T12:00:00Z'),
+    });
+    expect(DELETION_SWEEP_CRON).toBe('*/15 * * * *');
+    const bucket = { delete: vi.fn(), list: vi.fn() };
+    await w.scheduled(
+      { cron: DELETION_SWEEP_CRON } as ScheduledController,
+      {
+        ORIGINALS: bucket,
+        DERIVATIVES: bucket,
+        ARCHIVES: bucket,
+      } as unknown as Env,
+    );
+    expect(repo.listStuckGalleries).toHaveBeenCalledWith(new Date('2026-11-11T11:00:00Z'), 10);
+    expect(repo.listStuckMedia).toHaveBeenCalledOnce();
+    expect(outbox.claim).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    expect(events().find((e) => e.msg === 'deletion sweep finished')).toMatchObject({
+      galleries: 0,
+      purged: 0,
+    });
+  });
+
+  it('ignores the nightly cron for now (remaining T13 reconcilers)', async () => {
     const { services, outbox } = fakeServices(1);
     const w = createWorker({ createServices: () => services });
-    await w.scheduled({ cron: '*/15 * * * *' } as ScheduledController, {} as Env);
+    await w.scheduled({ cron: '17 3 * * *' } as ScheduledController, {} as Env);
     expect(outbox.claim).not.toHaveBeenCalled();
   });
 });

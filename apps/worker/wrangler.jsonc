@@ -66,7 +66,8 @@
     "bindings": [{ "name": "IMAGE_PROCESSOR", "class_name": "ImageProcessorContainer" }],
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ImageProcessorContainer"] }],
-  // Every minute: outbox relay (polls ~50 s per tick). */15 and nightly: reconcilers (T13).
+  // Every minute: outbox relay (polls ~50 s per tick). */15: deletion purge backstop sweep (T13).
+  // Nightly: reserved for the remaining T13 reconcilers (R2 orphans, guest drafts).
   // Hourly at :07: storage GB-month accrual into usage_ledger (T27, STORAGE_ACCRUAL_CRON).
   // Top-level triggers are inherited by env.production.
   "triggers": { "crons": ["* * * * *", "*/15 * * * *", "7 * * * *", "17 3 * * *"] },
