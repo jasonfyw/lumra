@@ -57,11 +57,13 @@ intents take the same lock) and deletes on one gallery serialise.
   dashboard's stored bytes immediately). A still-pending upload session is aborted, and a guest
   reservation is released if one exists. The cover override is cleared if it pointed at this item.
   `content_version` is bumped, and a deduped `media.delete` outbox row (`media.delete:{mediaId}`)
-  tells the worker to purge the original and derivatives. Plan admission still counts the bytes of
+  tells the worker to purge the original and derivatives and mark the row `deleted` (T13; see
+  [RUNBOOKS.md](RUNBOOKS.md#physical-deletion-purge-t13)). Plan admission still counts the bytes of
   completed objects until the worker removes them.
 - **Delete gallery (FR-G06).** In one transaction: `status = 'deleted'`, `deleted_at`, `access_version + 1`,
   a `gallery.access_changed` row, and a deduped `gallery.delete` row (`gallery.delete:{galleryId}`) for
-  the asynchronous purge of originals, derivatives and archives. The gallery is unreachable (public and
+  the asynchronous purge of originals, derivatives and archives (T13: every media ends `deleted`, archive
+  jobs `deleted`; a 15-minute sweep retries anything older than 1 h). The gallery is unreachable (public and
   owner) once the transaction commits, which is before the response is sent. The Free-plan gallery slot
   is freed at the same moment. A repeat DELETE is a concealed 404.
 

@@ -7,6 +7,7 @@ export * from './gallery';
 export * from './justified-layout';
 export * from './media';
 export * from './ordering';
+export * from './purge';
 export * from './quota';
 export * from './slug';
 export * from './srcset';
