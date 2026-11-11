@@ -1,6 +1,7 @@
 export * from './access-state';
 export * from './account';
 export * from './api';
+export * from './archive';
 export * from './gallery';
 export * from './gallery-editor';
 export * from './guest';

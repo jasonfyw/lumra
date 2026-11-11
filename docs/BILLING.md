@@ -62,7 +62,8 @@ are in `@lumra/db` (`createBillingRepository`), the jobs in `apps/worker/src/han
   this run. Error ≤ |Δbytes| × 1 hour per change, never compounding. Windows are split at period boundaries. The
   cursor moves in the same transaction as the rows, guarded by the previous `accrued_through`, so overlapping or
   retried runs never double-count. An account's first run only creates the cursor (no back-billing before the job
-  existed). Archives (T24) are not counted yet.
+  existed). Temporary archives (T24) count too: completed parts of `running`/`ready` jobs of the owner's
+  non-deleted galleries, until they expire (24 h). `/account` still shows originals + derivatives only.
 - **Delivery ingestion** resolves gallery → owner, rates the batch and inserts it with one
   `INSERT … ON CONFLICT DO NOTHING`. Redelivered events are dropped by the UNIQUE key; distinct tokens or ranges
   count separately. Approximation (disclosed): one token re-downloading the _same_ byte range is counted once.
@@ -70,7 +71,11 @@ are in `@lumra/db` (`createBillingRepository`), the jobs in `apps/worker/src/han
 - **Estimated cost** per row is the marginal overage it adds to the period total so far (0 on Free and inside the
   Pro allowance); the invoice is still rated from period totals (`rateInvoice`), and the two agree.
 - **Reservations.** `CostReservationStore.pending` returns live upload intents (original + derivative estimate)
-  and archives being built (estimated as the gallery's ready originals) for admission.
+  and archives being built (estimated as the gallery's ready originals) for admission. The web app's admission
+  (`apps/web/src/server/admission.ts`, shared by upload intents and archive requests) counts archives being built by
+  their `total_bytes`.
+- **Archive downloads** are metered by the gateway's `delivery.served` events (`action: 'archive'`) like any other
+  download; see docs/DOWNLOADS.md.
 
 ## Account page (`/account`, `GET /api/v1/billing/usage`)
 

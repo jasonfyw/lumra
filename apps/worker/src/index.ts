@@ -14,7 +14,9 @@ import {
 } from '@lumra/observability';
 import { DEADLINES, isDeadlineExceeded, withDeadline } from './deadline';
 import type { Env } from './env';
+import { archiveCrc32 } from './crc';
 import { syncGalleryAccessState } from './handlers/access-state';
+import { handleArchiveBuild, RetryLaterError } from './handlers/archive-build';
 import { handleMediaUploaded } from './handlers/media-uploaded';
 import { ingestDeliveryEvents, runStorageAccrual } from './handlers/metering';
 import { bounded, type StepTimings } from './instrument';
@@ -35,6 +37,8 @@ export interface JobContext {
   slot: number;
   /** Per-step wall time, logged when the job ends. */
   timings: StepTimings;
+  /** 1-based delivery attempt of this message (`message.attempts`). */
+  attempt: number;
 }
 
 export type JobHandler = (message: QueueMessage, ctx: JobContext) => Promise<unknown>;
@@ -67,6 +71,24 @@ export const handlers: Partial<Record<QueueMessage['type'], JobHandler>> = {
     log.info('media.uploaded handled', { mediaId: message.mediaId, outcome, slot });
   },
   'gallery.access_changed': accessStateJob,
+  /**
+   * T24: stream the job's ZIP parts into temp-archives (ADR-003). Runs under
+   * `DEADLINES.archiveJobMs`; R2 multipart objects are used unwrapped (their per-part calls are
+   * bounded by the job deadline) because `bounded()` would make `resumeMultipartUpload` async.
+   */
+  'archive.build': async (message, { env, services, log, signal, timings, attempt }) => {
+    if (message.type !== 'archive.build') return;
+    const opts = { signal, timings };
+    const outcome = await handleArchiveBuild(message.jobId, {
+      repo: bounded(services.archiveRepo(), 'db', DEADLINES.dbStepMs, opts),
+      originals: bounded(env.ORIGINALS, 'r2.originals', DEADLINES.r2StepMs, opts),
+      archives: env.ARCHIVES,
+      crc32: archiveCrc32,
+      attempt,
+      log,
+    });
+    log.info('archive.build handled', { jobId: message.jobId, outcome, attempt });
+  },
   // Tombstones the gateway's access state immediately (FR-G06). TODO(T13): also enqueue/perform
   // the R2 cleanup here; until then the nightly orphan sweep removes the objects.
   'gallery.delete': accessStateJob,
@@ -89,6 +111,11 @@ export const OUTBOX_RELAY_CRON = '* * * * *';
 /** Within one cron tick the relay keeps polling for this long, so pickup latency is ~seconds. */
 export const OUTBOX_RELAY_WINDOW_MS = DEADLINES.relayTickMs;
 export const OUTBOX_RELAY_IDLE_MS = 3_000;
+/** Whole-job deadline per message type (archive builds stream up to ~2 GB per part). */
+export function jobDeadlineMs(type: QueueMessage['type']): number {
+  return type === 'archive.build' ? DEADLINES.archiveJobMs : DEADLINES.jobMs;
+}
+
 /** Delay before re-delivering a message whose type has no handler yet. */
 export const UNHANDLED_RETRY_SECONDS = 60;
 /** Hourly storage GB-month accrual (T27), off the hour and away from the other crons. */
@@ -228,12 +255,26 @@ export function createWorker(options: WorkerOptions = {}) {
     const timings: StepTimings = {};
     jobLog.info('job started', { attempt: message.attempts, slot });
     try {
-      await withDeadline(`job ${type}`, DEADLINES.jobMs, (signal) =>
-        handler(parsed.data, { env, services, log: jobLog, signal, slot, timings }),
+      await withDeadline(`job ${type}`, jobDeadlineMs(type), (signal) =>
+        handler(parsed.data, {
+          env,
+          services,
+          log: jobLog,
+          signal,
+          slot,
+          timings,
+          attempt: message.attempts,
+        }),
       );
       message.ack();
       jobLog.info('job finished', { ms: now() - started, steps: timings });
     } catch (error) {
+      if (error instanceof RetryLaterError) {
+        // Expected back-off (e.g. another delivery holds an archive build lease): no Sentry.
+        jobLog.info('job deferred', { reason: error.message, retryInSeconds: error.delaySeconds });
+        message.retry({ delaySeconds: error.delaySeconds });
+        return;
+      }
       const timedOut = isDeadlineExceeded(error);
       const delaySeconds = timedOut
         ? timeoutRetryDelaySeconds(message.attempts)

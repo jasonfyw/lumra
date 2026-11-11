@@ -1,6 +1,6 @@
 import 'server-only';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
-import { BILLING_POLICY_V1, GALLERY_LIMITS, GUEST_LIMITS, UPLOAD_LIMITS } from '@lumra/config';
+import { GALLERY_LIMITS, GUEST_LIMITS, UPLOAD_LIMITS } from '@lumra/config';
 import type {
   AbortUploadResponse,
   ApiError,
@@ -13,15 +13,11 @@ import type {
   UploadStateResponse,
 } from '@lumra/contracts';
 import { toOutboxRecord } from '@lumra/contracts';
-import { checkAdmission, currentBillingPeriod, estimateStoredFootprintBytes } from '@lumra/billing';
+import { estimateStoredFootprintBytes } from '@lumra/billing';
 import {
-  billingAccounts,
   galleries,
   jobOutbox,
   media,
-  planRatesFromRow,
-  plans,
-  profiles,
   uploadSessions,
   type Database,
   type Gallery,
@@ -50,6 +46,7 @@ import type { Logger } from '@lumra/observability';
 import type { Principals } from '@/lib/actor';
 import { ApiFailure, notFoundError, validationError } from '@/lib/api';
 import type { Tx } from '@/lib/db';
+import { evaluateAccountAdmission } from './admission';
 
 /**
  * Upload intents, part signing, resume, completion and abort (T10, PRD §6.2, §7, §10, FR-M02..M04).
@@ -161,90 +158,12 @@ async function reserveGuestQuota(tx: Tx, guestSessionId: string, size: number): 
  * derivative estimate (`estimateStoredFootprintBytes`).
  */
 async function admitAccountUpload(tx: Tx, userId: string, size: number, now: Date): Promise<void> {
-  const [account] = await tx
-    .select()
-    .from(billingAccounts)
-    .where(eq(billingAccounts.userId, userId))
-    .for('update');
-  const [profile] = await tx
-    .select({ planId: profiles.planId })
-    .from(profiles)
-    .where(eq(profiles.userId, userId));
-  const [planRow] = await tx
-    .select()
-    .from(plans)
-    .where(eq(plans.id, profile?.planId ?? 'free'));
-  if (!planRow) throw new Error('plan row missing');
-  const plan = planRatesFromRow(planRow);
-
-  const period = currentBillingPeriod(account, now);
-
-  // Committed = objects that exist (or existed and are not yet removed); pending = live intents.
-  const [usage] = await tx.execute<{
-    committed_bytes: string;
-    committed_items: string;
-    pending_bytes: string;
-    pending_items: string;
-  }>(sql`
-    select
-      coalesce(sum(m.byte_size) filter (where committed), 0)::text as committed_bytes,
-      count(*) filter (where committed)::text as committed_items,
-      coalesce(sum(m.byte_size) filter (where pending), 0)::text as pending_bytes,
-      count(*) filter (where pending)::text as pending_items
-    from (
-      select m.byte_size,
-        (m.status in ('uploaded', 'processing', 'ready')
-          or (m.status in ('failed', 'deleting') and us.status = 'completed')) as committed,
-        (m.status in ('reserved', 'uploading') and us.status = 'pending'
-          and us.expires_at > now()) as pending
-      from public.media m
-      join public.galleries g on g.id = m.gallery_id
-      left join public.upload_sessions us on us.id = m.upload_session_id
-      where g.owner_id = ${userId}::uuid and m.status <> 'deleted'
-    ) m`);
-  const [ledger] = await tx.execute<{ byte_seconds: string; delivery_bytes: string }>(sql`
-    select
-      coalesce(sum(quantity_micro_units) filter (where metric = 'storage_byte_seconds'), 0)::text
-        as byte_seconds,
-      coalesce(sum(quantity_micro_units) filter (where metric = 'delivery_bytes'), 0)::text
-        as delivery_bytes
-    from public.usage_ledger
-    where account_id = ${userId}::uuid and period_start = ${period.start.toISOString()}::timestamptz`);
-
-  const decision = checkAdmission({
-    plan,
-    account: {
-      status: account?.status ?? 'free',
-      pastDueSince: account?.pastDueSince ?? null,
-      restrictedSince: account?.restrictedSince ?? null,
-      canceledAt: account?.canceledAt ?? null,
-    },
+  const decision = await evaluateAccountAdmission(
+    tx,
+    userId,
+    { kind: 'upload', bytes: estimateStoredFootprintBytes({ originalBytes: size, items: 1 }) },
     now,
-    period,
-    currentUsage: {
-      storedBytes: estimateStoredFootprintBytes({
-        originalBytes: Number(usage?.committed_bytes ?? 0),
-        items: Number(usage?.committed_items ?? 0),
-      }),
-      storageByteSecondsToDate: BigInt(ledger?.byte_seconds ?? '0'),
-      deliveryBytesToDate: Number(ledger?.delivery_bytes ?? 0),
-    },
-    reservations: [
-      {
-        kind: 'upload',
-        bytes: estimateStoredFootprintBytes({
-          originalBytes: Number(usage?.pending_bytes ?? 0),
-          items: Number(usage?.pending_items ?? 0),
-        }),
-      },
-    ],
-    requested: {
-      kind: 'upload',
-      bytes: estimateStoredFootprintBytes({ originalBytes: size, items: 1 }),
-    },
-    capMicroUsd: account?.spendCapMicroUsd ?? null,
-    policy: BILLING_POLICY_V1,
-  });
+  );
   if (decision.allowed) return;
 
   const details = { reason: decision.reason, remainingCapMicroUsd: decision.remainingCapMicroUsd };

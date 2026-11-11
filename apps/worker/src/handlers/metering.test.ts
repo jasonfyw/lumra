@@ -74,6 +74,22 @@ function ingestDeps(ledger = memoryLedger()): DeliveryIngestDeps & { ledger: typ
 }
 
 describe('ingestDeliveryEvents', () => {
+  it('meters archive-part downloads served by the gateway (T24 ledger coverage)', async () => {
+    const deps = ingestDeps();
+    const archive: DeliveryServedMessage = {
+      ...delivery(OWNED_GALLERY, 'jti-zip:0-1999999999', 2_000_000_000),
+      action: 'archive',
+      mediaId: null,
+      archivePartId: '66666666-6666-4666-8666-666666666666',
+      variant: null,
+    };
+    const result = await ingestDeliveryEvents([archive, archive], deps);
+    expect(result).toMatchObject({ received: 2, inserted: 1 }); // same response counted once
+    const [row] = [...deps.ledger.rows.values()];
+    expect(row).toMatchObject({ accountId: OWNER, metric: 'delivery_bytes' });
+    expect(row!.quantity).toBe(2_000_000_000n);
+  });
+
   it('writes one delivery_bytes row per owned-gallery event, attributed to the owner', async () => {
     const deps = ingestDeps();
     const result = await ingestDeliveryEvents(

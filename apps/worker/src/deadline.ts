@@ -18,6 +18,11 @@ export const DEADLINES = {
    * (`PROCESSOR_LIMITS.clientTimeoutMs`, 90 s) so a legitimately slow decode is not cut short.
    */
   jobMs: 120_000,
+  /**
+   * `archive.build` (T24, ADR-003): one delivery may stream up to ~2 GB per part. Kept under the
+   * 15 min wall-time limit of a queue consumer invocation, and under `ARCHIVE_LIMITS.leaseMs`.
+   */
+  archiveJobMs: 14 * 60_000,
   /** One outbox relay pass (claim → publish → mark). */
   relayPassMs: 20_000,
   /** A cron tick keeps relaying until this much wall time has passed. */

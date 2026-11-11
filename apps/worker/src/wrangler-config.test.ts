@@ -7,6 +7,7 @@ interface Consumer {
   dead_letter_queue?: string;
 }
 interface Config {
+  limits?: { cpu_ms?: number };
   triggers: { crons: string[] };
   queues: { consumers: Consumer[] };
   env: { production: { queues: { consumers: Consumer[] }; triggers?: unknown } };
@@ -25,6 +26,11 @@ describe('wrangler.jsonc (T27 metering bindings)', () => {
     expect(config.triggers.crons).toContain(OUTBOX_RELAY_CRON);
     expect(config.triggers.crons).toContain(STORAGE_ACCRUAL_CRON);
     expect(config.env.production.triggers).toBeUndefined();
+  });
+
+  it('allows archive builds the maximum CPU per invocation (T24, ADR-003)', () => {
+    expect(config.limits?.cpu_ms).toBe(300_000);
+    expect((config.env.production as { limits?: unknown }).limits).toBeUndefined();
   });
 
   it('consumes the media gateway usage queue with a DLQ in every environment', () => {

@@ -136,9 +136,22 @@ export async function hasGalleryAccess(
   now: Date = new Date(),
 ): Promise<boolean> {
   if (!gallery.passwordHash) return true;
-  if (!isWellFormedSessionToken(sessionToken)) return false;
+  return (await liveGallerySessionExpiry(db, gallery, sessionToken, now)) !== null;
+}
+
+/**
+ * Expiry of `sessionToken` when it is a live session for this gallery at its current
+ * `access_version`, else null. Archives (T24) copy the session onto their own paths until then.
+ */
+export async function liveGallerySessionExpiry(
+  db: Database,
+  gallery: Pick<ViewableGallery, 'id' | 'accessVersion'>,
+  sessionToken: string | undefined,
+  now: Date = new Date(),
+): Promise<Date | null> {
+  if (!isWellFormedSessionToken(sessionToken)) return null;
   const [row] = await db
-    .select({ id: galleryAccessSessions.id })
+    .select({ expiresAt: galleryAccessSessions.expiresAt })
     .from(galleryAccessSessions)
     .where(
       and(
@@ -150,7 +163,7 @@ export async function hasGalleryAccess(
       ),
     )
     .limit(1);
-  return row !== undefined;
+  return row?.expiresAt ?? null;
 }
 
 // ---------------------------------------------------------------------------------------------

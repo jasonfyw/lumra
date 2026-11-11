@@ -1,10 +1,12 @@
 import {
   createAccessStateRepository,
+  createArchiveRepository,
   createBillingRepository,
   createMediaPipelineRepository,
   createOutboxRepository,
   createSqlClient,
   type AccessStateRepository,
+  type ArchiveRepository,
   type BillingRepository,
   type MediaPipelineRepository,
   type OutboxRepository,
@@ -21,6 +23,8 @@ export interface Services {
   mediaRepo(): MediaPipelineRepository;
   outboxRepo(): OutboxRepository;
   accessStateRepo(): AccessStateRepository;
+  /** Archive jobs/parts for `archive.build` and the archive sweep (T24/T25). */
+  archiveRepo(): ArchiveRepository;
   /** Rate card, usage ledger and metering reads/writes (T27). */
   billingRepo(): BillingRepository;
   /**
@@ -95,6 +99,7 @@ export function createServices(env: Env): Services {
     mediaRepo: () => createMediaPipelineRepository(db()),
     outboxRepo: () => createOutboxRepository(db()),
     accessStateRepo: () => createAccessStateRepository(db()),
+    archiveRepo: () => createArchiveRepository(db()),
     billingRepo: () => createBillingRepository(db()),
     processor: (slot) => {
       let client = processors.get(slot);

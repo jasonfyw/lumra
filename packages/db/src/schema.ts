@@ -33,6 +33,7 @@ import {
   type UsageUnit,
 } from './enums';
 import type { PlanId } from '@lumra/config';
+import type { ArchivePartEntry } from '@lumra/contracts';
 
 // ---------------------------------------------------------------------------------------------
 // helpers
@@ -279,6 +280,15 @@ export const archiveJobs = pgTable('archive_jobs', {
   progressPct: smallint('progress_pct').notNull().default(0),
   expiresAt: tstz('expires_at'),
   failureCode: text('failure_code'),
+  /** Gallery `access_version` at request time; a password change orphans the job (T24). */
+  accessVersion: integer('access_version').notNull().default(1),
+  /** SHA-256 over the ordered (media id, entry name) list; part of the reuse key. */
+  sourceFingerprint: text('source_fingerprint'),
+  itemCount: integer('item_count').notNull().default(0),
+  totalBytes: int8('total_bytes').notNull().default(0),
+  leaseUntil: tstz('lease_until'),
+  startedAt: tstz('started_at'),
+  completedAt: tstz('completed_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -294,6 +304,12 @@ export const archiveParts = pgTable(
     objectKey: text('object_key').notNull().unique(),
     byteSize: int8('byte_size'),
     checksumSha256: text('checksum_sha256'),
+    /** Ordered `ArchiveEntry[]` fixed at request time (`@lumra/domain` partitionArchive). */
+    entries: jsonb('entries').$type<ArchivePartEntry[]>().notNull().default([]),
+    itemCount: integer('item_count').notNull().default(0),
+    sourceBytes: int8('source_bytes').notNull().default(0),
+    uploadId: text('upload_id'),
+    completedAt: tstz('completed_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
