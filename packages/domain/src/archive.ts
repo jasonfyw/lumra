@@ -14,10 +14,16 @@ export const ARCHIVE_STATUSES = [
 ] as const;
 export type ArchiveStatus = (typeof ARCHIVE_STATUSES)[number];
 
+/**
+ * Archive job machine (PRD §7). `deleted` is reachable from every state because the gallery
+ * deletion purge (T13, `markGalleryArchivesDeleted`) removes the gallery's `archives/{galleryId}/`
+ * objects and then marks all of its jobs `deleted`, including ones still building; the builder's
+ * conditional updates (`status = 'running'`) then no-op, so a deleted job never turns ready.
+ */
 export const ARCHIVE_TRANSITIONS: TransitionTable<ArchiveStatus> = {
-  requested: ['queued', 'failed'],
-  queued: ['running', 'failed'],
-  running: ['ready', 'failed'],
+  requested: ['queued', 'failed', 'deleted'],
+  queued: ['running', 'failed', 'deleted'],
+  running: ['ready', 'failed', 'deleted'],
   ready: ['expired', 'deleted'],
   failed: ['queued', 'deleted'],
   expired: ['deleted'],

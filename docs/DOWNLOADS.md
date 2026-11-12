@@ -95,5 +95,9 @@ Logs carry job ids, part numbers, counts and sizes — never filenames, keys or 
 
 A photo deletion or reorder bumps `content_version`, so an in-flight build fails with
 `content_changed`; ready archives of an older version are not offered again (T25 status check).
-Physical removal of archive objects is by TTL (T25 sweep) and the bucket's 1-day lifecycle rule;
-gallery-deletion cleanup belongs to T13.
+Physical removal of archive objects is by TTL (T25 sweep) and the bucket's 1-day lifecycle rule.
+Deleting a gallery (T13 `gallery.delete` purge) removes everything under `archives/{galleryId}/`
+(`archiveGalleryPrefix`) and marks all of the gallery's jobs `deleted`, from any state; a build
+still running stops at its next conditional update (`status = 'running'` no longer matches) and
+never turns `ready`. A part it finishes uploading after the purge's listing is an orphan that the
+1-day lifecycle rule removes.

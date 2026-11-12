@@ -1,8 +1,10 @@
 import { ARCHIVE_LIMITS } from '@lumra/config';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { assertTransition } from './state-machine';
 import {
   ARCHIVE_STATUSES,
+  ARCHIVE_TRANSITIONS,
   archivePartDownloadName,
   archiveProgressPct,
   archiveSourceFingerprint,
@@ -158,5 +160,15 @@ describe('toPublicArchiveStatus / archiveProgressPct', () => {
     expect(archiveProgressPct(50, 200)).toBe(25);
     expect(archiveProgressPct(200, 200)).toBe(99);
     expect(archiveProgressPct(-5, 200)).toBe(0);
+  });
+});
+
+describe('ARCHIVE_TRANSITIONS', () => {
+  it('lets the gallery deletion purge (T13) mark a job deleted from any live state', () => {
+    for (const from of ARCHIVE_STATUSES) {
+      if (from === 'deleted') continue;
+      expect(() => assertTransition('archive', ARCHIVE_TRANSITIONS, from, 'deleted')).not.toThrow();
+    }
+    expect(ARCHIVE_TRANSITIONS.deleted).toEqual([]);
   });
 });

@@ -11,3 +11,4 @@ export * from './repositories/outbox';
 export * from './repositories/access-state';
 export * from './repositories/billing';
 export * from './repositories/archive';
+export * from './repositories/deletion';
