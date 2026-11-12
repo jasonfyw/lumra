@@ -17,6 +17,7 @@ import type { Env } from './env';
 import { archiveCrc32 } from './crc';
 import { syncGalleryAccessState } from './handlers/access-state';
 import { handleArchiveBuild, RetryLaterError } from './handlers/archive-build';
+import { sweepArchives } from './handlers/archive-sweep';
 import { handleMediaUploaded } from './handlers/media-uploaded';
 import { ingestDeliveryEvents, runStorageAccrual } from './handlers/metering';
 import { purgeGallery, purgeMedia, sweepDeletions, type PurgeDeps } from './handlers/purge';
@@ -186,6 +187,12 @@ export const DELETION_SWEEP_CRON = '*/15 * * * *';
 export const DELETION_SWEEP_BUDGET_MS = 50_000;
 /** Hourly storage GB-month accrual (T27), off the hour and away from the other crons. */
 export const STORAGE_ACCRUAL_CRON = '7 * * * *';
+/**
+ * Archive TTL / stalled-job sweep (T25). Shares the 15-minute reconcile tick with the deletion
+ * sweep (one cron string can only dispatch once), so it is an alias, not a separate trigger.
+ */
+export const ARCHIVE_SWEEP_CRON = DELETION_SWEEP_CRON;
+
 /** Wall-time budget for one accrual run; unfinished accounts are picked up next hour. */
 export const STORAGE_ACCRUAL_BUDGET_MS = 50_000;
 
@@ -473,6 +480,17 @@ export function createWorker(options: WorkerOptions = {}) {
     });
   }
 
+  async function archiveSweepTick(env: Env, services: Services, log: Logger): Promise<void> {
+    const timings: StepTimings = {};
+    const result = await sweepArchives({
+      repo: bounded(services.archiveRepo(), 'db', DEADLINES.dbStepMs, { timings }),
+      archives: bounded(env.ARCHIVES, 'r2.archives', DEADLINES.r2StepMs, { timings }),
+      log,
+      now,
+    });
+    log.info('archive sweep finished', { ...result, steps: timings });
+  }
+
   return {
     /**
      * `GET /health` (sanitized liveness) and `POST /internal/relay` (the finalize kick: one
@@ -598,16 +616,29 @@ export function createWorker(options: WorkerOptions = {}) {
         return;
       }
       if (controller.cron === DELETION_SWEEP_CRON) {
+        // One 15-minute reconcile tick runs both sweeps; each failure is reported on its own so
+        // a broken deletion sweep never stops archive expiry (and vice versa).
         const services = makeServices(env);
+        let firstError: unknown;
         try {
-          await deletionSweepTick(env, services, log);
-        } catch (error) {
-          log.error('deletion sweep failed', { err: error });
-          Sentry.captureException(error);
-          throw error;
+          try {
+            await deletionSweepTick(env, services, log);
+          } catch (error) {
+            log.error('deletion sweep failed', { err: error });
+            Sentry.captureException(error);
+            firstError ??= error;
+          }
+          try {
+            await archiveSweepTick(env, services, log);
+          } catch (error) {
+            log.error('archive sweep failed', { err: error });
+            Sentry.captureException(error);
+            firstError ??= error;
+          }
         } finally {
           await closeServices(services, log, ctx);
         }
+        if (firstError !== undefined) throw firstError;
         return;
       }
       if (controller.cron !== OUTBOX_RELAY_CRON) {

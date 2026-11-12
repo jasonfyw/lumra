@@ -294,11 +294,11 @@ async function loadItems(
 // minting
 // ---------------------------------------------------------------------------------------------
 
-function gatewayUrl(base: string, token: string): string {
+export function gatewayUrl(base: string, token: string): string {
   return `${base.replace(/\/+$/, '')}/m/${token}`;
 }
 
-function expiresAtIso(now: Date): string {
+export function expiresAtIso(now: Date): string {
   return new Date(
     Math.floor(now.getTime() / 1000) * 1000 + MEDIA_TOKEN.maxTtlSeconds * 1000,
   ).toISOString();

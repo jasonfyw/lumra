@@ -1,11 +1,18 @@
 /**
  * T24: `POST /api/v1/public/galleries/{slug}/archives` against the local database — recipient
  * authorization, content binding and reuse, partitioning, outbox, admission and rate limits.
+ * T25: `GET /api/v1/public/archives/{jobId}` — access re-checks, statuses, TTL and part URLs.
  */
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { ARCHIVE_LIMITS, RATE_LIMITS } from '@lumra/config';
-import { archivePartEntriesSchema, createArchiveResponseSchema } from '@lumra/contracts';
+import { ARCHIVE_LIMITS, RATE_LIMITS, mediaTokenKeyringSchema } from '@lumra/config';
+import {
+  archivePartEntriesSchema,
+  archiveStatusResponseSchema,
+  createArchiveResponseSchema,
+} from '@lumra/contracts';
+import { verifyMediaToken } from '@lumra/tokens';
+import { GET as getArchive } from '../src/app/api/v1/public/archives/[jobId]/route';
 import { POST as postArchive } from '../src/app/api/v1/public/galleries/[slug]/archives/route';
 import { POST as postUnlock } from '../src/app/api/v1/public/galleries/[slug]/unlock/route';
 import { GALLERY_SESSION_COOKIE } from '../src/lib/gallery-session';
@@ -359,5 +366,178 @@ describe('POST /api/v1/public/galleries/{slug}/archives — jobs', () => {
     const body = await readJson(res);
     expect(body.error?.code).toBe('quota_exceeded');
     expect(JSON.stringify(body)).not.toMatch(/past_due|billing/i);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// T25: GET /api/v1/public/archives/{jobId}
+// ---------------------------------------------------------------------------------------------
+
+const keyring = mediaTokenKeyringSchema.parse(process.env.MEDIA_TOKEN_SECRET);
+const status = (jobId: string) =>
+  getArchive(
+    new Request(new URL(`/api/v1/public/archives/${jobId}`, 'http://localhost:3000'), {
+      headers: { 'x-forwarded-for': freshIp() },
+    }),
+    { params: Promise.resolve({ jobId }) },
+  );
+
+async function readStatus(res: Response, code = 200) {
+  const body = await readJson(res);
+  expect(body.error).toBeNull();
+  expect(res.status).toBe(code);
+  expect(res.headers.get('cache-control')).toBe('private, no-store');
+  return archiveStatusResponseSchema.parse(body.data);
+}
+
+/** A gallery with `n` ready photos and a job created through the real POST route. */
+async function jobFor(opts: { items?: number } = {}) {
+  const g = await gallery();
+  for (let i = 0; i < (opts.items ?? 2); i++) await addMedia(g);
+  const created = await expectCreated(await create(g.slug));
+  return { g, jobId: created.jobId };
+}
+
+async function markReady(jobId: string, expiresAt = new Date(Date.now() + 20 * 3600_000)) {
+  await sql`update public.archive_parts set byte_size = source_bytes + 200, completed_at = now()
+            where job_id = ${jobId}`;
+  await sql`update public.archive_jobs set status = 'ready', progress_pct = 100,
+            expires_at = ${expiresAt} where id = ${jobId}`;
+}
+
+describe('GET /api/v1/public/archives/{jobId}', () => {
+  it('reports progress without URLs while building', async () => {
+    const { g, jobId } = await jobFor();
+    await sql`update public.archive_jobs set status = 'running', progress_pct = 37 where id = ${jobId}`;
+    const data = await readStatus(await status(jobId));
+    expect(data).toMatchObject({
+      jobId,
+      status: 'processing',
+      progressPct: 37,
+      gallery: { slug: g.slug, title: 'Autumn' },
+      itemCount: 2,
+      totalBytes: 2000,
+      partsExpected: 1,
+      expiresAt: null,
+      failureCode: null,
+    });
+    expect(data.parts).toEqual([
+      expect.objectContaining({ partNo: 1, itemCount: 2, ready: false, filename: 'Autumn.zip' }),
+    ]);
+    expect(data.parts[0]!.downloadUrl).toBeUndefined();
+    expect(data.urlsExpireAt).toBeUndefined();
+  });
+
+  it('mints short-lived archive gateway URLs for every part once ready', async () => {
+    const { g, jobId } = await jobFor();
+    await markReady(jobId);
+    const data = await readStatus(await status(jobId));
+    expect(data.status).toBe('ready');
+    expect(data.progressPct).toBe(100);
+    expect(data.expiresAt).not.toBeNull();
+    expect(data.urlsExpireAt).toBeDefined();
+    const [part] = data.parts;
+    expect(part).toMatchObject({ ready: true, byteSize: 2200 });
+    const url = part!.downloadUrl!;
+    expect(url.startsWith('https://media.lumra.test/m/')).toBe(true);
+    const verified = await verifyMediaToken(
+      url.slice('https://media.lumra.test/m/'.length),
+      keyring,
+    );
+    expect(verified.status).toBe('ok');
+    if (verified.status !== 'ok' || verified.claims.action !== 'archive') throw new Error('claims');
+    const [partRow] = await sql<{ id: string }[]>`
+      select id from public.archive_parts where job_id = ${jobId}`;
+    expect(verified.claims).toMatchObject({
+      gallery_id: g.id,
+      archive_job_id: jobId,
+      archive_part_no: 1,
+      archive_part_id: partRow!.id,
+      filename: 'Autumn.zip',
+    });
+    expect(verified.claims.exp - verified.claims.iat).toBeLessThanOrEqual(300);
+  });
+
+  it('treats a ready archive past its 24 h TTL as expired, leaving the transition to the sweep', async () => {
+    const { jobId } = await jobFor();
+    await markReady(jobId, new Date(Date.now() - 1000));
+    const data = await readStatus(await status(jobId));
+    expect(data.status).toBe('expired');
+    expect(data.parts.every((p) => p.downloadUrl === undefined)).toBe(true);
+    const [row] = await sql<{ status: string }[]>`
+      select status from public.archive_jobs where id = ${jobId}`;
+    expect(row!.status).toBe('ready');
+  });
+
+  it('never offers an archive of content that has since changed (PRD §11)', async () => {
+    const { g, jobId } = await jobFor();
+    await markReady(jobId);
+    await sql`update public.galleries set content_version = content_version + 1 where id = ${g.id}`;
+    const data = await readStatus(await status(jobId));
+    expect(data.status).toBe('expired');
+    expect(data.parts[0]!.downloadUrl).toBeUndefined();
+  });
+
+  it('reports failures with their code', async () => {
+    const { jobId } = await jobFor();
+    await sql`update public.archive_jobs set status = 'failed', failure_code = 'content_changed'
+              where id = ${jobId}`;
+    expect(await readStatus(await status(jobId))).toMatchObject({
+      status: 'failed',
+      failureCode: 'content_changed',
+    });
+  });
+
+  it('denies unknown, malformed, unpublished, deleted, revoked and expired', async () => {
+    for (const id of [randomUUID(), 'not-a-uuid', '../../etc']) {
+      expect((await status(id)).status).toBe(404);
+    }
+    const unpublished = await jobFor();
+    await sql`update public.galleries set status = 'draft' where id = ${unpublished.g.id}`;
+    expect((await status(unpublished.jobId)).status).toBe(404);
+
+    const deleted = await jobFor();
+    await sql`update public.galleries set status = 'deleted', deleted_at = now()
+              where id = ${deleted.g.id}`;
+    expect((await status(deleted.jobId)).status).toBe(404);
+
+    const revoked = await jobFor();
+    await sql`update public.galleries set access_version = access_version + 1
+              where id = ${revoked.g.id}`;
+    expect((await status(revoked.jobId)).status).toBe(404);
+
+    const expired = await jobFor();
+    await sql`update public.galleries set expires_at = now() - interval '1 minute'
+              where id = ${expired.g.id}`;
+    const res = await status(expired.jobId);
+    expect(res.status).toBe(410);
+    expect((await readJson(res)).error?.code).toBe('gallery_expired');
+  });
+
+  it('requires the gallery session (scoped to the job) for password-protected galleries', async () => {
+    const g = await gallery({ password: 'pw-123' });
+    await addMedia(g);
+    const unlocked = await postUnlock(
+      req(`/api/v1/public/galleries/${g.slug}/unlock`, { body: { password: 'pw-123' } }),
+      params(g.slug),
+    );
+    const token = /lumra_gallery=([^;]+)/.exec(unlocked.headers.getSetCookie()[0]!)![1]!;
+    ctx.cookies.set(GALLERY_SESSION_COOKIE, token);
+    const { jobId } = await expectCreated(await create(g.slug));
+    await markReady(jobId);
+
+    expect((await readStatus(await status(jobId))).parts[0]!.downloadUrl).toBeDefined();
+
+    ctx.cookies.clear();
+    const locked = await status(jobId);
+    expect(locked.status).toBe(401);
+    const body = await readJson(locked);
+    expect(body.error?.code).toBe('password_required');
+    expect(JSON.stringify(body)).not.toContain('media.lumra.test');
+
+    // A password change revokes the job for everyone, even with the old cookie.
+    ctx.cookies.set(GALLERY_SESSION_COOKIE, token);
+    await sql`update public.galleries set access_version = access_version + 1 where id = ${g.id}`;
+    expect((await status(jobId)).status).toBe(404);
   });
 });

@@ -112,6 +112,12 @@ class FakeRepo implements ArchiveRepository {
   async releaseLease() {
     this.leaseHeld = false;
   }
+  async expireDue() {
+    return [];
+  }
+  async failStalled() {
+    return 0;
+  }
 }
 
 class FakeArchives implements ArchivesStore {

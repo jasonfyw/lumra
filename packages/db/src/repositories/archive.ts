@@ -77,6 +77,13 @@ export interface ArchiveRepository {
   /** Any non-terminal status → `failed` with `failure_code`. */
   markFailed(jobId: string, code: ArchiveFailureCode): Promise<boolean>;
   releaseLease(jobId: string): Promise<void>;
+  /**
+   * TTL sweep (T25): `ready → expired` for up to `limit` jobs whose `expires_at` has passed.
+   * Returns their parts' object keys so the caller can delete them.
+   */
+  expireDue(now: Date, limit: number): Promise<{ jobId: string; objectKeys: string[] }[]>;
+  /** Non-terminal jobs untouched since `before` with no live lease → `failed` (`stalled`). */
+  failStalled(before: Date): Promise<number>;
 }
 
 interface JobRow {
@@ -257,6 +264,38 @@ export function createArchiveRepository(sql: postgres.Sql): ArchiveRepository {
 
     async releaseLease(jobId) {
       await sql`update public.archive_jobs set lease_until = null where id = ${jobId}`;
+    },
+
+    async expireDue(now, limit) {
+      const jobs = await sql<{ id: string }[]>`
+        update public.archive_jobs set status = 'expired', lease_until = null
+        where id in (
+          select id from public.archive_jobs
+          where status = 'ready' and expires_at <= ${now}
+          order by expires_at
+          limit ${limit}
+          for update skip locked)
+        returning id`;
+      if (jobs.length === 0) return [];
+      const ids = jobs.map((j) => j.id);
+      const parts = await sql<{ job_id: string; object_key: string }[]>`
+        select job_id, object_key from public.archive_parts
+        where job_id = any(${pgArray(ids)}::uuid[])`;
+      return ids.map((jobId) => ({
+        jobId,
+        objectKeys: parts.filter((p) => p.job_id === jobId).map((p) => p.object_key),
+      }));
+    },
+
+    async failStalled(before) {
+      const rows = await sql`
+        update public.archive_jobs
+        set status = 'failed', failure_code = 'stalled', lease_until = null
+        where status in ('requested', 'queued', 'running')
+          and updated_at < ${before}
+          and (lease_until is null or lease_until < now())
+        returning id`;
+      return rows.length;
     },
   };
 }

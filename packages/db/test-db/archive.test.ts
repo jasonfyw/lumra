@@ -211,3 +211,53 @@ describe('archives in billing', () => {
     });
   });
 });
+
+describe('archive sweep (T25)', () => {
+  it('expires due ready jobs with their object keys, and fails stalled jobs', async () => {
+    await inRollback(sql, async (tx) => {
+      const due = await fixture(tx, { parts: 2 });
+      const fresh = await fixture(tx);
+      const stalled = await fixture(tx);
+      const leased = await fixture(tx);
+      await tx`update public.archive_jobs set status = 'ready', expires_at = now() - interval '1 minute'
+               where id = ${due.jobId}`;
+      await tx`update public.archive_jobs set status = 'ready', expires_at = now() + interval '1 hour'
+               where id = ${fresh.jobId}`;
+      const repo = repoFor(tx);
+      const expired = await repo.expireDue(new Date(Date.now() + 1000), 100);
+      const ours = new Set<string>([due.jobId, fresh.jobId]);
+      const mine = expired.filter((e) => ours.has(e.jobId));
+      expect(mine).toEqual([
+        {
+          jobId: due.jobId,
+          objectKeys: [
+            `archives/${due.galleryId}/${due.jobId}/1.zip`,
+            `archives/${due.galleryId}/${due.jobId}/2.zip`,
+          ],
+        },
+      ]);
+      const statuses = await tx<{ id: string; status: string }[]>`
+        select id, status from public.archive_jobs where id in (${due.jobId}, ${fresh.jobId})`;
+      expect(Object.fromEntries(statuses.map((r) => [r.id, r.status]))).toEqual({
+        [due.jobId]: 'expired',
+        [fresh.jobId]: 'ready',
+      });
+
+      // updated_at is maintained by a trigger: age the rows past the stall threshold.
+      await tx`alter table public.archive_jobs disable trigger archive_jobs_set_updated_at`;
+      await tx`update public.archive_jobs set updated_at = now() - interval '2 hours'
+               where id in (${stalled.jobId}, ${leased.jobId})`;
+      await tx`update public.archive_jobs set lease_until = now() + interval '5 minutes'
+               where id = ${leased.jobId}`;
+      await tx`alter table public.archive_jobs enable trigger archive_jobs_set_updated_at`;
+      expect(await repo.failStalled(new Date(Date.now() - 3600_000))).toBeGreaterThanOrEqual(1);
+      const rows = await tx<{ id: string; status: string; failure_code: string | null }[]>`
+        select id, status, failure_code from public.archive_jobs
+        where id in (${stalled.jobId}, ${leased.jobId})`;
+      expect(Object.fromEntries(rows.map((r) => [r.id, [r.status, r.failure_code]]))).toEqual({
+        [stalled.jobId]: ['failed', 'stalled'],
+        [leased.jobId]: ['queued', null],
+      });
+    });
+  });
+});
