@@ -6,6 +6,7 @@ import worker, {
   OUTBOX_RELAY_CRON,
   RELAY_KICK_PATH,
   STORAGE_ACCRUAL_CRON,
+  ARCHIVE_SWEEP_CRON,
   createWorker,
   isUsageQueue,
   handlers,
@@ -346,6 +347,11 @@ describe('scheduled outbox relay', () => {
       listStuckMedia: vi.fn(async () => []),
     };
     services.deletionRepo = () => repo as unknown as ReturnType<Services['deletionRepo']>;
+    services.archiveRepo = () =>
+      ({
+        expireDue: vi.fn(async () => []),
+        failStalled: vi.fn(async () => 0),
+      }) as unknown as ReturnType<Services['archiveRepo']>;
     const w = createWorker({
       createServices: () => services,
       now: () => Date.parse('2026-11-11T12:00:00Z'),
@@ -368,6 +374,34 @@ describe('scheduled outbox relay', () => {
       galleries: 0,
       purged: 0,
     });
+  });
+
+  it('runs the archive sweep on the same 15-minute tick (T25), even if the deletion sweep fails', async () => {
+    const { services, outbox, close } = fakeServices(1);
+    const repo = { expireDue: vi.fn(async () => []), failStalled: vi.fn(async () => 0) };
+    services.archiveRepo = () => repo as unknown as ReturnType<Services['archiveRepo']>;
+    services.deletionRepo = () =>
+      ({
+        listStuckGalleries: vi.fn(async () => {
+          throw new Error('db down');
+        }),
+        listStuckMedia: vi.fn(async () => []),
+      }) as unknown as ReturnType<Services['deletionRepo']>;
+    const w = createWorker({ createServices: () => services });
+    expect(ARCHIVE_SWEEP_CRON).toBe(DELETION_SWEEP_CRON);
+    const bucket = { delete: vi.fn(), list: vi.fn() };
+    await expect(
+      w.scheduled(
+        { cron: ARCHIVE_SWEEP_CRON } as ScheduledController,
+        { ORIGINALS: bucket, DERIVATIVES: bucket, ARCHIVES: bucket } as unknown as Env,
+      ),
+    ).rejects.toThrow('db down');
+    expect(events().some((e) => e.msg === 'deletion sweep failed')).toBe(true);
+    expect(repo.expireDue).toHaveBeenCalledTimes(1);
+    expect(repo.failStalled).toHaveBeenCalledTimes(1);
+    expect(outbox.claim).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    expect(events().some((e) => e.msg === 'archive sweep finished')).toBe(true);
   });
 
   it('ignores the nightly cron for now (remaining T13 reconcilers)', async () => {

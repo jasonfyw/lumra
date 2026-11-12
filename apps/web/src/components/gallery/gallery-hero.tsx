@@ -1,5 +1,6 @@
 import { GALLERY_LIMITS } from '@lumra/config';
 import type { PublicGallery, PublicMediaItem } from '@lumra/contracts';
+import type { ReactNode } from 'react';
 import { selectCover } from '@lumra/domain';
 import { Icon } from '@/components/ui';
 import { altText, responsiveImageFor } from './media';
@@ -7,6 +8,8 @@ import { altText, responsiveImageFor } from './media';
 export interface GalleryHeroProps {
   gallery: Pick<PublicGallery, 'title' | 'coverMediaId'>;
   items: readonly PublicMediaItem[];
+  /** Recipient actions shown beside the title (e.g. "Download all"). */
+  actions?: ReactNode;
 }
 
 /** Width used to choose the hero's fallback `src`; `srcset` lets the browser pick per screen. */
@@ -17,7 +20,7 @@ const HERO_SRC_WIDTH = 1280;
  * first ready photo by upload order (`selectCover`), else a neutral placeholder. Server-safe:
  * no hooks, no data fetching.
  */
-export function GalleryHero({ gallery, items }: GalleryHeroProps) {
+export function GalleryHero({ gallery, items, actions }: GalleryHeroProps) {
   const cover = selectCover(items, gallery.coverMediaId);
   const image = cover ? responsiveImageFor(cover, HERO_SRC_WIDTH) : null;
   const title = gallery.title.trim() || GALLERY_LIMITS.defaultTitle;
@@ -58,6 +61,7 @@ export function GalleryHero({ gallery, items }: GalleryHeroProps) {
             {photoCount === 1 ? '1 photo' : `${photoCount.toLocaleString('en-US')} photos`}
           </p>
         </div>
+        {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
       </div>
     </header>
   );

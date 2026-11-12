@@ -82,6 +82,46 @@ Job deadline 14 min (`DEADLINES.archiveJobMs`); the script allows 5 min CPU (`li
 
 Logs carry job ids, part numbers, counts and sizes — never filenames, keys or URLs.
 
+## Status, progress page and TTL (T25)
+
+`GET /api/v1/public/archives/{jobId}` → `ArchiveStatusResponse` (`packages/contracts/src/archive.ts`).
+The job id is an unguessable capability, but every read re-checks the gallery like the other public
+endpoints:
+
+| Case                                                             | Result                                   |
+| ---------------------------------------------------------------- | ---------------------------------------- |
+| malformed/unknown id, gallery draft/deleted, job `deleted`       | 404 `not_found` (concealed)              |
+| gallery `access_version` changed since the request (password)    | 404 `not_found` (links die for everyone) |
+| gallery expired                                                  | 410 `gallery_expired`                    |
+| passworded gallery without a live session at the current version | 401 `password_required`                  |
+| too many polls (`publicArchiveRead`, 120/min per IP)             | 429 `rate_limited`                       |
+
+- Public statuses: `preparing` (requested/queued), `processing` (running, `progressPct`), `ready`,
+  `failed` (`failureCode`), `expired` (TTL passed, or the gallery's `content_version` moved on — an
+  archive of stale content is never offered, PRD §11).
+- Download URLs: one per completed part, minted only while `ready`, gateway `action: 'archive'`
+  tokens (≤ 5 min, `urlsExpireAt`); the page re-polls before they lapse. URLs are never logged
+  (the route is `quiet`, tokens are not in log fields).
+- The password session cookie is copied onto `/archive/{jobId}` and this API path when the archive
+  is requested, so a passworded gallery's progress page works without widening the gallery cookie.
+
+`/archive/[jobId]` renders the same service server-side, then polls every 2 s (paused in hidden
+tabs). States: preparing/processing with a progress bar (no animation under
+`prefers-reduced-motion`), ready with one link per part and the 24 h expiry, failed with "Try again"
+and expired with "Prepare a new download" (both re-POST the create endpoint, which reuses a live job
+for the same content), plus notices for 404/410/401/429. Built from the Lumra design system
+(`packages/ui` tokens, `lm-` classes, `apps/web/src/components/ui`). Dev fixture:
+`/dev/archive?state=preparing|processing|ready|failed|expired&parts=N` (404 in production).
+
+"Download all" on `/g/[slug]` (`DownloadAllButton`) is hidden when the gallery has no ready photos.
+
+**TTL sweep** (worker, the shared `*/15` reconcile tick with the T13 deletion sweep; a failure in
+one never skips the other): `ready` jobs past `expires_at` → `expired` (≤ 200 per run, `skip
+locked`) and their part objects deleted from temp-archives; queued/running jobs untouched for 1 h
+with no live lease → `failed` (`stalled`), so the page offers a retry. The status API reports a
+ready job past its TTL as `expired` immediately but leaves the row for the sweep, which owns the
+transition together with the object deletion (storage accrual counts `ready` parts until then).
+
 ## Metering (FR-D04)
 
 - Delivery: the gateway emits `delivery.served` (`action: 'archive'`, `archivePartId`) per

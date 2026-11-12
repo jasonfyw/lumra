@@ -1,7 +1,7 @@
 'use client';
 
 import type { PublicGallery, PublicMediaItem } from '@lumra/contracts';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { GalleryHero } from './gallery-hero';
 import { JustifiedGrid, type JustifiedGridHandle } from './justified-grid';
 import { Lightbox } from './lightbox';
@@ -14,6 +14,8 @@ export interface GalleryViewProps {
   onVisibleItemsChange?(ids: string[]): void;
   /** Index of the item shown in the lightbox, or null when it is closed. */
   onLightboxIndexChange?(index: number | null): void;
+  /** Actions rendered in the hero (the live page passes "Download all"). */
+  heroActions?: ReactNode;
 }
 
 /**
@@ -28,6 +30,7 @@ export function GalleryView({
   items,
   onVisibleItemsChange,
   onLightboxIndexChange,
+  heroActions,
 }: GalleryViewProps) {
   const gridRef = useRef<JustifiedGridHandle>(null);
   const [openIndex, setOpenIndex] = useState<number | null>(null);
@@ -54,7 +57,7 @@ export function GalleryView({
   return (
     <>
       <div inert={open}>
-        <GalleryHero gallery={gallery} items={items} />
+        <GalleryHero gallery={gallery} items={items} actions={heroActions} />
         <main className="mx-auto w-full max-w-[var(--content-max)] px-1 pb-10 sm:px-8">
           {items.length > 0 ? (
             <JustifiedGrid

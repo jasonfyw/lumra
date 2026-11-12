@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import wranglerText from '../wrangler.jsonc?raw';
 import {
+  ARCHIVE_SWEEP_CRON,
   DELETION_SWEEP_CRON,
   OUTBOX_RELAY_CRON,
   STORAGE_ACCRUAL_CRON,
@@ -31,6 +32,7 @@ describe('wrangler.jsonc (T27 metering bindings)', () => {
     expect(config.triggers.crons).toContain(OUTBOX_RELAY_CRON);
     expect(config.triggers.crons).toContain(STORAGE_ACCRUAL_CRON);
     expect(config.triggers.crons).toContain(DELETION_SWEEP_CRON);
+    expect(config.triggers.crons).toContain(ARCHIVE_SWEEP_CRON);
     expect(config.env.production.triggers).toBeUndefined();
   });
 

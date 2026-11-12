@@ -105,6 +105,10 @@ export const ARCHIVE_LIMITS = {
   leaseMs: 15 * 60 * 1000,
   /** Queued/running jobs untouched for this long are failed by the sweep (`stalled`). */
   stalledAfterMs: 60 * 60 * 1000,
+  /** Progress page poll cadence while an archive is being prepared (T25). */
+  pollIntervalMs: 2_000,
+  /** Expired jobs handled per sweep run (T25). */
+  sweepBatch: 200,
 } as const;
 
 export const MEDIA_TOKEN = {
@@ -208,6 +212,8 @@ export const RATE_LIMITS = {
    * existing job, so this only bounds how many distinct builds one client can start.
    */
   publicArchiveCreate: { limit: 20, windowSeconds: 60 * 60 },
+  /** Per client IP: archive status polls (T25; every ~2 s while building, ~4 min when ready). */
+  publicArchiveRead: { limit: 120, windowSeconds: 60 },
 } as const satisfies Record<string, RateLimitRule>;
 export type RateLimitRuleName = keyof typeof RATE_LIMITS;
 
