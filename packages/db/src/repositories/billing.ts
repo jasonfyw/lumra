@@ -502,6 +502,14 @@ export function createBillingRepository(sql: postgres.Sql): BillingRepository {
                    join public.galleries g on g.id = m.gallery_id
                    where g.owner_id = ba.user_id and g.deleted_at is null and m.deleted_at is null
                  ), 0)
+                 -- Temp "Download all" archives (T24) until they expire (24 h, FR-D04).
+                 + coalesce((
+                   select sum(ap.byte_size) from public.archive_parts ap
+                   join public.archive_jobs aj on aj.id = ap.job_id
+                   join public.galleries g on g.id = aj.gallery_id
+                   where g.owner_id = ba.user_id and g.deleted_at is null
+                     and aj.status in ('running', 'ready') and ap.completed_at is not null
+                 ), 0)
                )::text as stored_bytes_now
         ${accountContextFrom()}
         left join public.storage_accrual_cursors c on c.account_id = ba.user_id

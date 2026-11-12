@@ -7,6 +7,10 @@
   // postgres.js needs node:net/tls shims (Hyperdrive / DATABASE_URL).
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // `archive.build` (T24, ADR-003) streams up to ~2 GB per ZIP part: CRC-32 is native
+  // (node:zlib) and bytes are only copied, but allow up to 5 min CPU per invocation (Standard
+  // usage model maximum) so a large part on a slow day is never cut off. Inherited by production.
+  "limits": { "cpu_ms": 300000 },
   "queues": {
     "producers": [{ "binding": "JOBS", "queue": "lumra-jobs-dev" }],
     "consumers": [

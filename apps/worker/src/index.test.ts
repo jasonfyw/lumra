@@ -9,12 +9,14 @@ import worker, {
   createWorker,
   isUsageQueue,
   handlers,
+  jobDeadlineMs,
   retryDelaySeconds,
   timeoutRetryDelaySeconds,
   sentryOptions,
   type Env,
   type JobHandler,
 } from './index';
+import { RetryLaterError } from './handlers/archive-build';
 import type { Services } from './services';
 
 function fakeMessage(body: unknown, attempts = 1) {
@@ -95,6 +97,9 @@ function fakeServices(claimBatches: number) {
     accessStateRepo: () => {
       throw new Error('unused');
     },
+    archiveRepo: () => {
+      throw new Error('unused');
+    },
     billingRepo: () => {
       throw new Error('unused');
     },
@@ -109,6 +114,31 @@ function fakeServices(claimBatches: number) {
 describe('queue consumer', () => {
   it('registers the media.uploaded handler (T12)', () => {
     expect(handlers['media.uploaded']).toBeTypeOf('function');
+  });
+
+  it('registers archive.build (T24) with the long archive deadline', () => {
+    expect(handlers['archive.build']).toBeTypeOf('function');
+    expect(jobDeadlineMs('archive.build')).toBe(DEADLINES.archiveJobMs);
+    expect(jobDeadlineMs('media.uploaded')).toBe(DEADLINES.jobMs);
+    expect(DEADLINES.archiveJobMs).toBeLessThan(15 * 60_000);
+  });
+
+  it('defers a RetryLaterError with its own delay and passes the attempt number', async () => {
+    let seenAttempt = 0;
+    const handler = vi.fn().mockImplementation(async (_m, { attempt }) => {
+      seenAttempt = attempt;
+      throw new RetryLaterError(900, 'lease held');
+    });
+    const msg = fakeMessage({
+      type: 'archive.build',
+      jobId: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',
+      traceId: 'req-1',
+      dedupeKey: 'archive.build:9a8b7c6d',
+    });
+    await withHandler('archive.build', handler, () => worker.queue(batchOf(msg), env, ctx));
+    expect(seenAttempt).toBe(msg.attempts);
+    expect(msg.retry).toHaveBeenCalledWith({ delaySeconds: 900 });
+    expect(msg.ack).not.toHaveBeenCalled();
   });
 
   it('acks poison messages instead of retrying forever', async () => {

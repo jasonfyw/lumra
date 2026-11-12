@@ -48,8 +48,40 @@ export function gallerySessionSetCookies(
   expiresAt: Date,
   secure: boolean,
 ): string[] {
+  return sessionSetCookies(gallerySessionCookiePaths(slug), token, expiresAt, secure);
+}
+
+/**
+ * Paths an archive job's copy of the gallery session is scoped to (T24/T25): its progress page
+ * and status API. The job id is a UUID, so the paths need no encoding.
+ */
+export function archiveSessionCookiePaths(jobId: string): string[] {
+  if (!/^[0-9a-f-]{36}$/i.test(jobId)) throw new Error('invalid archive job id');
+  return [`/archive/${jobId}`, `/api/v1/public/archives/${jobId}`];
+}
+
+/**
+ * The same gallery session cookie, also sent to one archive job's page and status API, so a
+ * password-protected gallery's archive re-checks the session (and its `access_version`) on
+ * every status read without widening the cookie to other galleries or archives.
+ */
+export function archiveSessionSetCookies(
+  jobId: string,
+  token: string,
+  expiresAt: Date,
+  secure: boolean,
+): string[] {
+  return sessionSetCookies(archiveSessionCookiePaths(jobId), token, expiresAt, secure);
+}
+
+function sessionSetCookies(
+  paths: string[],
+  token: string,
+  expiresAt: Date,
+  secure: boolean,
+): string[] {
   if (!isWellFormedSessionToken(token)) throw new Error('invalid gallery session token');
-  return gallerySessionCookiePaths(slug).map((path) =>
+  return paths.map((path) =>
     [
       `${GALLERY_SESSION_COOKIE}=${token}`,
       `Path=${path}`,

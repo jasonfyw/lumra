@@ -1,11 +1,13 @@
 import {
   createAccessStateRepository,
+  createArchiveRepository,
   createBillingRepository,
   createDeletionRepository,
   createMediaPipelineRepository,
   createOutboxRepository,
   createSqlClient,
   type AccessStateRepository,
+  type ArchiveRepository,
   type BillingRepository,
   type DeletionRepository,
   type MediaPipelineRepository,
@@ -23,6 +25,8 @@ export interface Services {
   mediaRepo(): MediaPipelineRepository;
   outboxRepo(): OutboxRepository;
   accessStateRepo(): AccessStateRepository;
+  /** Archive jobs/parts for `archive.build` and the archive sweep (T24/T25). */
+  archiveRepo(): ArchiveRepository;
   /** Rate card, usage ledger and metering reads/writes (T27). */
   billingRepo(): BillingRepository;
   /** Physical deletion: purge reads/marks and the backstop sweep (T13). */
@@ -99,6 +103,7 @@ export function createServices(env: Env): Services {
     mediaRepo: () => createMediaPipelineRepository(db()),
     outboxRepo: () => createOutboxRepository(db()),
     accessStateRepo: () => createAccessStateRepository(db()),
+    archiveRepo: () => createArchiveRepository(db()),
     billingRepo: () => createBillingRepository(db()),
     deletionRepo: () => createDeletionRepository(db()),
     processor: (slot) => {
