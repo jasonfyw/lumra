@@ -56,7 +56,7 @@ export function Icon({
 }
 
 /**
- * The typeset mark: "lumra" in Instrument Serif with a lumen dot. Stands in until a logo is
+ * The typeset mark: "lumra" in Warbler Banner with a lumen dot. Stands in until a logo is
  * drawn. Screen readers hear "Lumra".
  */
 export function Wordmark({ size = 28, className }: { size?: number; className?: string }) {

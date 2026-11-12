@@ -43,9 +43,9 @@
   --color-accent: #1b1a18; /* = ink */
   --color-focus: #1b1a18; /* = ink */
 
-  /* Type: next/font sets --font-hanken / --font-instrument on <html> (apps/web layout). */
+  /* Type: next/font sets --font-hanken on <html>; display type is the Adobe Fonts kit linked in the apps/web layout. */
   --font-sans: var(--font-hanken), 'Hanken Grotesk', 'Helvetica Neue', Arial, sans-serif;
-  --font-display: var(--font-instrument), 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  --font-display: 'warbler-banner', sans-serif;
 
   /* Shape: photos are never rounded */
   --radius-none: 0;
