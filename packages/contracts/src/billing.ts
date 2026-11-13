@@ -12,3 +12,13 @@ export type BillingRedirectResponse = z.infer<typeof billingRedirectResponseSche
 
 /** Both endpoints take an empty JSON body (`{}`); unknown keys are rejected. */
 export const billingRedirectRequestSchema = z.object({}).strict();
+
+/**
+ * `PATCH /api/v1/billing/spending-cap` (T32, PRD §10 "split PATCH endpoint"). Integer micro-USD in
+ * whole cents from $0 to the platform maximum (`BILLING_POLICY_V1.maxSpendCapMicroUsd`, checked
+ * server-side); `null` returns to the plan default.
+ */
+export const spendingCapRequestSchema = z
+  .object({ capMicroUsd: z.number().int().nonnegative().nullable() })
+  .strict();
+export type SpendingCapRequest = z.infer<typeof spendingCapRequestSchema>;

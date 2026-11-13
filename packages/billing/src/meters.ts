@@ -1,26 +1,32 @@
-import { BILLING_POLICY_V1 } from '@lumra/config';
+import {
+  BILLING_POLICY_V1,
+  BYTES_PER_GB,
+  STRIPE_CATALOG_V1,
+  type PlanRates,
+  type StripeCatalog,
+} from '@lumra/config';
 import { type LedgerEntry, type UsageMetric, USAGE_METRICS } from './ledger';
-import { BillingArithmeticError, bytesToGbMicroUnits, storageGbMonthMicroUnits } from './units';
+import { BillingArithmeticError, divRoundHalfUp, maxBig, toNonNegativeBigInt } from './units';
 
 /**
- * Stripe Billing Meter export (ADR-004, T31). Meter values are integers in micro-units:
- * storage in micro GB-months, delivery in micro GB (decimal kB). The Stripe prices carry the
- * matching per-unit decimal amounts and the included allowance as a free first tier.
+ * Stripe Billing Meter export (ADR-004 + 2026-11-13 amendment, T31). Meters carry **overage
+ * only** as integers: storage in MB-months above the included GB-months, delivery in MB above the
+ * included GB (`STRIPE_CATALOG_V1.meterUnitBytes` = 10⁶). The Stripe prices are flat per unit.
  *
- * Export is **cumulative**: each run converts the period-to-date ledger total to meter units
- * once and sends only the difference from what was already exported. Rounding therefore never
- * accumulates across daily runs: the sum of all deltas equals the rounded period total.
+ * Export is **cumulative**: each run converts the period-to-date ledger total to overage units
+ * once (one half-up rounding) and sends only the difference from what was already exported, so
+ * rounding never accumulates across runs: the sum of all deltas equals the rounded period total.
  */
 export const METER_EVENT_NAMES: Readonly<Record<UsageMetric, string>> = {
-  storage_byte_seconds: 'lumra_storage_gb_month_micro',
-  delivery_bytes: 'lumra_delivery_gb_micro',
+  storage_byte_seconds: STRIPE_CATALOG_V1.meters.storageOverage,
+  delivery_bytes: STRIPE_CATALOG_V1.meters.deliveryOverage,
 };
 
 /** Body of `POST /v1/billing/meter_events`. `identifier` doubles as the request Idempotency-Key. */
 export interface StripeMeterEvent {
   event_name: string;
   identifier: string;
-  /** Unix seconds; the export window end, so replays are byte-identical. */
+  /** Unix seconds: the window end, clamped into the usage period (replays are byte-identical). */
   timestamp: number;
   payload: { stripe_customer_id: string; value: string };
 }
@@ -28,13 +34,22 @@ export interface StripeMeterEvent {
 export interface MeterExportInput {
   stripeCustomerId: string;
   accountId: string;
+  /** The plan the usage is billed under (allowances and whether overage exists at all). */
+  plan: PlanRates;
   /** Export cut-off (exclusive of later entries); one export run per window. */
   windowEnd: Date;
   /** Ledger rows for the account; duplicates (same idempotency key) are tolerated. */
   entries: readonly LedgerEntry[];
   /** Meter units already exported, keyed by `meterCursorKey(metric, periodStart)`. */
   exported: Readonly<Record<string, bigint>>;
+  /**
+   * End of the billing period that starts at `periodStart`, when known. Events are timestamped
+   * no later than one second before it, so usage exported after a period closed still lands on
+   * that period's invoice (Stripe bills meter events by timestamp).
+   */
+  periodEndFor?: (periodStart: Date) => Date | null;
   secondsPerBillingMonth?: number;
+  catalog?: StripeCatalog;
 }
 
 export interface MeterExportResult {
@@ -54,14 +69,31 @@ export function meterCursorKey(metric: UsageMetric, periodStart: Date): string {
   return `${metric}|${periodStart.toISOString()}`;
 }
 
+/**
+ * Overage meter units for a period-to-date ledger total: MB-months above the included
+ * GB-months (storage) or MB above the included GB (delivery), rounded half up once. Plans
+ * without overage pricing (Free) always yield 0.
+ */
 export function toMeterUnits(
   metric: UsageMetric,
   quantity: bigint,
+  plan: PlanRates,
   secondsPerBillingMonth: number = BILLING_POLICY_V1.secondsPerBillingMonth,
+  unitBytes: number = STRIPE_CATALOG_V1.meterUnitBytes,
 ): bigint {
-  return metric === 'storage_byte_seconds'
-    ? storageGbMonthMicroUnits(quantity, secondsPerBillingMonth)
-    : bytesToGbMicroUnits(quantity);
+  const q = toNonNegativeBigInt(quantity, 'quantity');
+  const unit = toNonNegativeBigInt(unitBytes, 'unitBytes');
+  const gb = BigInt(BYTES_PER_GB);
+  if (metric === 'storage_byte_seconds') {
+    if (plan.storageOverageMicroUsdPerGbMonth === null) return 0n;
+    const seconds = toNonNegativeBigInt(secondsPerBillingMonth, 'secondsPerBillingMonth');
+    if (seconds === 0n) throw new BillingArithmeticError('secondsPerBillingMonth must be positive');
+    const included = BigInt(plan.includedStorageGbMonth) * gb * seconds;
+    return divRoundHalfUp(maxBig(0n, q - included), unit * seconds);
+  }
+  if (plan.deliveryOverageMicroUsdPerGb === null) return 0n;
+  const included = BigInt(plan.includedDeliveryGb) * gb;
+  return divRoundHalfUp(maxBig(0n, q - included), unit);
 }
 
 function sameEntry(a: LedgerEntry, b: LedgerEntry): boolean {
@@ -84,6 +116,11 @@ export function buildMeterEvents(input: MeterExportInput): MeterExportResult {
   const windowEndMs = input.windowEnd.getTime();
   if (!Number.isSafeInteger(windowEndMs)) throw new MeterExportError('invalid windowEnd');
   const windowEndSec = Math.floor(windowEndMs / 1000);
+  const catalog = input.catalog ?? STRIPE_CATALOG_V1;
+  const eventName: Record<UsageMetric, string> = {
+    storage_byte_seconds: catalog.meters.storageOverage,
+    delivery_bytes: catalog.meters.deliveryOverage,
+  };
 
   const unique = new Map<string, LedgerEntry>();
   for (const entry of input.entries) {
@@ -126,7 +163,14 @@ export function buildMeterEvents(input: MeterExportInput): MeterExportResult {
   for (const [key, total] of ordered) {
     let cumulative: bigint;
     try {
-      cumulative = toMeterUnits(total.metric, total.quantity, input.secondsPerBillingMonth);
+      // A compensating row can make a raw total negative; it never exports below zero.
+      cumulative = toMeterUnits(
+        total.metric,
+        maxBig(0n, total.quantity),
+        input.plan,
+        input.secondsPerBillingMonth,
+        catalog.meterUnitBytes,
+      );
     } catch (error) {
       if (error instanceof BillingArithmeticError) throw new MeterExportError(error.message);
       throw error;
@@ -138,15 +182,20 @@ export function buildMeterEvents(input: MeterExportInput): MeterExportResult {
     }
     cursors[key] = cumulative;
     if (delta === 0n) continue;
+    const periodEnd = input.periodEndFor?.(total.periodStart) ?? null;
+    const timestamp =
+      periodEnd && periodEnd.getTime() <= windowEndMs
+        ? Math.floor(periodEnd.getTime() / 1000) - 1
+        : windowEndSec;
     events.push({
-      event_name: METER_EVENT_NAMES[total.metric],
+      event_name: eventName[total.metric],
       identifier: [
         input.accountId,
         total.metric,
         Math.floor(total.periodStart.getTime() / 1000),
         windowEndSec,
       ].join(':'),
-      timestamp: windowEndSec,
+      timestamp,
       payload: { stripe_customer_id: input.stripeCustomerId, value: delta.toString() },
     });
   }

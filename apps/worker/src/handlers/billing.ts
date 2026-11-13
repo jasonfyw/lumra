@@ -25,7 +25,10 @@ import type { Logger } from '../log';
  */
 
 export interface SafeguardDeps {
-  repo: Pick<BillingStateRepository, 'safeguardContexts' | 'setDeliveryPause'>;
+  repo: Pick<
+    BillingStateRepository,
+    'safeguardContexts' | 'setDeliveryPause' | 'recordSpendAlerts'
+  >;
   log: Logger;
   now: () => Date;
   traceId: string;
@@ -81,7 +84,7 @@ export async function runBillingSweep(deps: BillingSweepDeps): Promise<BillingSw
     restricted: 0,
     freed: 0,
     conflicts: 0,
-    safeguards: { evaluated: 0, paused: 0, resumed: 0, conflicts: 0 },
+    safeguards: { evaluated: 0, paused: 0, resumed: 0, conflicts: 0, alerts: 0 },
   };
   let after: string | null = null;
   while (true) {
@@ -108,6 +111,7 @@ export async function runBillingSweep(deps: BillingSweepDeps): Promise<BillingSw
     result.safeguards.paused += safeguards.paused;
     result.safeguards.resumed += safeguards.resumed;
     result.safeguards.conflicts += safeguards.conflicts;
+    result.safeguards.alerts += safeguards.alerts;
     after = page[page.length - 1]!.accountId;
     if (page.length < batchSize) break;
   }

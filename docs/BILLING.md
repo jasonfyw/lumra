@@ -29,7 +29,7 @@ Every rounding step is **half up** and applied once.
 | Invoice                    | base fee + overage lines; cents per line = µ$ ÷ 10 000; total = Σ lines       | `rateInvoice`               |
 | Admission projection       | stored-bytes reservations held until period end (ceiling); archives delivered | `checkAdmission`            |
 | Cap tolerance              | max(cap × 10 %, $0.25)                                                        | `spendCapToleranceMicroUsd` |
-| Meter value (daily, delta) | toMeterUnits(period-to-date ledger total) − already exported                  | `buildMeterEvents`          |
+| Meter value (daily, delta) | overage MB(-month) of the period-to-date total − already exported             | `buildMeterEvents`          |
 
 Admission reason codes: `free_storage_cap`, `free_delivery_cap`, `spend_cap`, `past_due`, `account_canceled`;
 gallery creation: `free_gallery_cap`. Past-due timeline (`deriveBillingRestrictions`): uploads and new archives
@@ -92,7 +92,9 @@ Read-only summary for the signed-in owner (FR-N03), built by `getAccountUsageSum
   holds any delivery row for the account (filled by the T27 delivery ingestion once the usage consumer is deployed).
 - **Billing:** plan actions (Upgrade → Checkout, Manage billing → Portal), state banners (below) and the
   galleries count. Buttons are disabled with a reason when Stripe is not configured.
-- **Invoices, spending cap and alerts:** placeholders until T31–T32.
+- **Invoices:** the last 12 webhook-stored invoices (`billing_invoices`) with Stripe's hosted page,
+  plus "All invoices and receipts" (portal).
+- **Spending cap and alerts (Pro):** cap control, estimated overage vs cap, alerts sent this period.
 
 A dev-only fixture renders every billing state without Stripe or a database: `/dev/account?state=…`
 (`free`, `free_at_caps`, `free_delivery_paused`, `checkout_pending`, `pro`, `pro_canceling`, `past_due`,
@@ -202,14 +204,64 @@ metered prices `lumra_pro_storage_overage_v1` (0.01¢ per MB-month = $0.10/GB-mo
 with different terms is an error (ship `_v2` lookup keys with a new rate version). A unit test checks
 the script against `STRIPE_CATALOG_V1` and `RATE_CARD_V1`.
 
+## Usage export to Stripe (T31)
+
+- **What is sent:** overage only, as integer MB-months (storage) and MB (delivery) above the plan
+  allowance (`toMeterUnits`), cumulative per period: each run sends `period-to-date units − already
+exported`, so rounding never accumulates and re-runs send nothing new.
+- **Which usage:** only periods in `billing_periods` — the paid subscription periods recorded by the
+  webhook. Free (calendar-month) usage can never reach a meter, even after a mid-month upgrade.
+- **When:** daily at 03:17 UTC (`METER_EXPORT_CRON`) for every period that ended < 35 days ago (Stripe's
+  limit), and hourly (after storage accrual) for periods that closed in the last 3 hours, so the final
+  usage lands while Stripe's invoice is still a draft. Timestamps are clamped to one second before the
+  period end.
+- **How:** `recordExport` stores the events (`billing_exports`, `idempotency_key` = Stripe
+  `identifier` = `account:metric:periodStart:windowEnd`) and moves `billing_meter_cursors` by
+  compare-and-set in one transaction; then every unsent stored event is POSTed to
+  `/v1/billing/meter_events` with `Idempotency-Key` = identifier and the pinned API version. Retries
+  resend the stored payload byte for byte. 4xx (except 429) are parked (`failed`, beyond the 20-attempt
+  budget); 5xx/429/network retry on the next run. AC: re-running the export produces no duplicate
+  meter events (worker test + DB test).
+- **Config:** worker secret `STRIPE_SECRET_KEY` (`wrangler secret put STRIPE_SECRET_KEY --env
+production`); unset ⇒ the export is skipped and logged, nothing is built.
+
+## Invoices and reconciliation (T31)
+
+`invoice.finalized|paid|payment_failed|voided|marked_uncollectible` upsert `billing_invoices` (newer
+`event.created` wins; hosted URLs stored only if `https://`, never logged). On `invoice.finalized` the
+invoice is reconciled (`reconcileInvoice`): expected = base fee + internal overage of the period that
+starts at the invoice's `period_start` (renewal invoices bill the ended period's usage; the first
+invoice is the base fee only) vs Stripe's `subtotal`. A row goes to `billing_reconciliations`; drift
+above 10 % (and more than 2 ¢) or overage above cap + tolerance logs `billing reconciliation mismatch`
+(error → Sentry/log alert). Discounts/credits applied as invoice items would show as drift.
+
+## Spending cap and alerts (T32)
+
+- `PATCH /api/v1/billing/spending-cap` `{capMicroUsd}`: whole cents from $0 to
+  `BILLING_POLICY_V1.maxSpendCapMicroUsd` ($500, Proposed), or `null` for the plan default ($10). Pro
+  only (409 on Free), same-origin, per-user rate limit, own account only. It re-runs the delivery
+  cutoff at once: raising the cap resumes delivery, lowering it below the estimate pauses it.
+- **Admission denial at cap:** upload intents and archive requests use `checkAdmission` with the
+  account's cap (`spend_cap_reached` → uploader banner "Adjust spending cap").
+- **Delivery safety cutoff:** see T28 above (`spend_cap` reason; viewers see the bandwidth notice).
+- **Alerts:** whenever usage lands (delivery batches, hourly sweep) `evaluateBillingSafeguards`
+  computes the estimated overage and records each reached threshold of `warning_thresholds`
+  (50/80/100 %) once per (account, period, threshold) in `billing_alerts`, enqueuing one
+  `spend_cap_alert` email each. `/account` and the dashboard show a banner for the highest threshold
+  reached (until the cap itself pauses delivery).
+- Tolerance: in-flight transfers and ≤ 10 s queue batching can overshoot; the disclosed maximum is
+  max(10 % of cap, $0.25) and reconciliation flags periods beyond it.
+
 ## Environment and webhook endpoint
 
 | Variable                | Where           | Notes                                                                      |
 | ----------------------- | --------------- | -------------------------------------------------------------------------- |
 | `STRIPE_SECRET_KEY`     | Vercel (server) | `sk_…`/`rk_…`; unset ⇒ billing disabled gracefully. Test key outside prod. |
 | `STRIPE_WEBHOOK_SECRET` | Vercel (server) | Endpoint signing secret `whsec_…` for `/api/v1/billing/webhook`.           |
+| `STRIPE_SECRET_KEY`     | Worker (secret) | Same key; daily meter export. Unset ⇒ export skipped (logged).             |
 
 Webhook endpoint: `https://www.lumra.photos/api/v1/billing/webhook` (the PRD's `/api/v1/webhooks/stripe`
 path sits with the other billing routes instead; ADR-004 amendment). Subscribe it to
-`checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated` and
-`customer.subscription.deleted`.
+`checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`,
+`customer.subscription.deleted`, `invoice.finalized`, `invoice.paid`, `invoice.payment_failed`,
+`invoice.voided` and `invoice.marked_uncollectible`.

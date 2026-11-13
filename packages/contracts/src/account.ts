@@ -61,6 +61,43 @@ export const accountBillingSchema = z.object({
 });
 export type AccountBilling = z.infer<typeof accountBillingSchema>;
 
+const microUsd = z.number().int().nonnegative();
+
+/** Pro spending cap and alerts (T32); null on plans without overage (Free). */
+export const accountSpendSchema = z.object({
+  /** Cap in force: the owner's, else the plan default. */
+  capMicroUsd: microUsd,
+  /** True when the owner set the cap (false = plan default). */
+  custom: z.boolean(),
+  defaultCapMicroUsd: microUsd,
+  maxCapMicroUsd: microUsd,
+  /** Estimated overage this period from the internal ledger (base fee and taxes excluded). */
+  estimatedOverageMicroUsd: microUsd,
+  /** Whole percent of the cap used (0–100, clamped). */
+  percentOfCap: z.number().int().min(0).max(100),
+  /** Alert thresholds (percent) reached and recorded this period, ascending. */
+  alertsReached: z.array(z.number().int().min(1).max(100)),
+  thresholdsPct: z.array(z.number().int().min(1).max(100)),
+});
+export type AccountSpend = z.infer<typeof accountSpendSchema>;
+
+/** One Stripe invoice (T31), from webhook-stored rows. Amounts in cents (Stripe minor units). */
+export const accountInvoiceSchema = z.object({
+  id: z.string(),
+  number: z.string().nullable(),
+  status: z.enum(['draft', 'open', 'paid', 'uncollectible', 'void']),
+  currency: z.string().length(3),
+  totalCents: z.number().int(),
+  amountDueCents: z.number().int().nonnegative(),
+  createdAt: z.iso.datetime(),
+  periodStart: isoOrNull,
+  periodEnd: isoOrNull,
+  /** Stripe-hosted invoice page (owner only). */
+  hostedInvoiceUrl: z.url().nullable(),
+  invoicePdf: z.url().nullable(),
+});
+export type AccountInvoice = z.infer<typeof accountInvoiceSchema>;
+
 export const accountUsageSummarySchema = z.object({
   email: z.string().nullable(),
   plan: planIdSchema,
@@ -72,5 +109,9 @@ export const accountUsageSummarySchema = z.object({
   /** Delivered bytes this billing period, from the usage ledger. */
   delivery: usageMeterSchema,
   billing: accountBillingSchema,
+  /** Spending cap + alerts (Pro), null for Free. */
+  spend: accountSpendSchema.nullable(),
+  /** Most recent invoices, newest first (at most 12). */
+  invoices: z.array(accountInvoiceSchema),
 });
 export type AccountUsageSummary = z.infer<typeof accountUsageSummarySchema>;

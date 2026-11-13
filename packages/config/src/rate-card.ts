@@ -81,6 +81,10 @@ export interface BillingPolicy {
    */
   spendCapToleranceBps: number;
   spendCapToleranceMinMicroUsd: number;
+  /** Proposed: highest overage cap an owner may set from /account (T32). The minimum is $0. */
+  maxSpendCapMicroUsd: number;
+  /** Reconciliation alert threshold: |Stripe − internal| / internal above this (bps, T31). */
+  reconciliationDriftAlertBps: number;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -93,4 +97,6 @@ export const BILLING_POLICY_V1: BillingPolicy = {
   defaultAlertThresholdsPct: [50, 80, 100],
   spendCapToleranceBps: 1_000, // 10 %
   spendCapToleranceMinMicroUsd: 250_000, // $0.25
+  maxSpendCapMicroUsd: 500 * MICRO_USD_PER_USD, // $500
+  reconciliationDriftAlertBps: 1_000, // 10 % (PLAN T31)
 };

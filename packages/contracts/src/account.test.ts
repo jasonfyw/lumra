@@ -26,6 +26,8 @@ describe('accountUsageSummarySchema', () => {
       deliveryPaused: null,
       galleries: { active: 1, max: 2 },
     },
+    spend: null,
+    invoices: [],
   };
 
   it('accepts a summary with untracked delivery', () => {

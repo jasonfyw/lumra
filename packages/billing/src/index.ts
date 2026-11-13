@@ -16,3 +16,4 @@ export * from './usage-summary';
 export * from './subscription';
 export * from './delivery-pause';
 export * from './safeguards';
+export * from './spend';

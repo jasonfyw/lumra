@@ -1,6 +1,8 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { RATE_CARD_V1 } from '@lumra/config';
+
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 import { ACCOUNT_FIXTURE_STATES, makeAccountFixture } from '@/app/dev/account/fixture';
 import { formatUsd, formatUsdRate } from '@/lib/format';
 import { planBlockFor } from '@/components/upload/gallery-uploader';
@@ -79,6 +81,8 @@ describe('/account billing states', () => {
     expect(keys('canceled')).toEqual(['canceled']);
     expect(keys('free_delivery_paused')).toEqual(['delivery_cap']);
     expect(keys('pro_canceling')).toEqual(['cancel_at_period_end']);
+    expect(keys('pro_alert_80')).toEqual(['spend_alert']);
+    expect(keys('pro_spend_cap')).toEqual(['spend_cap']);
   });
 
   it('the checkout redirect alone never claims Pro is active', () => {
@@ -100,5 +104,26 @@ describe('uploader plan prompts (T28)', () => {
     expect(planBlockFor([{ error: { code: 'forbidden' } }])?.title).toMatch(/paused/);
     expect(planBlockFor([{ error: { code: 'quota_exceeded', requiresAuth: true } }])).toBeNull();
     expect(planBlockFor([{ error: null }])).toBeNull();
+  });
+});
+
+describe('spending cap + invoices (T31/T32)', () => {
+  it('shows the cap form with the estimate and alerts for Pro, and the invoice list', () => {
+    const { summary } = makeAccountFixture('pro_alert_80');
+    render(<AccountView summary={summary} proMonthlyFeeMicroUsd={2_000_000} />);
+    expect(screen.getByLabelText('Monthly overage cap (USD)')).toHaveValue('10');
+    expect(screen.getByText('$8.42')).toBeInTheDocument();
+    expect(screen.getByText('80% (sent)')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /View\s+invoice A1B2C3D4-0002/ })).toHaveAttribute(
+      'href',
+      'https://invoice.stripe.com/i/fixture_2',
+    );
+  });
+
+  it('Free has no cap control', () => {
+    const { summary } = makeAccountFixture('free');
+    render(<AccountView summary={summary} proMonthlyFeeMicroUsd={2_000_000} />);
+    expect(screen.queryByLabelText('Monthly overage cap (USD)')).toBeNull();
+    expect(screen.getByText(/Free never bills overage/)).toBeInTheDocument();
   });
 });

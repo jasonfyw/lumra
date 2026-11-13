@@ -407,6 +407,7 @@ describe('delivery safety cutoff (T28/T32)', () => {
       deliveryPausedReason: null,
       period: { start: new Date('2026-11-01T00:00:00Z'), end: new Date('2026-12-01T00:00:00Z') },
       usage: { storageByteSecondsToDate: 0n, deliveryBytesToDate: 0 },
+      alertsSent: [],
       ...over,
     });
     const calls: unknown[][] = [];
@@ -427,6 +428,7 @@ describe('delivery safety cutoff (T28/T32)', () => {
         calls.push(args);
         return args[0] !== 'race';
       },
+      recordSpendAlerts: async () => [],
     };
     const result = await evaluateBillingSafeguards(['over', 'back', 'same', 'race'], {
       store,

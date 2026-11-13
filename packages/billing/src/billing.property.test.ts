@@ -243,7 +243,7 @@ describe('meter export properties', () => {
     .array(
       fc.record({
         metric: fc.constantFrom('storage_byte_seconds' as const, 'delivery_bytes' as const),
-        quantity: fc.bigInt({ min: 0n, max: 10n ** 15n }),
+        quantity: fc.bigInt({ min: 0n, max: 10n ** 17n }),
         day: int(0, 29),
       }),
       { maxLength: 25 },
@@ -271,6 +271,7 @@ describe('meter export properties', () => {
     buildMeterEvents({
       stripeCustomerId: 'cus',
       accountId: 'acct',
+      plan: pro,
       windowEnd: new Date(periodStart.getTime() + day * 86_400_000),
       entries,
       exported,

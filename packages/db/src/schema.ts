@@ -395,7 +395,112 @@ export const billingExports = pgTable('billing_exports', {
   attemptCount: integer('attempt_count').notNull().default(0),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+  // T31: the stored meter event (resent as is on retry).
+  eventName: text('event_name'),
+  metric: usageMetric('metric'),
+  periodStart: tstz('period_start'),
+  windowEnd: tstz('window_end'),
+  meterValue: int8('meter_value'),
+  payload: jsonb('payload').$type<Record<string, unknown>>(),
+  sentAt: tstz('sent_at'),
+  lastError: text('last_error'),
 });
+
+/** Paid subscription periods (T31): the only periods whose usage is exported to Stripe. */
+export const billingPeriods = pgTable(
+  'billing_periods',
+  {
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => billingAccounts.userId, { onDelete: 'restrict' }),
+    periodStart: tstz('period_start').notNull(),
+    periodEnd: tstz('period_end').notNull(),
+    stripeSubscriptionId: text('stripe_subscription_id').notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ name: 'billing_periods_pkey', columns: [t.accountId, t.periodStart] })],
+);
+
+/** Cumulative overage meter units recorded for export per (account, metric, period) (T31). */
+export const billingMeterCursors = pgTable(
+  'billing_meter_cursors',
+  {
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => billingAccounts.userId, { onDelete: 'restrict' }),
+    metric: usageMetric('metric').notNull(),
+    periodStart: tstz('period_start').notNull(),
+    exportedUnits: int8('exported_units').notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    primaryKey({
+      name: 'billing_meter_cursors_pkey',
+      columns: [t.accountId, t.metric, t.periodStart],
+    }),
+  ],
+);
+
+/** Stripe invoices from invoice.* webhooks (T31), listed on /account. */
+export const billingInvoices = pgTable('billing_invoices', {
+  id: id(),
+  accountId: uuid('account_id')
+    .notNull()
+    .references(() => billingAccounts.userId, { onDelete: 'cascade' }),
+  stripeInvoiceId: text('stripe_invoice_id').notNull().unique(),
+  number: text('number'),
+  status: text('status').$type<'draft' | 'open' | 'paid' | 'uncollectible' | 'void'>().notNull(),
+  billingReason: text('billing_reason'),
+  currency: text('currency').notNull(),
+  subtotalCents: int8('subtotal_cents').notNull(),
+  totalCents: int8('total_cents').notNull(),
+  amountDueCents: int8('amount_due_cents').notNull(),
+  amountPaidCents: int8('amount_paid_cents').notNull(),
+  periodStart: tstz('period_start'),
+  periodEnd: tstz('period_end'),
+  hostedInvoiceUrl: text('hosted_invoice_url'),
+  invoicePdf: text('invoice_pdf'),
+  stripeCreatedAt: tstz('stripe_created_at').notNull(),
+  stripeEventAt: tstz('stripe_event_at').notNull(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+/** Internal vs Stripe invoice comparison (T31 reconciliation report). */
+export const billingReconciliations = pgTable('billing_reconciliations', {
+  id: id(),
+  accountId: uuid('account_id')
+    .notNull()
+    .references(() => billingAccounts.userId, { onDelete: 'cascade' }),
+  stripeInvoiceId: text('stripe_invoice_id').notNull().unique(),
+  usagePeriodStart: tstz('usage_period_start'),
+  expectedCents: int8('expected_cents').notNull(),
+  stripeCents: int8('stripe_cents').notNull(),
+  driftBps: integer('drift_bps').notNull(),
+  flagged: boolean('flagged').notNull(),
+  exceedsCapTolerance: boolean('exceeds_cap_tolerance').notNull(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+/** Spend-cap alerts, once per (account, period, threshold) (T32). */
+export const billingAlerts = pgTable(
+  'billing_alerts',
+  {
+    id: id(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => billingAccounts.userId, { onDelete: 'cascade' }),
+    periodStart: tstz('period_start').notNull(),
+    thresholdPct: smallint('threshold_pct').notNull(),
+    spendMicroUsd: int8('spend_micro_usd').notNull(),
+    capMicroUsd: int8('cap_micro_usd').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [unique('billing_alerts_once').on(t.accountId, t.periodStart, t.thresholdPct)],
+);
 
 export const jobOutbox = pgTable('job_outbox', {
   id: id(),
