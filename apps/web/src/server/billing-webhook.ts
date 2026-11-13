@@ -59,7 +59,7 @@ export type WebhookOutcome = 'processed' | 'ignored' | 'duplicate';
 export interface WebhookResult {
   outcome: WebhookOutcome;
   accountId: string | null;
-  /** A committed entitlement change: re-apply the delivery cutoff after the transaction. */
+  /** A committed entitlement change: re-evaluate spend-cap alerts after the transaction. */
   reevaluate: boolean;
   /** Why an event was ignored (logged; never payload data). */
   reason?: string;
@@ -395,20 +395,16 @@ async function reconcile(
   const usagePeriod = toDate(invoice.period_start);
   const [usage] = (await tx.execute<{
     byte_seconds: string;
-    delivery: string;
     version: number | null;
   }>(sql`
     select
       coalesce(sum(quantity_micro_units) filter (where metric = 'storage_byte_seconds'), 0)::text
         as byte_seconds,
-      coalesce(sum(quantity_micro_units) filter (where metric = 'delivery_bytes'), 0)::text
-        as delivery,
       max(rating_version) as version
     from public.usage_ledger
     where account_id = ${account.userId}::uuid
       and period_start = ${usagePeriod?.toISOString() ?? null}::timestamptz`)) as unknown as {
     byte_seconds: string;
-    delivery: string;
     version: number | null;
   }[];
   const [current] = await tx.select().from(plans).where(eq(plans.id, 'pro'));
@@ -425,10 +421,7 @@ async function reconcile(
   const byteSeconds = BigInt(usage?.byte_seconds ?? '0');
   const result = reconcileInvoice({
     plan,
-    usage: {
-      storageByteSeconds: byteSeconds < 0n ? 0n : byteSeconds,
-      deliveryBytes: Math.max(0, Number(usage?.delivery ?? 0)),
-    },
+    usage: { storageByteSeconds: byteSeconds < 0n ? 0n : byteSeconds },
     stripeSubtotalCents: invoice.subtotal,
     firstInvoice,
     capMicroUsd: effectiveCapMicroUsd(plan, account.spendCap),

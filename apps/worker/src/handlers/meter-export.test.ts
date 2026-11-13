@@ -1,5 +1,5 @@
 import { buildLedgerEntry, type LedgerEntry, type StripeMeterEvent } from '@lumra/billing';
-import { BYTES_PER_GB, RATE_CARD_V1, STRIPE_API_VERSION } from '@lumra/config';
+import { BILLING_POLICY_V1, RATE_CARD_V1, STRIPE_API_VERSION } from '@lumra/config';
 import type { MeterExportRepository, StoredMeterExport } from '@lumra/db';
 import { describe, expect, it, vi } from 'vitest';
 import { silentLogger } from '../log';
@@ -9,12 +9,14 @@ const ACCOUNT = '00000000-0000-4000-8000-000000000001';
 const periodStart = new Date('2026-11-04T09:30:00Z');
 const periodEnd = new Date('2026-12-04T09:30:00Z');
 
-function delivery(sourceId: string, bytes: number, at: Date): LedgerEntry {
+const MONTH_S = BigInt(BILLING_POLICY_V1.secondsPerBillingMonth);
+/** Storage ledger row of `mbMonths` MB-months (20 000 MB-months are included in Pro). */
+function storage(sourceId: string, mbMonths: number, at: Date): LedgerEntry {
   return buildLedgerEntry({
     accountId: ACCOUNT,
-    metric: 'delivery_bytes',
-    quantity: bytes,
-    unit: 'byte',
+    metric: 'storage_byte_seconds',
+    quantity: BigInt(mbMonths) * 1_000_000n * MONTH_S,
+    unit: 'byte_second',
     sourceId,
     eventTime: at,
     period: { start: periodStart, end: periodEnd },
@@ -65,10 +67,7 @@ const plans = { getRates: async () => RATE_CARD_V1.pro };
 describe('runMeterExport (T31)', () => {
   it('re-running the export produces no duplicate meter events', async () => {
     const day = (d: number) => new Date(periodStart.getTime() + d * 86_400_000);
-    const entries = [
-      delivery('a', 5 * BYTES_PER_GB + 250_000_000, day(1)),
-      delivery('b', 500_000_000, day(2)),
-    ];
+    const entries = [storage('a', 20_000 + 250, day(1)), storage('b', 500, day(2))];
     const { repo } = memoryRepo(entries);
     const sent: StripeMeterEvent[] = [];
     const send = vi.fn(async (e: StripeMeterEvent) => {
@@ -83,15 +82,15 @@ describe('runMeterExport (T31)', () => {
     expect(await run(2.5)).toMatchObject({ recorded: 1, sent: 1 });
     expect(await run(3.5)).toMatchObject({ recorded: 0, sent: 0 });
     expect(sent.map((e) => [e.event_name, e.payload.value])).toEqual([
-      ['lumra_delivery_overage', '250'],
-      ['lumra_delivery_overage', '500'],
+      ['lumra_storage_overage', '250'],
+      ['lumra_storage_overage', '500'],
     ]);
     expect(new Set(sent.map((e) => e.identifier)).size).toBe(2);
   });
 
   it('a failed send is retried with the stored payload, not a recomputed one', async () => {
     const now = new Date(periodStart.getTime() + 2 * 86_400_000);
-    const entries = [delivery('a', 6 * BYTES_PER_GB, new Date(now.getTime() - 3_600_000))];
+    const entries = [storage('a', 21_000, new Date(now.getTime() - 3_600_000))];
     const { repo } = memoryRepo(entries);
     const bodies: string[] = [];
     let fail = true;
@@ -102,7 +101,7 @@ describe('runMeterExport (T31)', () => {
     };
     const deps = { repo, plans, send, log: silentLogger, now: () => now, mode: 'daily' as const };
     expect(await runMeterExport(deps)).toMatchObject({ recorded: 1, sendFailed: 1 });
-    entries.push(delivery('late', 1_000_000_000, new Date(now.getTime() - 60_000)));
+    entries.push(storage('late', 1_000, new Date(now.getTime() - 60_000)));
     fail = false;
     const second = await runMeterExport(deps);
     expect(second.sent).toBe(1);
@@ -134,8 +133,8 @@ describe('runMeterExport (T31)', () => {
 
 describe('stripeMeterSender', () => {
   const event: StripeMeterEvent = {
-    event_name: 'lumra_delivery_overage',
-    identifier: `${ACCOUNT}:delivery_bytes:1:2`,
+    event_name: 'lumra_storage_overage',
+    identifier: `${ACCOUNT}:storage_byte_seconds:1:2`,
     timestamp: 2,
     payload: { stripe_customer_id: 'cus_1', value: '250' },
   };

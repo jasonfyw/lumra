@@ -52,40 +52,21 @@ describe('percentOfLimit', () => {
 });
 
 describe('summarizeUsage', () => {
-  it('reports Free limits for storage and tracked delivery', () => {
-    const s = summarizeUsage({
-      plan: RATE_CARD_V1.free,
-      storedBytes: 250_000_000,
-      deliveryBytes: 1_500_000_000,
-    });
-    expect(s.storage).toEqual({
-      usedBytes: 250_000_000,
-      limitBytes: BYTES_PER_GB,
-      percentUsed: 25,
-      tracked: true,
-    });
-    expect(s.delivery).toEqual({
-      usedBytes: 1_500_000_000,
-      limitBytes: 3 * BYTES_PER_GB,
-      percentUsed: 50,
-      tracked: true,
-    });
-  });
-
-  it('marks delivery untracked when the ledger has no data', () => {
-    const s = summarizeUsage({ plan: RATE_CARD_V1.free, storedBytes: 0, deliveryBytes: null });
-    expect(s.delivery).toEqual({
-      usedBytes: null,
-      limitBytes: 3 * BYTES_PER_GB,
-      percentUsed: null,
-      tracked: false,
+  it('reports the Free storage limit and nothing about delivery (ADR-008)', () => {
+    const s = summarizeUsage({ plan: RATE_CARD_V1.free, storedBytes: 250_000_000 });
+    expect(s).toEqual({
+      storage: {
+        usedBytes: 250_000_000,
+        limitBytes: BYTES_PER_GB,
+        percentUsed: 25,
+        tracked: true,
+      },
     });
   });
 
   it('has no hard limits on Pro', () => {
-    const s = summarizeUsage({ plan: RATE_CARD_V1.pro, storedBytes: 7, deliveryBytes: 0 });
+    const s = summarizeUsage({ plan: RATE_CARD_V1.pro, storedBytes: 7 });
     expect(s.storage.limitBytes).toBeNull();
     expect(s.storage.percentUsed).toBeNull();
-    expect(s.delivery).toMatchObject({ usedBytes: 0, tracked: true, percentUsed: null });
   });
 });

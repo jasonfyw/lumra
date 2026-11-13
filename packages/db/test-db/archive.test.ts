@@ -186,7 +186,7 @@ describe('archive columns', () => {
 });
 
 describe('archives in billing', () => {
-  it('count stored archive bytes in storage accrual and building jobs as reservations', async () => {
+  it('count stored archive bytes in storage accrual; building jobs reserve nothing', async () => {
     await inRollback(sql, async (tx) => {
       const { ownerId, jobId, partIds } = await fixture(tx);
       const billing = createBillingRepository(tx as unknown as postgres.Sql);
@@ -195,9 +195,8 @@ describe('archives in billing', () => {
         (await billing.storageAccrualCandidates(at, 10_000)).find((c) => c.accountId === ownerId);
       // 1000 original bytes (no derivative row in this fixture).
       expect((await mine())!.storedBytesNow).toBe(1000);
-      expect(await billing.reservations.pending(ownerId)).toEqual([
-        { kind: 'archive', bytes: 1000 },
-      ]);
+      // Archives reserve no cost: delivery is not billed (ADR-008).
+      expect(await billing.reservations.pending(ownerId)).toEqual([]);
       await repoFor(tx).claim(jobId, 60_000);
       await repoFor(tx).completePart({
         jobId,

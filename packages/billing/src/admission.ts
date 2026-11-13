@@ -8,16 +8,19 @@ import { BillingArithmeticError, divCeil, toNonNegativeBigInt, toSafeNumber } fr
  * decision runs again inside the reservation transaction (T28/T32) with the same inputs.
  *
  * Admission is conservative: it assumes every byte stored now (plus every pending and requested
- * upload) stays stored until the period ends, and every pending/requested archive is fully
- * downloaded. Organic gallery views cannot be reserved in advance; those are bounded by the
- * delivery cutoff (`checkDeliveryAllowance`) and the disclosed cap tolerance.
+ * upload) stays stored until the period ends. Storage is the only billed usage; delivery (served
+ * bytes, archive downloads included) is neither metered nor capped (ADR-008), so an archive
+ * request is only gated by the account's billing status.
  */
 
 export type AdmissionKind = 'upload' | 'archive';
 
 export interface Reservation {
   kind: AdmissionKind;
-  /** Upload: bytes to be stored (original + estimated derivatives). Archive: bytes to be served. */
+  /**
+   * Upload: bytes to be stored (original + estimated derivatives). Archive: bytes of originals
+   * to be zipped (informational; archives are not billed).
+   */
   bytes: number;
 }
 
@@ -26,17 +29,14 @@ export interface CurrentUsage {
   storedBytes: number;
   /** Byte-seconds already accrued this period (from the ledger). */
   storageByteSecondsToDate: bigint;
-  /** Delivery bytes already metered this period. */
-  deliveryBytesToDate: number;
 }
 
 export interface FreeLimits {
   maxStorageBytes: number;
-  maxDeliveryBytesPerMonth: number;
 }
 
 export type AdmissionDenialReason =
-  'past_due' | 'account_canceled' | 'free_storage_cap' | 'free_delivery_cap' | 'spend_cap';
+  'past_due' | 'account_canceled' | 'free_storage_cap' | 'spend_cap';
 
 export type AdmissionDecision =
   | { allowed: true; projectedOverageMicroUsd: number; remainingCapMicroUsd: number | null }
@@ -53,7 +53,7 @@ export interface AdmissionInput {
   now: Date;
   period: { start: Date; end: Date };
   currentUsage: CurrentUsage;
-  /** Pending, not-yet-settled reservations (uploads in progress, archives being built). */
+  /** Pending, not-yet-settled reservations (uploads in progress). */
   reservations: readonly Reservation[];
   requested: Reservation;
   /** Overage cap in micro-USD; `null` falls back to the plan default (no cap if that is null too). */
@@ -65,11 +65,8 @@ export interface AdmissionInput {
 
 /** The plan's hard limits, or `null` for plans that bill overage instead. */
 export function freeLimitsForPlan(plan: PlanRates): FreeLimits | null {
-  if (plan.maxStorageBytes === null || plan.maxDeliveryBytesPerMonth === null) return null;
-  return {
-    maxStorageBytes: plan.maxStorageBytes,
-    maxDeliveryBytesPerMonth: plan.maxDeliveryBytesPerMonth,
-  };
+  if (plan.maxStorageBytes === null) return null;
+  return { maxStorageBytes: plan.maxStorageBytes };
 }
 
 export function effectiveCapMicroUsd(plan: PlanRates, capMicroUsd: number | null): number | null {
@@ -90,9 +87,7 @@ export function checkAdmission(input: AdmissionInput): AdmissionDecision {
 
   const all = [...input.reservations, requested];
   const storedNow = toNonNegativeBigInt(currentUsage.storedBytes, 'storedBytes');
-  const deliveredNow = toNonNegativeBigInt(currentUsage.deliveryBytesToDate, 'deliveryBytesToDate');
   const projectedStored = storedNow + sumBytes(all, 'upload');
-  const projectedDelivery = deliveredNow + sumBytes(all, 'archive');
 
   const nowMs = input.now.getTime();
   const endMs = input.period.end.getTime();
@@ -105,7 +100,7 @@ export function checkAdmission(input: AdmissionInput): AdmissionDecision {
     divCeil(projectedStored * remainingMs, 1000n);
 
   const projectedOverageMicroUsd = estimateOverageMicroUsd(
-    { storageByteSeconds: projectedByteSeconds, deliveryBytes: projectedDelivery },
+    { storageByteSeconds: projectedByteSeconds },
     plan,
     policy.secondsPerBillingMonth,
   );
@@ -124,18 +119,13 @@ export function checkAdmission(input: AdmissionInput): AdmissionDecision {
     return deny(restrictions.effectiveStatus === 'canceled' ? 'account_canceled' : 'past_due');
   }
 
-  const limits = input.freeLimits ?? freeLimitsForPlan(plan);
-  if (limits) {
-    if (requested.kind === 'upload' && projectedStored > BigInt(limits.maxStorageBytes)) {
-      return deny('free_storage_cap');
-    }
-    if (
-      requested.kind === 'archive' &&
-      projectedDelivery > BigInt(limits.maxDeliveryBytesPerMonth)
-    ) {
-      return deny('free_delivery_cap');
-    }
+  // Archives are not billed: past the status check they are always admitted.
+  if (requested.kind === 'archive') {
+    return { allowed: true, projectedOverageMicroUsd, remainingCapMicroUsd };
   }
+
+  const limits = input.freeLimits ?? freeLimitsForPlan(plan);
+  if (limits && projectedStored > BigInt(limits.maxStorageBytes)) return deny('free_storage_cap');
 
   if (cap !== null && projectedOverageMicroUsd > cap) return deny('spend_cap');
 
@@ -176,52 +166,6 @@ export function exceedsCapTolerance(
   policy: BillingPolicy = BILLING_POLICY_V1,
 ): boolean {
   return overageMicroUsd > capMicroUsd + spendCapToleranceMicroUsd(capMicroUsd, policy);
-}
-
-export type DeliveryDecision =
-  | { allowed: true }
-  | { allowed: false; reason: 'past_due' | 'account_canceled' | 'free_delivery_cap' | 'spend_cap' };
-
-/**
- * Gateway/ledger safety cutoff for new billable delivery (PRD §9.4). Free pauses at the monthly
- * delivery cap; Pro pauses once the estimated overage has reached the cap. Transfers already in
- * flight may finish, which is what the disclosed tolerance covers.
- */
-export function checkDeliveryAllowance(input: {
-  plan: PlanRates;
-  account: BillingAccountState;
-  now: Date;
-  usage: { storageByteSecondsToDate: bigint; deliveryBytesToDate: number };
-  capMicroUsd: number | null;
-  freeLimits?: FreeLimits;
-  policy?: BillingPolicy;
-}): DeliveryDecision {
-  const policy = input.policy ?? BILLING_POLICY_V1;
-  const restrictions = deriveBillingRestrictions(input.account, input.now, policy);
-  if (!restrictions.publicDeliveryAllowed) {
-    return {
-      allowed: false,
-      reason: restrictions.effectiveStatus === 'canceled' ? 'account_canceled' : 'past_due',
-    };
-  }
-  const limits = input.freeLimits ?? freeLimitsForPlan(input.plan);
-  if (limits && input.usage.deliveryBytesToDate >= limits.maxDeliveryBytesPerMonth) {
-    return { allowed: false, reason: 'free_delivery_cap' };
-  }
-  const cap = effectiveCapMicroUsd(input.plan, input.capMicroUsd);
-  if (cap !== null) {
-    const overage = estimateOverageMicroUsd(
-      {
-        storageByteSeconds: input.usage.storageByteSecondsToDate,
-        deliveryBytes: input.usage.deliveryBytesToDate,
-      },
-      input.plan,
-      policy.secondsPerBillingMonth,
-    );
-    // A zero cap with zero overage still allows delivery inside the allowance.
-    if (overage > 0 && overage >= cap) return { allowed: false, reason: 'spend_cap' };
-  }
-  return { allowed: true };
 }
 
 /**

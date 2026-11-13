@@ -37,11 +37,12 @@ function sqlTables(): Record<string, Set<string>> {
     }
     out[m[1]!] = cols;
   }
-  // Later migrations add columns with `alter table public.x add column y ...`.
-  // One statement may add several columns (`add column a …, add column b …`).
+  // Later migrations add or drop columns with `alter table public.x add|drop column y ...`.
+  // One statement may change several columns (`add column a …, drop column b …`).
   for (const m of sql.matchAll(/alter table public\.(\w+)\s+([^;]*);/g)) {
-    for (const c of m[2]!.matchAll(/(?:^|,)\s*add column (?:if not exists )?(\w+)/g)) {
-      out[m[1]!]?.add(c[1]!);
+    for (const c of m[2]!.matchAll(/(?:^|,)\s*(add|drop) column (?:if (?:not )?exists )?(\w+)/g)) {
+      if (c[1] === 'add') out[m[1]!]?.add(c[2]!);
+      else out[m[1]!]?.delete(c[2]!);
     }
   }
   return out;
@@ -90,9 +91,15 @@ describe('RLS coverage', () => {
   });
 });
 
-describe('rate card seed (T27)', () => {
+describe('rate card seed (T27, ADR-008)', () => {
   // Column order of the `insert into public.plan_rate_versions (...)` seed in the T27 migration.
-  const columns: (keyof PlanRates)[] = [
+  // The three delivery columns were dropped by the ADR-008 migration.
+  const deliveryColumns = [
+    'maxDeliveryBytesPerMonth',
+    'includedDeliveryGb',
+    'deliveryOverageMicroUsdPerGb',
+  ] as const;
+  const columns: (keyof PlanRates | (typeof deliveryColumns)[number])[] = [
     'id',
     'rateVersion',
     'monthlyFeeMicroUsd',
@@ -124,13 +131,26 @@ describe('rate card seed (T27)', () => {
                 ? Number(v)
                 : v,
       );
-      return Object.fromEntries(columns.map((c, i) => [c, parsed[i]]));
+      return Object.fromEntries(
+        columns
+          .map((c, i) => [c, parsed[i]] as const)
+          .filter(([c]) => !(deliveryColumns as readonly string[]).includes(c)),
+      );
     });
   }
 
   it('plan_rate_versions v1 equals RATE_CARD_V1 exactly (PRD §9.2 proposed defaults)', () => {
     const rows = seededRows('plan_rate_versions');
     expect(rows).toEqual([RATE_CARD_V1.free, RATE_CARD_V1.pro]);
+  });
+
+  it('drops every delivery column and the delivery usage metric (ADR-008)', () => {
+    const tables = sqlTables();
+    for (const table of ['plans', 'plan_rate_versions', 'billing_accounts']) {
+      expect([...tables[table]!].filter((c) => c.includes('delivery'))).toEqual([]);
+    }
+    expect(sqlEnums().usage_metric).toEqual(['storage_byte_seconds']);
+    expect(Object.keys(RATE_CARD_V1.pro).filter((k) => /deliver/i.test(k))).toEqual([]);
   });
 
   it('plans are re-projected from their rate version (the core seed predates v1 changes)', () => {

@@ -160,14 +160,15 @@ describe('uniqueness and integrity constraints', () => {
       const insert = (sp: Tx, metric: string, unit: string, sourceId: string) => sp`
         insert into public.usage_ledger (account_id, metric, quantity_micro_units, unit, source_id, event_time, period_start, rating_version)
         values (${user}, ${metric}, 1000, ${unit}, ${sourceId}, now(), date_trunc('month', now()), 1)`;
-      await insert(tx, 'delivery_bytes', 'bytes', 'evt-1');
       await insert(tx, 'storage_byte_seconds', 'byte_seconds', 'evt-1');
       await expectSqlError(tx, UNIQUE_VIOLATION, (sp) =>
-        insert(sp, 'delivery_bytes', 'bytes', 'evt-1'),
+        insert(sp, 'storage_byte_seconds', 'byte_seconds', 'evt-1'),
       );
       await expectSqlError(tx, CHECK_VIOLATION, (sp) =>
-        insert(sp, 'delivery_bytes', 'byte_seconds', 'evt-2'),
+        insert(sp, 'storage_byte_seconds', 'bytes', 'evt-2'),
       );
+      // Delivery is no longer a usage metric (ADR-008): invalid enum value.
+      await expectSqlError(tx, '22P02', (sp) => insert(sp, 'delivery_bytes', 'bytes', 'evt-3'));
       await expectSqlError(
         tx,
         '23001',
@@ -227,11 +228,8 @@ describe('plans seed', () => {
         monthlyFeeMicroUsd: num(row.monthly_fee_micro_usd),
         maxActiveGalleries: row.max_active_galleries,
         maxStorageBytes: num(row.max_storage_bytes),
-        maxDeliveryBytesPerMonth: num(row.max_delivery_bytes_per_month),
         includedStorageGbMonth: row.included_storage_gb_month,
-        includedDeliveryGb: row.included_delivery_gb,
         storageOverageMicroUsdPerGbMonth: num(row.storage_overage_micro_usd_per_gb_month),
-        deliveryOverageMicroUsdPerGb: num(row.delivery_overage_micro_usd_per_gb),
         defaultOverageCapMicroUsd: num(row.default_overage_cap_micro_usd),
         brandingVisible: row.branding_visible,
       }).toEqual(rc);

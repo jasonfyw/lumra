@@ -84,9 +84,9 @@ jobs per gallery; requests are rate limited per IP (`publicArchiveCreate`).
 - No new infrastructure: the existing `ARCHIVES` bindings, queue and DLQ are reused. The worker
   script gets `limits.cpu_ms = 300000`.
 - A part interrupted at 1.9 GB restarts from its first byte (wasted I/O, never wrong output).
-- Delivery of parts is metered by the gateway's `delivery.served` (`action: 'archive'`), counted
-  per response byte like any download (FR-D04). Stored archive bytes are included in storage
-  accrual while the job is `running`/`ready` (BILLING.md).
+- Downloads of parts are not metered or billed (ADR-008; they were originally metered per response
+  byte). Stored archive bytes are included in storage accrual while the job is `running`/`ready`
+  (BILLING.md).
 - Downloads use HTTP Range through the gateway, so browsers can resume a 2 GB part.
 
 ## Alternatives considered

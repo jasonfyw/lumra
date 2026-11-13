@@ -5,7 +5,6 @@ import {
   DELETION_SWEEP_CRON,
   OUTBOX_RELAY_CRON,
   STORAGE_ACCRUAL_CRON,
-  isUsageQueue,
 } from './index';
 
 interface Consumer {
@@ -41,12 +40,12 @@ describe('wrangler.jsonc (T27 metering bindings)', () => {
     expect((config.env.production as { limits?: unknown }).limits).toBeUndefined();
   });
 
-  it('consumes the media gateway usage queue with a DLQ in every environment', () => {
+  it('consumes only the jobs queue (with a DLQ): no usage queue since ADR-008', () => {
     for (const consumers of [config.queues.consumers, config.env.production.queues.consumers]) {
-      const usage = consumers.filter((c) => isUsageQueue(c.queue));
-      expect(usage).toHaveLength(1);
-      expect(usage[0]!.dead_letter_queue).toMatch(/^lumra-usage-dlq/);
+      expect(consumers).toHaveLength(1);
+      expect(consumers[0]!.queue).toMatch(/^lumra-jobs/);
+      expect(consumers[0]!.dead_letter_queue).toMatch(/^lumra-jobs-dlq/);
     }
-    expect(config.env.production.queues.consumers.map((c) => c.queue)).toContain('lumra-usage');
+    expect(wranglerText).not.toMatch(/lumra-usage/);
   });
 });

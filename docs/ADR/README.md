@@ -13,6 +13,7 @@ Required before the listed task starts (PRD §17, `docs/PLAN.md` §2):
 | [005](./005-rls-and-guest-claim.md)              | RLS and guest claim security            | T02, T07 |
 | 006                                              | Video provider (v1.1)                   | V01      |
 | [007](./007-database-access-layer.md)            | Database access layer                   | T02      |
+| [008](./008-remove-delivery-billing.md)          | Remove delivery from pricing            | T27–T33  |
 
 Template:
 

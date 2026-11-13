@@ -7,8 +7,8 @@ import type { Tx } from '@/lib/db';
 
 /**
  * Billing-state writes shared by the webhook (T29/T30) and the spending-cap endpoint (T32).
- * Rules come from `@lumra/billing`; persistence of the delivery cutoff reuses the worker's
- * Postgres adapter (`createBillingStateRepository`) so web and worker flip the pause identically.
+ * Rules come from `@lumra/billing`; spend-cap alerts reuse the worker's Postgres adapter
+ * (`createBillingStateRepository`) so web and worker record them identically.
  */
 
 /** Non-deleted galleries and stored bytes (originals + derivatives), as `/account` counts them. */
@@ -37,7 +37,7 @@ export async function accountFootprint(
   return { activeGalleries: Number(row?.galleries ?? 0), storedBytes: Number(row?.bytes ?? 0) };
 }
 
-/** Re-sync every published gallery's KV access state for `userId` (status/plan/pause changed). */
+/** Re-sync every published gallery's KV access state for `userId` (status/plan changed). */
 export async function enqueueOwnerAccessSync(tx: Tx, userId: string, traceId: string) {
   await tx.execute(sql`select public.enqueue_owner_access_sync(${userId}::uuid, ${traceId})`);
 }
@@ -58,11 +58,11 @@ export async function enqueueAccountEmail(
 }
 
 /**
- * Re-applies the delivery safety cutoff after a committed plan / status / cap change (an
- * upgrade lifts a Free-cap pause at once; a lower cap pauses at once). Best effort: the worker
- * re-evaluates on every delivery batch and hourly, so a failure here only delays convergence.
+ * Re-evaluates spend-cap alerts after a committed plan / status / cap change (a lower cap may
+ * cross a threshold at once). Best effort: the worker re-evaluates hourly, so a failure here only
+ * delays the alert. Delivery is never paused for usage (ADR-008).
  */
-export async function reevaluateDeliveryPause(
+export async function reevaluateSpendAlerts(
   db: Database,
   userId: string,
   options: { now?: Date; traceId: string; log: Logger },
@@ -73,15 +73,10 @@ export async function reevaluateDeliveryPause(
       now: options.now ?? new Date(),
       traceId: options.traceId,
     });
-    for (const change of result.changes) {
-      options.log.info(change.paused ? 'delivery paused' : 'delivery resumed', {
-        accountId: change.accountId,
-        ...(change.paused ? { reason: change.paused } : {}),
-      });
-    }
+    if (result.alerts > 0) options.log.info('spend-cap alerts recorded', { alerts: result.alerts });
     return result;
   } catch (error) {
-    options.log.warn('delivery cutoff re-evaluation failed', { err: error });
+    options.log.warn('spend alert re-evaluation failed', { err: error });
     return null;
   }
 }

@@ -78,8 +78,9 @@ const expiredError = () =>
   });
 
 /**
- * Owner's delivery is paused or suspended (Free delivery cap, spending cap, billing suspension,
- * PRD §9.4): a calm "temporarily unavailable" notice. The reason is not disclosed to recipients.
+ * Owner's galleries are suspended for billing status (past due beyond grace, restricted or
+ * canceled, PRD §9.4; usage never suspends them, ADR-008): a calm "temporarily unavailable"
+ * notice. The reason is not disclosed to recipients.
  */
 export const galleryUnavailableError = () =>
   new ApiFailure({
@@ -122,7 +123,6 @@ export async function findViewableGallery(
       pastDueSince: billingAccounts.pastDueSince,
       restrictedSince: billingAccounts.restrictedSince,
       canceledAt: billingAccounts.canceledAt,
-      deliveryPausedReason: billingAccounts.deliveryPausedReason,
     })
     .from(galleries)
     .leftJoin(profiles, eq(profiles.userId, galleries.ownerId))
@@ -142,7 +142,6 @@ export async function findViewableGallery(
           pastDueSince: row.pastDueSince,
           restrictedSince: row.restrictedSince,
           canceledAt: row.canceledAt,
-          deliveryPausedReason: row.deliveryPausedReason ?? null,
         }
       : null,
     now,
@@ -551,7 +550,7 @@ export const OWNER_THUMBNAIL_VARIANTS = ['w640', 'w320'] as const;
  * Owner-scoped thumbnail URLs for the creator's editor (ADR-001 "Owner previews"), keyed by
  * media id. The CALLER must already have verified that the signed-in user owns this live
  * gallery: this mints regardless of publish/password/expiry. Tokens carry `scope: 'owner'` and
- * the current `access_version`, so the gateway still applies revocation, deletion and delivery
+ * the current `access_version`, so the gateway still applies revocation, deletion and billing
  * suspension; only drafts (no KV document) and expiry are let through for the owner. Items
  * without a stored derivative get no URL.
  */

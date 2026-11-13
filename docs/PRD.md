@@ -1,6 +1,6 @@
 # Lumra — Product Requirements & Agent-Ready Implementation Specification
 
-**Version:** 1.0 (baseline)  
+**Version:** 1.1 — pricing change: delivery removed from pricing (ADR-008, 13 November 2026)  
 **Prepared:** 20 October 2026  
 **Status:** Implementation-ready proposal, with configurable commercial assumptions  
 **Release:** v1 photos only; v1.1 video  
@@ -12,7 +12,7 @@
 
 Lumra is a minimal, premium-feeling media delivery platform. Anyone can begin creating a gallery without creating an account, upload files, then authenticate only at publishing (or earlier if guest limits are exceeded). The creator shares a simple link; recipients browse an immersive, justified gallery and download originals singly, as a selection, or all at once. The product prioritizes getting a first gallery ready to share in **under 60 seconds of active workflow time, excluding file transfer/processing**.
 
-**v1 includes:** photo ingestion (JPEG, PNG, WebP, HEIC), image derivatives, draft guest flow, passwordless email authentication, gallery creation/editing/reordering, publication during uploads with placeholders, publicly shareable and optionally passworded galleries, expiration controls, original downloads, background ZIP jobs, basic analytics, minimal dashboard, secure private media delivery, usage quotas, $2/month Pro with metered overages, Stripe subscriptions/invoices, spending alerts and caps, monitoring/backup/cleanup. Light mode only. Mobile creation and viewing are first-class.
+**v1 includes:** photo ingestion (JPEG, PNG, WebP, HEIC), image derivatives, draft guest flow, passwordless email authentication, gallery creation/editing/reordering, publication during uploads with placeholders, publicly shareable and optionally passworded galleries, expiration controls, original downloads, background ZIP jobs, basic analytics, minimal dashboard, secure private media delivery, usage quotas, $2/month Pro with metered storage overage, Stripe subscriptions/invoices, spending alerts and caps, monitoring/backup/cleanup. Light mode only. Mobile creation and viewing are first-class.
 
 **v1 excludes:** video upload, streaming, transcoding, and video processing charges; RAW images; commenting/favourites/client selections; nested folders; personal portfolio sites; extensive theming; invite-only access; sophisticated analytics; custom domains; native apps. **v1.1** adds MP4/MOV video, original preservation in R2, managed transcoding/playback, poster generation, and video metering.
 
@@ -72,7 +72,7 @@ No social feed, albums-within-albums, client proofing, editing tools, RAW proces
 
 **J4 Expiration:** gallery link passes `expires_at` → recipients see consistent expired page (not asset bytes) → creator can extend/remove expiry → original URL works again without re-upload.
 
-**J5 Spending cap:** usage/reserved costs near threshold → warning email and account banner → at cap, deny new uploads and expensive new archive jobs; policy for already shared gallery media described in §9.4.
+**J5 Spending cap:** projected storage overage near threshold → warning email and account banner → at cap, deny new uploads; shared galleries, views and downloads are unaffected (delivery is not metered, §9.4).
 
 ## 4. Screens, information architecture and UX contracts
 
@@ -84,7 +84,7 @@ No social feed, albums-within-albums, client proofing, editing tools, RAW proces
 | `/dashboard` | Minimal list; New gallery; name, published/draft, item count, created/updated, size, link actions. |
 | `/dashboard/galleries/[id]` | Edit title/cover, reorder, add/remove media, share, password/expiration, analytics, delete. |
 | `/g/[slug]` | Hero cover + title + justified mixed-aspect photo grid (v1 photos only), password gate when needed. |
-| `/account` | Email, plan, small storage/bandwidth usage summary, invoice link, spending cap and alerts. |
+| `/account` | Email, plan, small storage usage summary, invoice link, spending cap and alerts. |
 | `/pricing` | Transparent Free/Pro usage and charges with representative examples and rate definitions. |
 | `/archive/[jobId]` | Archive preparing/progress/ready/failure/expired; retriable errors and clear time estimates only when calculable. |
 
@@ -137,14 +137,14 @@ No social feed, albums-within-albums, client proofing, editing tools, RAW proces
 - FR-D01: Single download serves **exact original file** with `Content-Disposition: attachment`; no reencoding. Support byte-range requests for large originals if gateway implementation supports them securely.
 - FR-D02: Multi-select and Download All create ZIP archives containing original images with safe filenames, deterministic collision suffixes, a manifest optional; filename paths sanitized to prevent traversal.
 - FR-D03: Background archive assembly is queued, resumable/idempotent, reports preparing/processing/ready/failed; ZIP bytes never routed through Vercel. **Proposed job bound:** max 2 GB of originals per archive and up to 500 items per archive; requests exceeding bound generate multiple partitioned archives automatically with clear download links. A complete gallery may therefore generate 4+ archives. This is a v1 implementation constraint, not a reduction in Download All availability.
-- FR-D04: Archive output stored in private R2 with short retention (Proposed 24 h), issued via scoped gateway, and cleaned by lifecycle job. Re-download count counts archive as one download action; bytes account to delivery meter once per actual response byte served.
+- FR-D04: Archive output stored in private R2 with short retention (Proposed 24 h), issued via scoped gateway, and cleaned by lifecycle job. Re-download count counts archive as one download action. Served bytes are not metered or billed (ADR-008); archive parts count toward stored bytes only while they exist.
 - FR-D05: Browser-download limitations on mobile must be handled with single archive links, not hundreds of parallel browser downloads.
 
 ### 5.5 Analytics and dashboard
 
 - FR-N01: Dashboard list includes title, created/updated dates, status, image count, total stored bytes; sorting last modified desc; pagination/cursor.
 - FR-N02: Basic **gallery views** count one eligible view per privacy-safe anonymous session per gallery per 30-minute window; filter obvious bots and creator preview. **Downloads** count successfully initiated original/ZIP download actions; distinguish item and archive in backend even if UI shows total. Avoid third-party invasive tracking.
-- FR-N03: Usage summary is limited to storage GB-month estimate, delivery GB current billing cycle, paid plan, active spending cap, estimated spend, and invoice history link.
+- FR-N03: Usage summary is limited to storage (stored bytes and GB-month estimate), paid plan, active spending cap, estimated spend, and invoice history link. Delivery is not tracked (ADR-008).
 
 ## 6. Infrastructure design and boundaries
 
@@ -200,7 +200,7 @@ All UUID PKs, timestamps UTC (`timestamptz`), monetary amounts in integer **micr
 | `archive_parts` | `id`, `job_id`, `part_no`, `object_key`, `byte_size`, checksum, UNIQUE `(job_id,part_no)` |
 | `gallery_access_sessions` | `id`, `gallery_id`, `token_hash`, `access_version`, `expires_at`, `created_at`; optional DB-backed sessions |
 | `gallery_events` | `id`, `gallery_id`, `event_type`, `media_id NULL`, `anonymous_session_hash`, `window_bucket`, `bytes_served`, `occurred_at`, uniqueness/idempotency keys |
-| `plans` | `id`, `monthly_fee_cents`, `storage_included_gb_month`, `delivery_included_gb`, `max_galleries`, `max_storage_bytes`, `branding_visible`, rate version |
+| `plans` | `id`, `monthly_fee_cents`, `storage_included_gb_month`, `max_galleries`, `max_storage_bytes`, `branding_visible`, rate version |
 | `billing_accounts` | `user_id PK`, `stripe_customer_id UNIQUE`, `stripe_subscription_id NULL`, `status`, `spend_cap_micro_usd`, warning_thresholds, billing_period_start/end, timestamps |
 | `usage_ledger` | `id`, `account_id`, `metric`, `quantity_micro_units BIGINT`, `unit`, `source_id`, `event_time`, `period_start`, `rating_version`, `estimated_cost_micro_usd`; UNIQUE `(metric,source_id)` where appropriate |
 | `billing_exports` | `id`, `billing_account_id`, `ledger_cursor`, `stripe_event_id`, `status`, `attempt_count`, `created_at`; UNIQUE Stripe idempotency |
@@ -214,7 +214,8 @@ Indexes: `(galleries.owner_id, updated_at DESC)`, `(media.gallery_id, sort_key)`
 ### 9.1 Confirmed commercial structure
 
 - Free with no card; intended one or two galleries, 1 GB limit and branding.
-- Pro costs **$2 USD/month** base fee (confirmed); small allowance; metered storage and delivered GB overages; visible invoice, alerts and configurable spend cap. Any paid account removes gallery branding.
+- Pro costs **$2 USD/month** base fee (confirmed); small allowance; metered storage overage; visible invoice, alerts and configurable spend cap. Any paid account removes gallery branding.
+- **Delivery is not priced (product decision, 13 November 2026, ADR-008):** bytes served to viewers (previews, full-size views, downloads, archives) are not tracked, capped or charged by Lumra on any plan. This supersedes the earlier delivery allowance, Free delivery cap and delivery overage.
 - Full Stripe paid subscriptions and simplified metering live in v1; video-processing meter launches only with v1.1.
 - No auto-billing free users. Upgrade through hosted Stripe Checkout; manage payment method/invoices via Stripe Billing Portal.
 
@@ -225,28 +226,28 @@ Indexes: `(galleries.owner_id, updated_at DESC)`, `(media.gallery_id, sort_key)`
 | Base subscription | $0 | **$2.00/month**, confirmed |
 | Active galleries | **2** max | Unlimited subject to fair use |
 | Included stored content | **1 GB total hard cap** | **20 GB-month per billing period** |
-| Included delivery | **3 GB/month hard cap for Free** (Proposed) | **5 GB/month** |
 | Storage above included | Not permitted | **$0.10 per GB-month** (Proposed) |
-| Media delivery above included | Not permitted | **$0.03 per GB served** (Proposed) |
+| Default spending cap | n/a (never billed) | **$10/month of storage overage** (Proposed) |
+| Media delivery (views, downloads, archives) | Not metered, not charged | Not metered, not charged |
 | Photo processing | Included, fair use | Included, fair use |
 | Video processing | Not in v1 | Define for v1.1 after provider choice |
 | Branding | Discreet Lumra badge | None |
 
-**Caveat:** R2 Standard currently bills stored GB-months and operations but does not bill internet egress as a separate fee. The Lumra delivery charge is a **product price** for measured delivery, not a pass-through of a Cloudflare bandwidth invoice. Cloudflare read/request and Worker execution costs, Stripe's low-ticket processing economics, archive CPU, anti-abuse costs, taxes, and support must be included in margin modeling. If unit economics are unacceptable, adjust proposed allowances/rates, not the user-confirmed $2 base, unless the product owner approves. The model needs billing/receipt/tax analysis before launch.
+**Caveat:** R2 Standard currently bills stored GB-months and operations but does not bill internet egress as a separate fee. Lumra does not charge for delivery, but every view and download still costs Lumra R2 Class B reads and Worker requests, with no per-account cap; a viral or scraped gallery is therefore an uncapped operator cost (risk recorded in ADR-008; edge-caching mitigation tracked in jasonfyw/lumra#83). Cloudflare read/request and Worker execution costs, Stripe's low-ticket processing economics, archive CPU, anti-abuse costs, taxes, and support must be included in margin modeling. If unit economics are unacceptable, adjust proposed allowances/rates, not the user-confirmed $2 base, unless the product owner approves. The model needs billing/receipt/tax analysis before launch.
 
-**Billing units:** decimal GB = 1,000,000,000 bytes. Stored usage integrated over time: GB-month = byte-seconds / (1e9 * 30 * 86,400) for a normalized 30-day rate, clearly disclosed; billing-period-day conventions determined by rate card version. Delivery metered from actual authorized response body bytes successfully transmitted when obtainable, excluding 304 responses and internally generated egress; document approximations if gateway can't observe completed transfer exactly. Deduplicate retries without suppressing legitimate repeated downloads. Estimate current usage every few minutes; reconcile Stripe exports daily and at invoice close.
+**Billing units:** decimal GB = 1,000,000,000 bytes. Stored usage integrated over time: GB-month = byte-seconds / (1e9 * 30 * 86,400) for a normalized 30-day rate, clearly disclosed; billing-period-day conventions determined by rate card version. Storage is the only metered quantity; delivery is not metered (ADR-008). Estimate current usage every few minutes; reconcile Stripe exports daily and at invoice close.
 
 ### 9.3 Provisional monthly bill example
 
-Pro creator uses average 30 GB-month stored and 45 GB of data delivered: `$2.00 + (30 - 20)×$0.10 + (45 - 5)×$0.03 = $4.20` before applicable tax. Values illustrative, price settings live in versioned database/config and surfaced before upgrade. No hidden minimum beyond subscription.
+Pro creator uses average 30 GB-month stored (any amount of data delivered): `$2.00 + (30 − 20)×$0.10 = $3.00` before applicable tax. Values illustrative, price settings live in versioned database/config and surfaced before upgrade. No hidden minimum beyond subscription.
 
 ### 9.4 Spending safeguards and overdue policy
 
-- Set default **Pro spending cap of $10/month in overages** (Proposed; base subscription and taxes not counted), adjustable from $0 to a platform maximum; show cap and remaining estimate before large upload initiation. Send alerts at 50%, 80%, and 100% of configured cap with dedupe.
-- Reserve conservative estimated cost before new uploads/archive requests; if cap exceeded, reject them with actionable UI. Usage readings lag, so maintain a small defensive provider-side abuse throttle and pause new billable delivery above cap. **Do not promise a perfect hard billing stop for already-started transfers**, and clearly disclose a maximum permitted reconciliation tolerance. An operational safety cutoff must also prevent uncontrolled download egress for galleries, which may temporarily show a bandwidth-limit notice.
-- Free: 1 GB stored hard cap plus proposed 3 GB monthly delivery cap; block uploads/downloads that would require unbilled overages. On hitting cap, present graceful "temporarily unavailable" page, not HTTP 500.
-- `past_due`: immediately stop uploads/new archive creation; continue existing access for **7 days** (Proposed), then suspend public delivery while preserving media for **30 further days** (Proposed); notify at transitions. Never auto-delete solely because a card fails without explicit policy and notice.
-- Delivery meter includes previews and originals, preventing unbounded cost from high-traffic public links. Bots/rate limits apply to anonymous galleries.
+- Set default **Pro spending cap of $10/month in storage overage** (Proposed; base subscription and taxes not counted), adjustable from $0 to a platform maximum; show cap and remaining estimate before large upload initiation. Send alerts at 50%, 80%, and 100% of configured cap with dedupe. The cap applies to storage overage only.
+- Reserve conservative estimated storage cost before new uploads (projected to the end of the period); if the cap would be exceeded, reject them with actionable UI. Archive requests add no billable cost. Usage readings lag, so clearly disclose a maximum permitted reconciliation tolerance. Galleries are never paused for usage.
+- Free: 2 active galleries and 1 GB stored hard cap; block uploads that would exceed it. Views and downloads are never blocked for usage.
+- `past_due`: immediately stop uploads/new archive creation; continue existing access for **7 days** (Proposed), then suspend public delivery while preserving media for **30 further days** (Proposed); notify at transitions. Never auto-delete solely because a card fails without explicit policy and notice. Suspended galleries show a graceful "temporarily unavailable" page, not HTTP 500.
+- Delivery (previews, originals, archives) is not metered or capped (ADR-008). Bots/rate limits apply to anonymous galleries; uncapped serving cost is an accepted operator risk with edge caching tracked in jasonfyw/lumra#83.
 
 ### 9.5 Stripe implementation contract
 
@@ -454,12 +455,12 @@ Every task must include: functional implementation; typed interface and input va
 | HEIC decoding and ICC | Native dependency and color inaccuracies. | Dedicated container processor, golden-image fixtures. |
 | ZIP for 2,000 high-res files | Runtime/memory constraints. | Split archives, background streaming, bounded job work. |
 | Billing event lag | Cap overshoot/incorrect invoice. | Internal realtime ledger + reservations, daily reconciliation. |
-| Public link abuse | High delivery costs even with low user count. | Rate limits, cap guards, view throttles. |
+| Public link abuse | Viral/scraped galleries cost R2 reads + Worker requests with no per-account cap (delivery is not billed, ADR-008). | Rate limits, view throttles; edge caching tracked in jasonfyw/lumra#83. |
 | Privacy/rights | Photos may contain sensitive personal data. | Clear consent/terms, deletion, retention, minimal telemetry. |
 
-**Commercial settings tagged Proposed:** free active galleries=2; free monthly delivery=3 GB; Pro included delivery=5 GB; storage overage=$0.10/GB-month; delivery overage=$0.03/GB; Pro default overage cap=$10; cap grace/tolerance policy; past-due grace=7 days, retention=30 days; archive partitions 500 items/2 GB; measured performance thresholds. These are defaults to validate with unit-economics and usability tests, not a claim of user approval.
+**Commercial settings tagged Proposed:** free active galleries=2; storage overage=$0.10/GB-month; Pro default overage cap=$10 (storage overage only); no delivery allowance, cap or charge (decided, ADR-008); cap grace/tolerance policy; past-due grace=7 days, retention=30 days; archive partitions 500 items/2 GB; measured performance thresholds. These are defaults to validate with unit-economics and usability tests, not a claim of user approval.
 
-**Architecture decision records required:** ADR-001 private media gateway vs presigned URLs; ADR-002 image processor/container/queue; ADR-003 ZIP implementation and partition sizes; ADR-004 billing rating/Stripe meter mapping; ADR-005 RLS and guest claim security; ADR-006 video provider decision before v1.1. None should trigger a new product interview unless contradicting confirmed user choices.
+**Architecture decision records required:** ADR-001 private media gateway vs presigned URLs; ADR-002 image processor/container/queue; ADR-003 ZIP implementation and partition sizes; ADR-004 billing rating/Stripe meter mapping; ADR-005 RLS and guest claim security; ADR-006 video provider decision before v1.1; ADR-008 removal of delivery from pricing. None should trigger a new product interview unless contradicting confirmed user choices.
 
 ## 18. Source references and provider caveats (verified October 2026)
 

@@ -5,11 +5,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mediaTokenKeyringSchema } from '@lumra/config';
-import { queueMessageSchema, type GalleryAccessState } from '@lumra/contracts';
+import type { GalleryAccessState } from '@lumra/contracts';
 import { archivePartKey, derivativeKey, originalKey } from '@lumra/media';
 import { signMediaToken, type MediaTokenInput } from '@lumra/tokens';
 import worker, { sentryOptions, type Env } from './index';
-import { FakeExecutionContext, FakeKv, FakeQueue, FakeR2Bucket } from './test-fakes';
+import { FakeExecutionContext, FakeKv, FakeR2Bucket } from './test-fakes';
 
 const SECRET = 's'.repeat(48);
 const KEYRING = mediaTokenKeyringSchema.parse(`k1:${SECRET}`);
@@ -61,7 +61,6 @@ const baseState: GalleryAccessState = {
 interface Harness {
   env: Env;
   kv: FakeKv;
-  usage: FakeQueue;
   originals: FakeR2Bucket;
   derivatives: FakeR2Bucket;
   archives: FakeR2Bucket;
@@ -77,7 +76,6 @@ function setState(state: GalleryAccessState | null) {
 
 beforeEach(() => {
   const kv = new FakeKv();
-  const usage = new FakeQueue();
   const originals = new FakeR2Bucket();
   const derivatives = new FakeR2Bucket();
   const archives = new FakeR2Bucket();
@@ -95,9 +93,8 @@ beforeEach(() => {
     DERIVATIVES: derivatives,
     ARCHIVES: archives,
     ACCESS_STATE: kv,
-    USAGE: usage,
   } as unknown as Env;
-  h = { env, kv, usage, originals, derivatives, archives, logs };
+  h = { env, kv, originals, derivatives, archives, logs };
   setState(baseState);
 });
 
@@ -129,7 +126,6 @@ async function expectGenericFailure(res: Response, status: number) {
   expect(['Unauthorized', 'Forbidden', 'Not Found', 'Service Unavailable']).toContain(
     await res.text(),
   );
-  expect(h.usage.messages).toHaveLength(0);
 }
 
 describe('routing', () => {
@@ -226,7 +222,6 @@ describe('PRD §11: gallery access state', () => {
     // Documented staleness bound: the isolate memo may serve the old state for < 5 s ...
     vi.setSystemTime(new Date('2026-11-05T12:00:04.900Z'));
     expect((await call(`/m/${t}`)).status).toBe(200);
-    h.usage.messages.length = 0;
     // ... and never longer.
     vi.setSystemTime(new Date('2026-11-05T12:00:05Z'));
     await expectGenericFailure(await call(`/m/${t}`), 403);
@@ -235,7 +230,6 @@ describe('PRD §11: gallery access state', () => {
   it('gallery deleted mid-session → 404 on new requests', async () => {
     const t = await token(originalClaims);
     expect((await call(`/m/${t}`, { headers: { Range: 'bytes=0-99' } })).status).toBe(206);
-    h.usage.messages.length = 0;
 
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(Date.now() + 5_000);
@@ -277,14 +271,11 @@ describe('PRD §11: gallery access state', () => {
       expect(res.status).toBe(200);
       expect(new Uint8Array(await res.arrayBuffer())).toEqual(PREVIEW_BYTES);
       expect(res.headers.get('Cache-Control')).toBe('private, max-age=300');
-      // Owner previews are delivery too (PRD §9.4 delivery meter includes previews).
-      expect(h.usage.messages).toHaveLength(1);
     });
 
     it('expired gallery → still served to the owner, not to recipients', async () => {
       setState({ ...baseState, expiresAt: new Date(Date.now() - 1000).toISOString() });
       expect((await call(`/m/${await token(ownerPreview)}`)).status).toBe(200);
-      h.usage.messages.length = 0;
       await expectGenericFailure(await call(`/m/${await token()}`), 403);
     });
 
@@ -355,17 +346,15 @@ describe('serving previews', () => {
 });
 
 describe('conditional and range requests', () => {
-  it('returns 304 for a matching If-None-Match with no usage event', async () => {
+  it('returns 304 for a matching If-None-Match', async () => {
     const t = await token();
     const first = await call(`/m/${t}`);
     const etag = first.headers.get('ETag') as string;
-    h.usage.messages.length = 0;
 
     const res = await call(`/m/${t}`, { headers: { 'If-None-Match': `W/${etag}` } });
     expect(res.status).toBe(304);
     expect(res.body).toBeNull();
     expect(res.headers.get('ETag')).toBe(etag);
-    expect(h.usage.messages).toHaveLength(0);
 
     const miss = await call(`/m/${t}`, { headers: { 'If-None-Match': '"other"' } });
     expect(miss.status).toBe(200);
@@ -383,9 +372,6 @@ describe('conditional and range requests', () => {
     expect(res.headers.get('Content-Range')).toBe(`bytes ${start}-${end}/1000`);
     expect(res.headers.get('Content-Length')).toBe(String(end - start + 1));
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(ORIGINAL_BYTES.slice(start, end + 1));
-    expect(h.usage.messages).toHaveLength(1);
-    expect(h.usage.messages[0]).toMatchObject({ bytes: end - start + 1 });
-    expect(h.usage.messages[0]?.dedupeKey).toMatch(new RegExp(`:${start}-${end}$`));
   });
 
   it('returns 416 for an unsatisfiable range', async () => {
@@ -395,7 +381,6 @@ describe('conditional and range requests', () => {
     expect(res.status).toBe(416);
     expect(res.headers.get('Content-Range')).toBe('bytes */1000');
     expect(res.headers.get('Cache-Control')).toBe('no-store');
-    expect(h.usage.messages).toHaveLength(0);
   });
 
   it('ignores multi-range and mismatched If-Range, serving the full object', async () => {
@@ -409,12 +394,11 @@ describe('conditional and range requests', () => {
     expect(ifRange.status).toBe(200);
   });
 
-  it('HEAD returns headers only and records no delivery', async () => {
+  it('HEAD returns headers only', async () => {
     const res = await call(`/m/${await token(originalClaims)}`, { method: 'HEAD' });
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Length')).toBe('1000');
     expect(await res.text()).toBe('');
-    expect(h.usage.messages).toHaveLength(0);
   });
 });
 
@@ -450,7 +434,7 @@ describe('downloads', () => {
     );
   });
 
-  it('serves archive parts as .zip attachments with archive usage', async () => {
+  it('serves archive parts as .zip attachments', async () => {
     const res = await call(`/m/${await token(archiveClaims)}`);
     expect(res.status).toBe(200);
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(ARCHIVE_BYTES);
@@ -458,41 +442,14 @@ describe('downloads', () => {
       `attachment; filename="lumra-archive-part-1.zip"`,
     );
     expect(res.headers.get('Cache-Control')).toBe('private, no-store');
-    expect(h.usage.messages[0]).toMatchObject({
-      action: 'archive',
-      archivePartId: PART,
-      mediaId: null,
-      variant: null,
-      bytes: ARCHIVE_BYTES.length,
-    });
   });
 });
 
-describe('delivery usage events', () => {
-  it('emits exactly one schema-valid delivery.served event per response', async () => {
-    const t = await token();
-    const jti = JSON.parse(atob((t.split('.')[1] as string).replace(/-/g, '+').replace(/_/g, '/')))
-      .jti as string;
-    await call(`/m/${t}`);
-    expect(h.usage.messages).toHaveLength(1);
-    const message = queueMessageSchema.parse(h.usage.messages[0]);
-    expect(message).toMatchObject({
-      type: 'delivery.served',
-      galleryId: GALLERY,
-      action: 'preview',
-      mediaId: MEDIA,
-      archivePartId: null,
-      variant: 'w640',
-      bytes: PREVIEW_BYTES.length,
-      dedupeKey: `${jti}:0-99`,
-    });
-  });
-
-  it('still serves the response when the usage queue fails', async () => {
-    h.usage.fail = true;
-    const res = await call(`/m/${await token()}`);
-    expect(res.status).toBe(200);
-    expect(h.logs.some((l) => l.includes('usage event send failed'))).toBe(true);
+describe('no delivery metering (ADR-008)', () => {
+  it('serves media without a usage queue binding', async () => {
+    expect('USAGE' in h.env).toBe(false);
+    expect((await call(`/m/${await token()}`)).status).toBe(200);
+    expect((await call(`/m/${await token(archiveClaims)}`)).status).toBe(200);
   });
 });
 
@@ -521,9 +478,7 @@ describe('observability (T04)', () => {
     expect(ray.headers.get('x-request-id')).toBe('8d3f2a1b0c9e-IAD');
   });
 
-  it('logs structured JSON bound to the request ID, which is the usage event traceId', async () => {
-    await call(`/m/${await token()}`, { headers: { 'x-request-id': 'req-trace-9' } });
-    expect(h.usage.messages[0]).toMatchObject({ traceId: 'req-trace-9' });
+  it('logs structured JSON bound to the request ID', async () => {
     await call('/m/forged.token.value', { headers: { 'x-request-id': 'req-trace-10' } });
     const events = h.logs.map((l) => JSON.parse(l) as Record<string, unknown>);
     expect(

@@ -134,8 +134,8 @@ export function AccountView({
           </h2>
           <p className={muted}>
             {paid
-              ? `Pro · ${formatUsd(proMonthlyFeeMicroUsd)}/month plus metered overages. Current period ${formatDate(summary.period.start)} – ${formatDate(summary.period.end)} (UTC).`
-              : `Free · ${billing.galleries.max ?? 'unlimited'} galleries, ${formatGigabytes(summary.storage.limitBytes ?? 0)} of photos and ${formatGigabytes(summary.delivery.limitBytes ?? 0)} of delivery a month, with a small Lumra badge on shared galleries.`}
+              ? `Pro · ${formatUsd(proMonthlyFeeMicroUsd)}/month plus metered storage overage. Current period ${formatDate(summary.period.start)} – ${formatDate(summary.period.end)} (UTC).`
+              : `Free · ${billing.galleries.max ?? 'unlimited'} galleries, ${formatGigabytes(summary.storage.limitBytes ?? 0)} of photos, with a small Lumra badge on shared galleries.`}
           </p>
         </div>
         {paid || summary.billingStatus === 'canceled' ? (
@@ -179,13 +179,12 @@ export function AccountView({
             (UTC). Decimal units: 1 GB = 1,000,000,000 bytes.
           </p>
         </div>
-        <dl className="grid gap-4 sm:grid-cols-3">
+        <dl className="grid gap-4 sm:grid-cols-2">
           <UsageRow
             label="Storage"
             meter={summary.storage}
             extra={`${items} ${items === 1 ? 'photo' : 'photos'}`}
           />
-          <UsageRow label="Delivery this period" meter={summary.delivery} />
           <GalleriesRow galleries={billing.galleries} />
         </dl>
       </section>

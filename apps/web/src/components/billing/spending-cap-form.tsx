@@ -101,8 +101,9 @@ export function SpendingCapForm({ spend }: { spend: AccountSpend }) {
           />
         </div>
         <p id={`${id}-hint`} className="lm-field-hint">
-          $0 to {formatUsd(spend.maxCapMicroUsd)}. Default {formatUsd(spend.defaultCapMicroUsd)}. At
-          the cap, uploads that would exceed it are refused and delivery pauses.
+          $0 to {formatUsd(spend.maxCapMicroUsd)}. Default {formatUsd(spend.defaultCapMicroUsd)}.
+          Covers storage overage: uploads that would exceed it are refused. Shared galleries stay
+          online.
         </p>
       </div>
       <div className="flex flex-wrap gap-2">

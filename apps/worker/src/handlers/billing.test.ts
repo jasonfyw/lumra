@@ -15,7 +15,6 @@ function candidate(n: number, over: Partial<SweepCandidate>): SweepCandidate {
     pastDueSince: null,
     restrictedSince: null,
     canceledAt: null,
-    deliveryPausedReason: null,
     activeGalleries: 1,
     storedBytes: 0,
     ...over,
@@ -31,7 +30,6 @@ function fakeRepo(pages: SweepCandidate[][]) {
       return true;
     }),
     safeguardContexts: vi.fn(async () => []),
-    setDeliveryPause: vi.fn(async () => true),
   } as unknown as BillingStateRepository;
   return { repo, applied };
 }

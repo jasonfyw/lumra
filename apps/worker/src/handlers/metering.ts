@@ -1,106 +1,12 @@
-import {
-  accountPeriodKey,
-  billingPeriodAt,
-  planStorageAccrual,
-  rateDeliveryEvents,
-  type DeliveryEvent,
-  type UsageLedgerStore,
-} from '@lumra/billing';
-import type { DeliveryServedMessage } from '@lumra/contracts';
+import { billingPeriodAt, planStorageAccrual } from '@lumra/billing';
 import type { BillingRepository } from '@lumra/db';
 import type { Logger } from '../log';
 
 /**
- * Usage metering jobs (T27, ADR-004). Thin I/O shells: every rule (periods, rounding, estimated
- * cost, idempotency keys) lives in `@lumra/billing`; persistence in `@lumra/db`.
+ * Usage metering job (T27, ADR-004): storage accrual only — delivery is not metered (ADR-008).
+ * Thin I/O shell: every rule (periods, rounding, estimated cost, idempotency keys) lives in
+ * `@lumra/billing`; persistence in `@lumra/db`.
  */
-
-// ---------------------------------------------------------------------------------------------
-// Delivery bytes: `delivery.served` events from the media gateway (`lumra-usage-*` queue)
-// ---------------------------------------------------------------------------------------------
-
-export interface DeliveryIngestDeps {
-  repo: Pick<BillingRepository, 'galleryOwners' | 'accountContexts' | 'deliveryTotals'>;
-  ledger: Pick<UsageLedgerStore, 'appendMany'>;
-  log: Logger;
-}
-
-export interface DeliveryIngestResult {
-  received: number;
-  /** New ledger rows. */
-  inserted: number;
-  /** Rows already in the ledger (redelivered or retried gateway sends). */
-  duplicates: number;
-  /** Galleries without an owner (guest drafts): no billing account to meter against. */
-  skippedGuest: number;
-  /** Gallery rows that no longer exist. */
-  skippedUnknownGallery: number;
-  /** Owners without a billing account (should not happen: created with the auth user). */
-  skippedNoAccount: number;
-  /** Accounts that got new ledger rows: the delivery safety cutoff re-evaluates them (T28). */
-  accountIds: string[];
-}
-
-/**
- * Appends one `delivery_bytes` row per gateway response. Idempotent: the source id is the
- * event's `dedupeKey` and the ledger's UNIQUE (metric, source_id) drops redeliveries, so the
- * queue can retry the whole batch after any failure. Throws on DB errors (→ batch retry).
- */
-export async function ingestDeliveryEvents(
-  messages: readonly DeliveryServedMessage[],
-  deps: DeliveryIngestDeps,
-): Promise<DeliveryIngestResult> {
-  const result: DeliveryIngestResult = {
-    received: messages.length,
-    inserted: 0,
-    duplicates: 0,
-    skippedGuest: 0,
-    skippedUnknownGallery: 0,
-    skippedNoAccount: 0,
-    accountIds: [],
-  };
-  if (messages.length === 0) return result;
-
-  const owners = await deps.repo.galleryOwners(messages.map((m) => m.galleryId));
-  const owned: { message: DeliveryServedMessage; accountId: string }[] = [];
-  for (const message of messages) {
-    if (!owners.has(message.galleryId)) result.skippedUnknownGallery++;
-    else {
-      const accountId = owners.get(message.galleryId);
-      if (accountId) owned.push({ message, accountId });
-      else result.skippedGuest++;
-    }
-  }
-  if (owned.length === 0) return result;
-
-  const accounts = await deps.repo.accountContexts(owned.map((o) => o.accountId));
-  const events: DeliveryEvent[] = [];
-  const pairs = new Map<string, { accountId: string; periodStart: Date }>();
-  for (const { message, accountId } of owned) {
-    const ctx = accounts.get(accountId);
-    if (!ctx) {
-      result.skippedNoAccount++;
-      continue;
-    }
-    const servedAt = new Date(message.servedAt);
-    const { start } = billingPeriodAt(ctx.account, servedAt);
-    pairs.set(accountPeriodKey(accountId, start), { accountId, periodStart: start });
-    events.push({ sourceId: message.dedupeKey, accountId, bytes: message.bytes, servedAt });
-  }
-  if (events.length === 0) return result;
-
-  const totals = await deps.repo.deliveryTotals([...pairs.values()]);
-  const entries = rateDeliveryEvents({
-    events,
-    accounts,
-    deliveryBytesToDate: (accountId, periodStart) =>
-      totals.get(accountPeriodKey(accountId, periodStart)) ?? 0n,
-  });
-  result.inserted = await deps.ledger.appendMany(entries);
-  result.duplicates = entries.length - result.inserted;
-  if (result.inserted > 0) result.accountIds = [...new Set(entries.map((e) => e.accountId))];
-  return result;
-}
 
 // ---------------------------------------------------------------------------------------------
 // Storage GB-month accrual (cron)

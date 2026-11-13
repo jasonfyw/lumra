@@ -61,41 +61,15 @@ describe('galleryAccessStateSchema', () => {
   });
 });
 
-describe('delivery.served queue message', () => {
-  it('requires positive integer bytes', () => {
+describe('queue messages', () => {
+  it('rejects the retired delivery.served usage event (ADR-008)', () => {
     const msg = {
       type: 'delivery.served',
       galleryId: '0b6f3c1e-8d0a-4a51-9a39-1f4f2a9d7e10',
-      action: 'preview',
-      mediaId: '5c7d1b2a-3e4f-4a5b-8c6d-7e8f9a0b1c2d',
-      archivePartId: null,
-      variant: 'w640',
       bytes: 1024,
-      servedAt: '2026-11-05T12:00:00.000Z',
       traceId: 'ray',
       dedupeKey: 'jti:0-1023',
     };
-    expect(queueMessageSchema.parse(msg)).toEqual(msg);
-    expect(queueMessageSchema.safeParse({ ...msg, bytes: 0 }).success).toBe(false);
-    expect(queueMessageSchema.safeParse({ ...msg, bytes: 1.5 }).success).toBe(false);
-  });
-
-  it('bounds dedupeKey to the ledger source_id length (1–200)', () => {
-    const msg = {
-      type: 'delivery.served',
-      galleryId: '0b6f3c1e-8d0a-4a51-9a39-1f4f2a9d7e10',
-      action: 'preview',
-      mediaId: '5c7d1b2a-3e4f-4a5b-8c6d-7e8f9a0b1c2d',
-      archivePartId: null,
-      variant: 'w640',
-      bytes: 1024,
-      servedAt: '2026-11-05T12:00:00.000Z',
-      traceId: 'ray',
-    };
-    expect(queueMessageSchema.safeParse({ ...msg, dedupeKey: 'k'.repeat(200) }).success).toBe(true);
-    expect(queueMessageSchema.safeParse({ ...msg, dedupeKey: 'k'.repeat(201) }).success).toBe(
-      false,
-    );
-    expect(queueMessageSchema.safeParse({ ...msg, dedupeKey: '' }).success).toBe(false);
+    expect(queueMessageSchema.safeParse(msg).success).toBe(false);
   });
 });

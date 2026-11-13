@@ -29,7 +29,7 @@ const common = {
   /** Issued-at / expiry, epoch seconds. `exp - iat` ≤ MEDIA_TOKEN.maxTtlSeconds. */
   iat: z.number().int().nonnegative(),
   exp: z.number().int().positive(),
-  /** Unique token id; also the usage-event dedupe key prefix. */
+  /** Unique token id. */
   jti: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
 };
 
@@ -65,7 +65,7 @@ export const originalTokenClaimsSchema = z.object({
 export const archiveTokenClaimsSchema = z.object({
   ...common,
   action: z.literal('archive'),
-  /** `archive_parts.id`, used for usage accounting. */
+  /** `archive_parts.id` of the part this token grants. */
   archive_part_id: z.uuid(),
   /** Key segments of `archives/{gallery}/{job}/{part_no}.zip`. */
   archive_job_id: z.uuid(),

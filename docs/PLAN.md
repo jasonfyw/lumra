@@ -24,8 +24,8 @@ Browser ──(HTML/JSON)──► Vercel / Next.js (apps/web)
    │                                       archive builder (streamed ZIP → R2 temp-archives)
    │
    └──(short-lived media token)──► apps/media-gateway (Worker on *.workers.dev until a custom domain exists)
-                                     verifies JWS + access_version, streams from R2 binding,
-                                     emits delivery-byte usage events
+                                     verifies JWS + access_version, streams from R2 binding
+                                     (no usage events since ADR-008)
 ```
 
 Shared code lives in `packages/*` so the web app, gateway and worker never duplicate business logic:
@@ -50,7 +50,7 @@ Shared code lives in `packages/*` so the web app, gateway and worker never dupli
 | ADR-001 | Private media gateway vs presigned GETs | **Accepted:** Worker gateway with HMAC-SHA256 JWS (≤5 min, `kid` rotation), access-version check against KV with ≤5 s memo, fail closed                     | T20                    |
 | ADR-002 | Image processor runtime                 | **Accepted:** Cloudflare Queue → Cloudflare Containers job running sharp with libheif; no native deps on Vercel                                             | T12                    |
 | ADR-003 | ZIP implementation                      | **Accepted:** streamed STORE-mode ZIP (no recompression) built in the job Worker (not the container), multipart-uploaded to R2; parts ≤500 items / ≤2 GB    | T24                    |
-| ADR-004 | Billing rating & Stripe mapping         | Internal append-only `usage_ledger` authoritative; Stripe Billing Meters for storage GB-month & delivery GB, exported daily with idempotency keys           | T27/T31                |
+| ADR-004 | Billing rating & Stripe mapping         | Internal append-only `usage_ledger` authoritative; Stripe Billing Meter for storage GB-month (delivery removed, ADR-008), exported daily, idempotency keys  | T27/T31                |
 | ADR-005 | RLS & guest claim security              | Owner RLS on browser-readable tables; guest + billing + gateway tables service-only; claim requires guest cookie hash + verified session in one transaction | T02/T07                |
 | ADR-007 | DB access layer                         | SQL-first migrations (Supabase CLI) + Drizzle as a typed query builder over the same schema (schema introspected, not generated migrations)                 | T02                    |
 
@@ -143,7 +143,7 @@ Argon2id hashing; `unlock` endpoint (rate limited) issuing HttpOnly gallery sess
 AC: security matrix rows for password change and expiry pass; brute force throttled.
 
 **T20 Private gateway / tokens / access revocation** · Deps: T09, T16, ADR-001  
-`media-tokens` endpoint minting ≤5 min tokens (`aud`, `gallery_id`, `media_id`, `variant`, `action`, `access_version`, `jti`); `apps/media-gateway` verifies signature, checks access version/deleted/expired via KV-cached state (≤ seconds, fail closed), streams from R2 binding with correct cache/CORS/Content-Disposition, supports Range for originals, emits delivery-byte events; contract shared via `@lumra/contracts`.  
+`media-tokens` endpoint minting ≤5 min tokens (`aud`, `gallery_id`, `media_id`, `variant`, `action`, `access_version`, `jti`); `apps/media-gateway` verifies signature, checks access version/deleted/expired via KV-cached state (≤ seconds, fail closed), streams from R2 binding with correct cache/CORS/Content-Disposition, supports Range for originals (delivery-byte events removed by ADR-008); contract shared via `@lumra/contracts`.  
 AC: PRD §11 rows (guessed key, expired token, password change, deletion mid-download) automated in `tests/security`.
 
 **T21 Share / QR / native share** · Deps: T16  
@@ -175,11 +175,11 @@ AC: dedupe unit tests; no third-party trackers.
 ### P5 — Billing
 
 **T27 Rate card, internal metering, reservation logic** · Deps: T02  
-Versioned rate card in DB/config; `@lumra/billing` rating in integer micro-USD; storage GB-month integration from byte-seconds; delivery ingestion from gateway events; cost reservations for uploads/archives; ADR-004.  
-AC: deterministic tests reproduce PRD §9.3 example ($4.20); no floating-point money.
+Versioned rate card in DB/config; `@lumra/billing` rating in integer micro-USD; storage GB-month integration from byte-seconds; cost reservations for uploads; ADR-004 (delivery ingestion removed by ADR-008).  
+AC: deterministic tests reproduce PRD §9.3 example ($3.00 since ADR-008); no floating-point money.
 
 **T28 Free caps** · Deps: T27, T10  
-Enforce 2 active galleries, 1 GB stored, 3 GB/month delivery; upload admission integrated with reservations; graceful "temporarily unavailable" page when delivery cap hit.  
+Enforce 2 active galleries, 1 GB stored; upload admission integrated with reservations; graceful "temporarily unavailable" page for billing suspension. (The 3 GB/month delivery cap was removed by ADR-008.)  
 AC: free user can never create a positive overage ledger entry (property test).
 
 **T29 Checkout / Portal / webhooks** · Deps: T05, T27  
@@ -195,7 +195,7 @@ Daily export of ledger to Stripe meters with stable idempotency keys (`billing_e
 AC: re-running export produces no duplicate meter events.
 
 **T32 Spending caps + alerts** · Deps: T27, T28  
-`/account` cap control ($0–max, default $10), 50/80/100% deduped emails + banner, admission denial at cap, delivery safety cutoff with bandwidth-limit notice.  
+`/account` cap control ($0–max, default $10), 50/80/100% deduped emails + banner, admission denial at cap (storage overage only; the delivery safety cutoff was removed by ADR-008).  
 AC: cap respected within documented tolerance in simulated traffic test.
 
 **T33 Payment-failure states** · Deps: T30  

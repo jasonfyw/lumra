@@ -3,7 +3,7 @@ import { getDb } from '@/lib/db';
 import { serverEnv } from '@/lib/env';
 import { NO_STORE, validation } from '@/lib/request-guards';
 import { withRoute } from '@/lib/route';
-import { reevaluateDeliveryPause } from '@/server/billing-state';
+import { reevaluateSpendAlerts } from '@/server/billing-state';
 import { handleStripeEvent, recordFailedEvent } from '@/server/billing-webhook';
 import { BILLING_UNAVAILABLE } from '@/server/billing-routes';
 import { getStripe } from '@/server/stripe';
@@ -60,7 +60,7 @@ export const POST = withRoute(
       ...(result.reason ? { reason: result.reason } : {}),
     });
     if (result.reevaluate && result.accountId) {
-      await reevaluateDeliveryPause(db, result.accountId, { traceId: `stripe:${event.id}`, log });
+      await reevaluateSpendAlerts(db, result.accountId, { traceId: `stripe:${event.id}`, log });
     }
     return ok({ received: true, outcome: result.outcome }, requestId, { headers: NO_STORE });
   },

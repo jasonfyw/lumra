@@ -25,8 +25,8 @@ export type AccessStateOutcome = 'written' | 'tombstoned' | 'skipped_draft';
 
 /**
  * Public delivery is suspended when billing policy says so (PRD §9.4): past-due grace elapsed,
- * restricted/canceled, or the delivery safety cutoff (Free delivery cap / spending cap, T28/T32).
- * A billing row that violates its own invariants fails closed (`publicDeliveryState`).
+ * restricted or canceled. Usage never suspends delivery (ADR-008). A billing row that violates
+ * its own invariants fails closed (`publicDeliveryState`).
  */
 export function isDeliverySuspended(row: GalleryAccessRow, now: Date): boolean {
   return !publicDeliveryState(row.billing, now).available;

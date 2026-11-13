@@ -9,6 +9,7 @@ Filled in as the relevant systems land (T13, T38). Each runbook: symptom → das
 - [ ] Media gateway 5xx > 1% for 10 min (T20)
 - [x] [Stripe webhook unresolved > 15 min / billing state (T29–T33)](#stripe-webhooks-and-billing-state-t29t33)
 - [x] [Billed vs internal drift > 10% / meter export failures (T31)](#meter-export-and-reconciliation-t31)
+- [x] [Viral / scraped gallery serving cost (no delivery cap, ADR-008)](#viral--scraped-gallery-serving-cost-adr-008)
 - [ ] Suspected unauthorized disclosure — P1 incident (T34)
 - [ ] Database restore from PITR (T37)
 - [ ] Disable uploads / checkout via feature flag; read-only mode (T38)
@@ -222,17 +223,16 @@ select provider_event_id, event_type, status, attempt_count, last_error, receive
 from public.provider_webhook_events where status in ('received', 'failed') order by received_at;
 -- One account's billing state.
 select status, stripe_customer_id, stripe_subscription_id, stripe_subscription_status,
-       past_due_since, restricted_since, canceled_at, delivery_paused_reason, subscription_event_at
+       past_due_since, restricted_since, canceled_at, subscription_event_at
 from public.billing_accounts where user_id = '…';
 ```
 
 **Mitigate**: fix the cause, then **resend the event from the Stripe Dashboard** (processing is
 idempotent; handled events are no-ops). Never edit `status` by hand without also enqueueing
-`select public.enqueue_owner_access_sync('<user>', 'manual')` so the gateway sees the change. A paused
-account (`delivery_paused_reason`) resumes automatically at the next period / cap raise / upgrade; to
-lift it early set both pause columns to null and enqueue the same sync. Logs to grep:
+`select public.enqueue_owner_access_sync('<user>', 'manual')` so the gateway sees the change. Galleries
+are never paused for usage (ADR-008); only billing status takes them offline. Logs to grep:
 `stripe webhook handled` (`outcome`, `reason`), `billing account updated from stripe`,
-`delivery paused` / `delivery resumed`, `billing sweep finished`.
+`spend-cap alerts recorded`, `billing sweep finished`.
 
 ## Meter export and reconciliation (T31)
 
@@ -259,6 +259,19 @@ select * from public.billing_meter_cursors where account_id = '…';
   promised by the pricing page (ADR-004).
 - Never resend an event by hand with a new identifier; resend the stored payload (set the row back
   to `pending` with `attempt_count = 0`).
+
+## Viral / scraped gallery serving cost (ADR-008)
+
+Lumra does not meter, cap or bill delivery, so nothing stops a hot gallery automatically. Every
+view and download costs one Worker request and an R2 Class B read (egress itself is free).
+
+**Symptoms**: R2 Class B operations or `lumra-media-gateway` requests far above baseline in the
+Cloudflare dashboard; one `galleryId` dominating gateway logs (`requestId`, never full IPs).
+
+**Mitigate**: rate-limit or challenge the hot path with a Cloudflare WAF rule on the gateway host;
+if abusive, the owner (or an operator, with notice) can set a password, an expiry or unpublish the
+gallery, which revokes tokens through the normal access-state sync. Never re-introduce a usage-based
+pause without a PRD change. **Follow-up**: edge caching of previews (jasonfyw/lumra#83).
 
 ## Observability (T04)
 

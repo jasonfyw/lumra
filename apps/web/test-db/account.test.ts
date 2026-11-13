@@ -1,8 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { sql as dsql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { accountUsageSummarySchema, type AccountUsageSummary } from '@lumra/contracts';
-import type { Database } from '@lumra/db';
 import { GET } from '../src/app/api/v1/billing/usage/route';
 import { getDb } from '../src/lib/db';
 import { getAccountUsageSummary } from '../src/server/account';
@@ -45,28 +43,6 @@ async function addMedia(
   }
 }
 
-class Rollback extends Error {}
-
-/** Runs `fn` in a transaction that is always rolled back (usage_ledger is append-only). */
-async function inRollback<T>(fn: (db: Database) => Promise<T>): Promise<T> {
-  let result: T | undefined;
-  await getDb()
-    .transaction(async (tx) => {
-      result = await fn(tx as unknown as Database);
-      throw new Rollback();
-    })
-    .catch((e: unknown) => {
-      if (!(e instanceof Rollback)) throw e;
-    });
-  return result as T;
-}
-
-const ledgerRow = (db: Database, accountId: string, bytes: number, periodStart: string) =>
-  db.execute(dsql`
-    insert into public.usage_ledger (account_id, metric, quantity_micro_units, unit, source_id, event_time, period_start, rating_version)
-    values (${accountId}::uuid, 'delivery_bytes', ${bytes}, 'bytes', ${randomUUID()}, now(),
-            ${periodStart}::timestamptz, 1)`);
-
 describe('authorization', () => {
   it('401 without a signed-in user', async () => {
     const res = await get();
@@ -94,8 +70,8 @@ describe('authorization', () => {
       plan: 'free',
       billingStatus: 'free',
       storage: { usedBytes: 45_000_000, itemCount: 1, limitBytes: 1_000_000_000, percentUsed: 4 },
-      delivery: { tracked: false, usedBytes: null },
     });
+    expect(data).not.toHaveProperty('delivery');
 
     signInAs(b);
     const other = (await readJson<AccountUsageSummary>(await get())).data!;
@@ -123,24 +99,15 @@ describe('usage summary', () => {
     expect(summary.email).toBe(`${user}@example.test`);
   });
 
-  it('reports delivery from the caller’s ledger rows for the current period only', async () => {
-    const [a, b] = [await createUser(), await createUser()];
+  it('reports the current period and no delivery usage (ADR-008)', async () => {
+    const a = await createUser();
     const now = new Date('2026-11-09T12:00:00Z');
-    const summary = await inRollback(async (db) => {
-      await ledgerRow(db, a, 1_500_000_000, '2026-11-01T00:00:00Z');
-      await ledgerRow(db, a, 250_000_000, '2026-10-01T00:00:00Z'); // previous period
-      await ledgerRow(db, b, 999_000_000, '2026-11-01T00:00:00Z'); // someone else
-      return getAccountUsageSummary(db, { userId: a, email: null }, now);
-    });
+    const summary = await getAccountUsageSummary(getDb(), { userId: a, email: null }, now);
     expect(summary.period).toEqual({
       start: '2026-11-01T00:00:00.000Z',
       end: '2026-12-01T00:00:00.000Z',
     });
-    expect(summary.delivery).toEqual({
-      usedBytes: 1_500_000_000,
-      limitBytes: 3_000_000_000,
-      percentUsed: 50,
-      tracked: true,
-    });
+    expect(summary).not.toHaveProperty('delivery');
+    expect(summary.billing).not.toHaveProperty('deliveryPaused');
   });
 });

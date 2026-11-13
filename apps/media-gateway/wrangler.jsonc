@@ -17,8 +17,6 @@
   // Gallery access state (`gallery:{id}`), written by the web app (ADR-001). Namespace ids are
   // provisioned on first deploy / filled in by T38; local dev uses a Miniflare namespace.
   "kv_namespaces": [{ "binding": "ACCESS_STATE" }],
-  // `delivery.served` usage events; consumed by usage-ledger ingestion (T27).
-  "queues": { "producers": [{ "binding": "USAGE", "queue": "lumra-usage-dev" }] },
   // Secrets (set with `wrangler secret put`):
   //   MEDIA_TOKEN_SECRET — verification keyring `kid:secret[,kid:secret]` (ADR-001); local dev
   //                        reads it from `.dev.vars`.
@@ -35,7 +33,6 @@
         { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives-staging" },
       ],
       "kv_namespaces": [{ "binding": "ACCESS_STATE" }],
-      "queues": { "producers": [{ "binding": "USAGE", "queue": "lumra-usage-staging" }] },
     },
     "production": {
       // Canonical app origin is www.lumra.photos (apex 308s to www); lumra-ten.vercel.app is kept
@@ -49,7 +46,6 @@
         { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives" },
       ],
       "kv_namespaces": [{ "binding": "ACCESS_STATE", "id": "411b68f7b8da4404ac02dc09ca186ecd" }],
-      "queues": { "producers": [{ "binding": "USAGE", "queue": "lumra-usage" }] },
     },
   },
 }

@@ -168,11 +168,8 @@ async function lockPlanRates(tx: Tx, userId: string): Promise<PlanRates> {
     monthlyFeeMicroUsd: p.monthlyFeeMicroUsd,
     maxActiveGalleries: p.maxActiveGalleries,
     maxStorageBytes: p.maxStorageBytes,
-    maxDeliveryBytesPerMonth: p.maxDeliveryBytesPerMonth,
     includedStorageGbMonth: p.includedStorageGbMonth,
-    includedDeliveryGb: p.includedDeliveryGb,
     storageOverageMicroUsdPerGbMonth: p.storageOverageMicroUsdPerGbMonth,
-    deliveryOverageMicroUsdPerGb: p.deliveryOverageMicroUsdPerGb,
     defaultOverageCapMicroUsd: p.defaultOverageCapMicroUsd,
     brandingVisible: p.brandingVisible,
   };

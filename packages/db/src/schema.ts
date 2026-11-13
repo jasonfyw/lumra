@@ -81,11 +81,8 @@ export const plans = pgTable('plans', {
   monthlyFeeMicroUsd: int8('monthly_fee_micro_usd').notNull(),
   maxActiveGalleries: integer('max_active_galleries'),
   maxStorageBytes: int8('max_storage_bytes'),
-  maxDeliveryBytesPerMonth: int8('max_delivery_bytes_per_month'),
   includedStorageGbMonth: integer('included_storage_gb_month').notNull(),
-  includedDeliveryGb: integer('included_delivery_gb').notNull(),
   storageOverageMicroUsdPerGbMonth: int8('storage_overage_micro_usd_per_gb_month'),
-  deliveryOverageMicroUsdPerGb: int8('delivery_overage_micro_usd_per_gb'),
   defaultOverageCapMicroUsd: int8('default_overage_cap_micro_usd'),
   brandingVisible: boolean('branding_visible').notNull(),
   createdAt: createdAt(),
@@ -110,11 +107,8 @@ export const planRateVersions = pgTable(
     monthlyFeeMicroUsd: int8('monthly_fee_micro_usd').notNull(),
     maxActiveGalleries: integer('max_active_galleries'),
     maxStorageBytes: int8('max_storage_bytes'),
-    maxDeliveryBytesPerMonth: int8('max_delivery_bytes_per_month'),
     includedStorageGbMonth: integer('included_storage_gb_month').notNull(),
-    includedDeliveryGb: integer('included_delivery_gb').notNull(),
     storageOverageMicroUsdPerGbMonth: int8('storage_overage_micro_usd_per_gb_month'),
-    deliveryOverageMicroUsdPerGb: int8('delivery_overage_micro_usd_per_gb'),
     defaultOverageCapMicroUsd: int8('default_overage_cap_micro_usd'),
     brandingVisible: boolean('branding_visible').notNull(),
     decision: text('decision').$type<RateVersionDecision>().notNull().default('proposed'),
@@ -160,9 +154,6 @@ export const billingAccounts = pgTable('billing_accounts', {
   stripeSubscriptionStatus: text('stripe_subscription_status'),
   cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
   subscriptionEventAt: tstz('subscription_event_at'),
-  // T28/T32 delivery safety cutoff.
-  deliveryPausedReason: text('delivery_paused_reason').$type<'free_delivery_cap' | 'spend_cap'>(),
-  deliveryPausedAt: tstz('delivery_paused_at'),
 });
 
 export const guestSessions = pgTable('guest_sessions', {

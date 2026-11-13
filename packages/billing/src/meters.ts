@@ -10,8 +10,9 @@ import { BillingArithmeticError, divRoundHalfUp, maxBig, toNonNegativeBigInt } f
 
 /**
  * Stripe Billing Meter export (ADR-004 + 2026-11-13 amendment, T31). Meters carry **overage
- * only** as integers: storage in MB-months above the included GB-months, delivery in MB above the
- * included GB (`STRIPE_CATALOG_V1.meterUnitBytes` = 10⁶). The Stripe prices are flat per unit.
+ * only** as integers: storage in MB-months above the included GB-months
+ * (`STRIPE_CATALOG_V1.meterUnitBytes` = 10⁶). The Stripe price is flat per unit. Storage is the
+ * only metered quantity; delivery is not tracked or billed (ADR-008).
  *
  * Export is **cumulative**: each run converts the period-to-date ledger total to overage units
  * once (one half-up rounding) and sends only the difference from what was already exported, so
@@ -19,7 +20,6 @@ import { BillingArithmeticError, divRoundHalfUp, maxBig, toNonNegativeBigInt } f
  */
 export const METER_EVENT_NAMES: Readonly<Record<UsageMetric, string>> = {
   storage_byte_seconds: STRIPE_CATALOG_V1.meters.storageOverage,
-  delivery_bytes: STRIPE_CATALOG_V1.meters.deliveryOverage,
 };
 
 /** Body of `POST /v1/billing/meter_events`. `identifier` doubles as the request Idempotency-Key. */
@@ -71,8 +71,7 @@ export function meterCursorKey(metric: UsageMetric, periodStart: Date): string {
 
 /**
  * Overage meter units for a period-to-date ledger total: MB-months above the included
- * GB-months (storage) or MB above the included GB (delivery), rounded half up once. Plans
- * without overage pricing (Free) always yield 0.
+ * GB-months, rounded half up once. Plans without overage pricing (Free) always yield 0.
  */
 export function toMeterUnits(
   metric: UsageMetric,
@@ -84,16 +83,11 @@ export function toMeterUnits(
   const q = toNonNegativeBigInt(quantity, 'quantity');
   const unit = toNonNegativeBigInt(unitBytes, 'unitBytes');
   const gb = BigInt(BYTES_PER_GB);
-  if (metric === 'storage_byte_seconds') {
-    if (plan.storageOverageMicroUsdPerGbMonth === null) return 0n;
-    const seconds = toNonNegativeBigInt(secondsPerBillingMonth, 'secondsPerBillingMonth');
-    if (seconds === 0n) throw new BillingArithmeticError('secondsPerBillingMonth must be positive');
-    const included = BigInt(plan.includedStorageGbMonth) * gb * seconds;
-    return divRoundHalfUp(maxBig(0n, q - included), unit * seconds);
-  }
-  if (plan.deliveryOverageMicroUsdPerGb === null) return 0n;
-  const included = BigInt(plan.includedDeliveryGb) * gb;
-  return divRoundHalfUp(maxBig(0n, q - included), unit);
+  if (plan.storageOverageMicroUsdPerGbMonth === null) return 0n;
+  const seconds = toNonNegativeBigInt(secondsPerBillingMonth, 'secondsPerBillingMonth');
+  if (seconds === 0n) throw new BillingArithmeticError('secondsPerBillingMonth must be positive');
+  const included = BigInt(plan.includedStorageGbMonth) * gb * seconds;
+  return divRoundHalfUp(maxBig(0n, q - included), unit * seconds);
 }
 
 function sameEntry(a: LedgerEntry, b: LedgerEntry): boolean {
@@ -119,7 +113,6 @@ export function buildMeterEvents(input: MeterExportInput): MeterExportResult {
   const catalog = input.catalog ?? STRIPE_CATALOG_V1;
   const eventName: Record<UsageMetric, string> = {
     storage_byte_seconds: catalog.meters.storageOverage,
-    delivery_bytes: catalog.meters.deliveryOverage,
   };
 
   const unique = new Map<string, LedgerEntry>();

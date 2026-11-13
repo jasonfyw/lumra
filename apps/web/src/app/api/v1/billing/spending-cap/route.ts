@@ -17,7 +17,7 @@ import {
 } from '@/lib/request-guards';
 import { withRoute } from '@/lib/route';
 import { getAccountUsageSummary } from '@/server/account';
-import { reevaluateDeliveryPause } from '@/server/billing-state';
+import { reevaluateSpendAlerts } from '@/server/billing-state';
 import { isBillingConfigured } from '@/server/stripe';
 
 export const dynamic = 'force-dynamic';
@@ -25,9 +25,9 @@ export const dynamic = 'force-dynamic';
 /**
  * `PATCH /api/v1/billing/spending-cap` (PRD §10 "GET/PATCH /billing/usage", split; T32). The
  * signed-in owner sets their own monthly overage cap: whole cents from $0 to the platform maximum,
- * or `null` for the plan default. Pro only (Free has hard caps and is never billed). The delivery
- * cutoff and alerts are re-applied at once, so raising the cap resumes delivery and lowering it
- * below the current estimate pauses it. Returns the updated spend summary.
+ * or `null` for the plan default. Pro only (Free has hard caps and is never billed). The cap
+ * covers storage overage only (ADR-008): it gates new uploads at admission, and spend-cap alerts
+ * are re-evaluated at once. Returns the updated spend summary.
  */
 export const PATCH = withRoute(
   'PATCH /api/v1/billing/spending-cap',
@@ -82,7 +82,7 @@ export const PATCH = withRoute(
       );
     }
     log.info('spending cap updated', { accountId: user.userId, custom: cap !== null });
-    await reevaluateDeliveryPause(db, user.userId, { traceId: `cap:${requestId}`, log });
+    await reevaluateSpendAlerts(db, user.userId, { traceId: `cap:${requestId}`, log });
     const summary = await getAccountUsageSummary(db, user, new Date(), {
       paymentsEnabled: isBillingConfigured(),
     });

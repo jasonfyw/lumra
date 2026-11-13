@@ -28,18 +28,18 @@ Body `{ mediaIds?: uuid[] }` (omit for "Download all"; a subset is for multi-sel
 `CreateArchiveResponse` `{ jobId, reused, status, itemCount, partsExpected }` — 201 when a build was
 queued, 200 when an existing job was returned. `Cache-Control: private, no-store`.
 
-| Caller / state                                      | Result                                                   |
-| --------------------------------------------------- | -------------------------------------------------------- |
-| unknown slug, draft, deleted gallery                | 404 `not_found` (indistinguishable)                      |
-| expired gallery                                     | 410 `gallery_expired`                                    |
-| passworded gallery without a live session at the    | 401 `password_required` (wrong password, other gallery's |
-| current `access_version`                            | session, or a password change since unlocking)           |
-| foreign `Origin`                                    | 403; malformed body 422                                  |
-| no ready photos (or none of `mediaIds` ready)       | 409 `conflict` (`no_ready_items`, retryable)             |
-| 5 jobs already building for the gallery             | 429 `rate_limited`, `Retry-After: 60`                    |
-| more than 20 requests / hour from one IP            | 429 (`publicArchiveCreate`)                              |
-| owner past due / canceled / Free delivery cap / cap | 403 `quota_exceeded` (`archive_unavailable`; no billing  |
-| reached (PRD §9.4)                                  | detail is shown to recipients, the reason is logged)     |
+| Caller / state                                   | Result                                                   |
+| ------------------------------------------------ | -------------------------------------------------------- |
+| unknown slug, draft, deleted gallery             | 404 `not_found` (indistinguishable)                      |
+| expired gallery                                  | 410 `gallery_expired`                                    |
+| passworded gallery without a live session at the | 401 `password_required` (wrong password, other gallery's |
+| current `access_version`                         | session, or a password change since unlocking)           |
+| foreign `Origin`                                 | 403; malformed body 422                                  |
+| no ready photos (or none of `mediaIds` ready)    | 409 `conflict` (`no_ready_items`, retryable)             |
+| 5 jobs already building for the gallery          | 429 `rate_limited`, `Retry-After: 60`                    |
+| more than 20 requests / hour from one IP         | 429 (`publicArchiveCreate`)                              |
+| owner past due / canceled (PRD §9.4)             | 403 `quota_exceeded` (`archive_unavailable`; no billing  |
+|                                                  | detail is shown to recipients, the reason is logged)     |
 
 Semantics:
 
@@ -124,12 +124,11 @@ transition together with the object deletion (storage accrual counts `ready` par
 
 ## Metering (FR-D04)
 
-- Delivery: the gateway emits `delivery.served` (`action: 'archive'`, `archivePartId`) per
-  byte-bearing response; the usage consumer meters it into `usage_ledger` like any download.
+- Delivery: archive downloads are not metered or billed (ADR-008); the gateway emits no usage events.
 - Storage: completed parts of `running`/`ready` jobs count toward the owner's stored bytes in the
   hourly storage accrual until they expire (see BILLING.md).
-- Admission: archives being built are reservations (fully delivered estimate), and a new request is
-  admitted with `checkAdmission` (`kind: 'archive'`).
+- Admission: archives reserve no cost; a new request is admitted with `checkAdmission`
+  (`kind: 'archive'`), which only checks the owner's billing status (past due / canceled).
 
 ## Deletion
 

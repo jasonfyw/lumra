@@ -7,13 +7,10 @@ import {
   applySubscriptionSnapshot,
   billingStatusForStripe,
   billingTransitionPath,
-  deliveryPauseFor,
-  checkDeliveryAllowance,
   evaluateBillingSafeguards,
   fitsFreeCaps,
   planStorageAccrual,
   publicDeliveryState,
-  rateDeliveryEvents,
   sweepBillingAccount,
   type EntitlementState,
   type SafeguardContext,
@@ -328,7 +325,7 @@ describe('sweepBillingAccount (T33 time travel)', () => {
   });
 });
 
-describe('delivery safety cutoff (T28/T32)', () => {
+describe('public delivery and spend alerts (ADR-008: no delivery cutoff)', () => {
   const free = RATE_CARD_V1.free;
   const pro = RATE_CARD_V1.pro;
   const ok = {
@@ -338,146 +335,71 @@ describe('delivery safety cutoff (T28/T32)', () => {
     canceledAt: null,
   };
 
-  it('Free pauses at the monthly delivery cap; Pro at the spending cap', () => {
-    const cap = (
-      bytes: number,
-      plan = free,
-      status: 'free' | 'active' = 'free',
-      capMicroUsd: number | null = null,
-    ) =>
-      deliveryPauseFor(
-        checkDeliveryAllowance({
-          plan,
-          account: { ...ok, status },
-          now: t0,
-          usage: { storageByteSecondsToDate: 0n, deliveryBytesToDate: bytes },
-          capMicroUsd,
-        }),
-      );
-    expect(cap(3 * BYTES_PER_GB - 1)).toBeNull();
-    expect(cap(3 * BYTES_PER_GB)).toBe('free_delivery_cap');
-    // Pro: 5 GB included + $10 / $0.03 per GB ≈ 333.3 GB of overage before the cap.
-    expect(cap(300 * BYTES_PER_GB, pro, 'active')).toBeNull();
-    expect(cap(340 * BYTES_PER_GB, pro, 'active')).toBe('spend_cap');
-    expect(cap(6 * BYTES_PER_GB, pro, 'active', 0)).toBe('spend_cap');
-  });
-
-  it('publicDeliveryState combines billing restrictions and the pause, failing closed', () => {
+  it('publicDeliveryState depends on billing status only, failing closed', () => {
     expect(publicDeliveryState(null, t0)).toEqual({ available: true });
-    expect(publicDeliveryState({ ...ok, deliveryPausedReason: null }, t0)).toEqual({
+    expect(publicDeliveryState(ok, t0)).toEqual({ available: true });
+    expect(publicDeliveryState({ ...ok, status: 'active' }, t0)).toEqual({ available: true });
+    expect(publicDeliveryState({ ...ok, status: 'past_due' }, t0)).toEqual({
+      available: false,
+      reason: 'billing_suspended',
+    });
+    expect(publicDeliveryState({ ...ok, status: 'past_due', pastDueSince: at(-1) }, t0)).toEqual({
       available: true,
     });
-    expect(publicDeliveryState({ ...ok, deliveryPausedReason: 'spend_cap' }, t0)).toEqual({
+    expect(publicDeliveryState({ ...ok, status: 'past_due', pastDueSince: at(-8) }, t0)).toEqual({
       available: false,
-      reason: 'spend_cap',
+      reason: 'billing_suspended',
     });
-    expect(
-      publicDeliveryState(
-        {
-          status: 'past_due',
-          pastDueSince: null,
-          restrictedSince: null,
-          canceledAt: null,
-          deliveryPausedReason: null,
-        },
-        t0,
-      ),
-    ).toEqual({ available: false, reason: 'billing_suspended' });
-    expect(
-      publicDeliveryState(
-        {
-          status: 'past_due',
-          pastDueSince: at(-8),
-          restrictedSince: null,
-          canceledAt: null,
-          deliveryPausedReason: null,
-        },
-        t0,
-      ),
-    ).toEqual({ available: false, reason: 'billing_suspended' });
+    expect(publicDeliveryState({ ...ok, status: 'canceled', canceledAt: at(-1) }, t0)).toEqual({
+      available: false,
+      reason: 'billing_suspended',
+    });
   });
 
-  it('evaluateBillingSafeguards flips the pause with compare-and-set and once-only notices', async () => {
+  it('evaluateBillingSafeguards only records storage spend alerts', async () => {
+    const gbMonth = BigInt(BYTES_PER_GB) * BigInt(BILLING_POLICY_V1.secondsPerBillingMonth);
     const ctx = (over: Partial<SafeguardContext>): SafeguardContext => ({
       accountId: 'a',
       plan: free,
-      account: ok,
       spendCapMicroUsd: null,
       warningThresholdsPct: [50, 80, 100],
-      deliveryPausedReason: null,
       period: { start: new Date('2026-11-01T00:00:00Z'), end: new Date('2026-12-01T00:00:00Z') },
-      usage: { storageByteSecondsToDate: 0n, deliveryBytesToDate: 0 },
+      usage: { storageByteSecondsToDate: 0n },
       alertsSent: [],
       ...over,
     });
     const calls: unknown[][] = [];
     const store: SafeguardStore = {
       safeguardContexts: async () => [
-        ctx({
-          accountId: 'over',
-          usage: { storageByteSecondsToDate: 0n, deliveryBytesToDate: 3 * BYTES_PER_GB },
-        }),
-        ctx({ accountId: 'back', deliveryPausedReason: 'free_delivery_cap' }),
-        ctx({ accountId: 'same', deliveryPausedReason: null }),
-        ctx({
-          accountId: 'race',
-          usage: { storageByteSecondsToDate: 0n, deliveryBytesToDate: 4 * BYTES_PER_GB },
-        }),
+        ctx({ accountId: 'free', usage: { storageByteSecondsToDate: 500n * gbMonth } }),
+        // 20 GB-month included + 100 × $0.10 = $10.00 = the default cap.
+        ctx({ accountId: 'pro', plan: pro, usage: { storageByteSecondsToDate: 120n * gbMonth } }),
       ],
-      setDeliveryPause: async (...args) => {
+      recordSpendAlerts: async (...args) => {
         calls.push(args);
-        return args[0] !== 'race';
+        return args[2];
       },
-      recordSpendAlerts: async () => [],
     };
-    const result = await evaluateBillingSafeguards(['over', 'back', 'same', 'race'], {
+    const result = await evaluateBillingSafeguards(['free', 'pro'], {
       store,
       now: t0,
       traceId: 't',
     });
-    expect(result).toMatchObject({ evaluated: 4, paused: 1, resumed: 1, conflicts: 1 });
-    expect(calls[0]).toEqual([
-      'over',
-      null,
-      'free_delivery_cap',
-      {
-        traceId: 't',
-        notice: {
-          template: 'delivery_paused',
-          dedupeKey: 'email:delivery_paused:over:2026-11-01T00:00:00.000Z:free_delivery_cap',
-          data: { reason: 'free_delivery_cap', periodEnd: '2026-12-01T00:00:00.000Z' },
-        },
-      },
+    expect(result).toEqual({ evaluated: 2, alerts: 3 });
+    expect(calls).toEqual([
+      [
+        'pro',
+        new Date('2026-11-01T00:00:00Z'),
+        [50, 80, 100],
+        { spendMicroUsd: 10_000_000, capMicroUsd: 10_000_000, traceId: 't' },
+      ],
     ]);
-    expect(calls[1]).toEqual(['back', 'free_delivery_cap', null, { traceId: 't' }]);
   });
 });
 
 describe('Free can never create a positive overage ledger entry (T28 property)', () => {
   const free = RATE_CARD_V1.free;
   const accountId = '11111111-1111-4111-8111-111111111111';
-
-  it('delivery rows on Free always carry zero estimated cost', () => {
-    fc.assert(
-      fc.property(
-        fc.array(fc.integer({ min: 1, max: 2_000_000_000 }), { minLength: 1, maxLength: 30 }),
-        fc.bigInt({ min: 0n, max: 10n ** 13n }),
-        (sizes, before) => {
-          const entries = rateDeliveryEvents({
-            events: sizes.map((bytes, i) => ({
-              sourceId: `jti-${i}:0-${bytes - 1}`,
-              accountId,
-              bytes,
-              servedAt: new Date(t0.getTime() + i * 1000),
-            })),
-            accounts: new Map([[accountId, { account: null, plan: free }]]),
-            deliveryBytesToDate: () => before,
-          });
-          for (const e of entries) expect(e.estimatedCostMicroUsd).toBe(0);
-        },
-      ),
-    );
-  });
 
   it('storage accrual rows on Free always carry zero estimated cost', () => {
     fc.assert(

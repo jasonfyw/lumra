@@ -11,10 +11,11 @@ import { billingBanners } from './billing-banners';
 import { PricingView, workedExample } from './pricing-view';
 
 describe('pricing (PRD §9.3)', () => {
-  it('rates the worked example with @lumra/billing: $4.20', () => {
+  it('rates the worked example with @lumra/billing: $2.00 + (30 − 20) × $0.10 = $3.00', () => {
     const { invoice } = workedExample(RATE_CARD_V1.pro);
-    expect(invoice.totalMicroUsd).toBe(4_200_000);
-    expect(formatUsd(invoice.totalMicroUsd)).toBe('$4.20');
+    expect(invoice.totalMicroUsd).toBe(3_000_000);
+    expect(formatUsd(invoice.totalMicroUsd)).toBe('$3.00');
+    expect(invoice.lines.map((l) => l.kind)).toEqual(['base_fee', 'storage_overage']);
   });
 
   it('renders every number from the rate card it is given', () => {
@@ -25,10 +26,13 @@ describe('pricing (PRD §9.3)', () => {
         viewer={{ kind: 'anonymous' }}
       />,
     );
-    expect(screen.getByText('$4.20')).toBeInTheDocument();
+    expect(screen.getByText('$3.00')).toBeInTheDocument();
     expect(screen.getByText(/2 active galleries/)).toBeInTheDocument();
     expect(screen.getByText(/20 GB-month of storage included/)).toBeInTheDocument();
-    expect(screen.getByText(/\$0\.10 per GB-month and \$0\.03 per GB/)).toBeInTheDocument();
+    expect(screen.getByText(/Then \$0\.10 per GB-month/)).toBeInTheDocument();
+    // Delivery is neither metered nor charged (ADR-008).
+    expect(screen.queryByText(/per GB delivered|of delivery a month|bandwidth/i)).toBeNull();
+    expect(screen.getAllByText(/Views and downloads included, not metered/)).toHaveLength(2);
     expect(screen.getByRole('link', { name: 'Sign in to upgrade' })).toHaveAttribute(
       'href',
       '/auth?returnTo=%2Fpricing',
@@ -79,10 +83,10 @@ describe('/account billing states', () => {
     expect(keys('past_due')).toEqual(['past_due']);
     expect(keys('restricted')).toEqual(['restricted']);
     expect(keys('canceled')).toEqual(['canceled']);
-    expect(keys('free_delivery_paused')).toEqual(['delivery_cap']);
     expect(keys('pro_canceling')).toEqual(['cancel_at_period_end']);
     expect(keys('pro_alert_80')).toEqual(['spend_alert']);
-    expect(keys('pro_spend_cap')).toEqual(['spend_cap']);
+    // At the cap only uploads stop; galleries are never paused for usage (ADR-008).
+    expect(keys('pro_spend_cap')).toEqual(['spend_alert']);
   });
 
   it('the checkout redirect alone never claims Pro is active', () => {

@@ -134,7 +134,7 @@ export function createMeterExportRepository(sql: postgres.Sql): MeterExportRepos
         accountId,
         metric: r.metric,
         quantity: BigInt(r.quantity),
-        unit: r.metric === 'delivery_bytes' ? 'byte' : 'byte_second',
+        unit: 'byte_second',
         sourceId: r.source_id,
         eventTime: toDate(r.event_time),
         periodStart: toDate(r.period_start),

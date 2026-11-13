@@ -1,6 +1,7 @@
 /**
- * T28/T30/T33 integration tests: billing-state constraints, the outbox helper functions, the
- * delivery cutoff adapter (with `evaluateBillingSafeguards`) and the hourly sweep writes.
+ * T30/T32/T33 integration tests: billing-state constraints, the outbox helper functions, the
+ * spend-alert adapter (with `evaluateBillingSafeguards`) and the hourly sweep writes. Delivery is
+ * not metered or paused (ADR-008).
  * Everything runs in rolled-back transactions (usage_ledger is append-only).
  */
 import { randomUUID } from 'node:crypto';
@@ -48,16 +49,18 @@ const outboxFor = (tx: Tx, ids: string[]) =>
     select event_name, aggregate_id, payload from public.job_outbox
     where aggregate_id = any(${`{${ids.join(',')}}`}::uuid[]) order by created_at, id`;
 
-async function deliveryRow(tx: Tx, accountId: string, bytes: number, periodStart: Date) {
+const GB_MONTH = BigInt(BYTES_PER_GB) * 30n * 86_400n;
+
+async function storageRow(tx: Tx, accountId: string, byteSeconds: bigint, periodStart: Date) {
   await tx`
     insert into public.usage_ledger (account_id, metric, quantity_micro_units, unit, source_id,
                                      event_time, period_start, rating_version)
-    values (${accountId}, 'delivery_bytes', ${bytes}, 'bytes', ${randomUUID()}, now(),
-            ${periodStart}, 1)`;
+    values (${accountId}, 'storage_byte_seconds', ${byteSeconds.toString()}::bigint,
+            'byte_seconds', ${randomUUID()}, ${periodStart}, ${periodStart}, 1)`;
 }
 
 describe('billing_accounts constraints (T30/T33)', () => {
-  it('status timestamps and the pause pair are structural', async () => {
+  it('status timestamps are structural', async () => {
     await inRollback(sql, async (tx) => {
       const user = await createUser(tx);
       await expectSqlError(
@@ -70,19 +73,6 @@ describe('billing_accounts constraints (T30/T33)', () => {
         CHECK_VIOLATION,
         (sp) => sp`update public.billing_accounts set status = 'canceled' where user_id = ${user}`,
       );
-      await expectSqlError(
-        tx,
-        CHECK_VIOLATION,
-        (sp) =>
-          sp`update public.billing_accounts set delivery_paused_reason = 'spend_cap' where user_id = ${user}`,
-      );
-      await expectSqlError(
-        tx,
-        CHECK_VIOLATION,
-        (sp) =>
-          sp`update public.billing_accounts set delivery_paused_reason = 'other', delivery_paused_at = now()
-           where user_id = ${user}`,
-      );
       await tx`update public.billing_accounts set status = 'past_due', past_due_since = now()
                where user_id = ${user}`;
     });
@@ -92,9 +82,9 @@ describe('billing_accounts constraints (T30/T33)', () => {
     await inRollback(sql, async (tx) => {
       const user = await createUser(tx);
       await actAs(tx, 'authenticated', user);
-      const [row] = await tx<{ delivery_paused_reason: string | null }[]>`
-        select delivery_paused_reason from public.billing_accounts where user_id = ${user}`;
-      expect(row).toEqual({ delivery_paused_reason: null });
+      const [row] = await tx<{ status: string }[]>`
+        select status from public.billing_accounts where user_id = ${user}`;
+      expect(row).toEqual({ status: 'free' });
       await expectSqlError(
         tx,
         DENIED,
@@ -149,66 +139,54 @@ describe('outbox helpers', () => {
   });
 });
 
-describe('delivery safety cutoff (T28)', () => {
-  it('pauses a Free account at 3 GB, mirrors it into the access state, and resumes next period', async () => {
+describe('spend-cap alert runner (T32, ADR-008)', () => {
+  it('alerts a Pro account on storage overage and never pauses its galleries', async () => {
     await inRollback(sql, async (tx) => {
       const user = await createUser(tx);
+      await tx`update public.profiles set plan_id = 'pro' where user_id = ${user}`;
       const gallery = await published(tx, user);
       const repo = repoFor(tx);
       const now = new Date();
       const period = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-      await deliveryRow(tx, user, 3 * BYTES_PER_GB - 1, period);
+      // 20 GB-month included + 60 GB-month × $0.10 = $6.00 of the $10 default cap → 50 %.
+      await storageRow(tx, user, 80n * GB_MONTH, period);
 
       const [ctx] = await repo.safeguardContexts([user], now);
       expect(ctx).toMatchObject({
         accountId: user,
-        plan: { id: 'free' },
-        deliveryPausedReason: null,
-        usage: { deliveryBytesToDate: 3 * BYTES_PER_GB - 1, storageByteSecondsToDate: 0n },
+        plan: { id: 'pro' },
+        usage: { storageByteSecondsToDate: 80n * GB_MONTH },
+        alertsSent: [],
       });
+      expect(ctx).not.toHaveProperty('deliveryPausedReason');
       expect(ctx!.period.start).toEqual(period);
-      const idle = await evaluateBillingSafeguards([user], { store: repo, now, traceId: 't' });
-      expect(idle).toMatchObject({ evaluated: 1, paused: 0 });
-
-      await deliveryRow(tx, user, 1, period);
-      const paused = await evaluateBillingSafeguards([user], { store: repo, now, traceId: 't' });
-      expect(paused).toMatchObject({ paused: 1 });
-      const [row] = await tx<{ r: string; at: Date | null }[]>`
-        select delivery_paused_reason as r, delivery_paused_at as at
-        from public.billing_accounts where user_id = ${user}`;
-      expect(row!.r).toBe('free_delivery_cap');
-      expect(row!.at).not.toBeNull();
-      expect((await outboxFor(tx, [gallery])).map((r) => r.event_name)).toEqual([
-        'gallery.access_changed',
-      ]);
+      const result = await evaluateBillingSafeguards([user], { store: repo, now, traceId: 't' });
+      expect(result).toEqual({ evaluated: 1, alerts: 1 });
       expect((await outboxFor(tx, [user])).map((r) => r.payload.template)).toEqual([
-        'delivery_paused',
+        'spend_cap_alert',
       ]);
+      // No access re-sync: galleries are never paused for usage.
+      expect(await outboxFor(tx, [gallery])).toEqual([]);
       const access = await createAccessStateRepository(
         tx as unknown as postgres.Sql,
       ).getGalleryAccess(gallery);
-      expect(access?.billing?.deliveryPausedReason).toBe('free_delivery_cap');
-
-      // Stale compare-and-set loses, writing nothing.
-      expect(await repo.setDeliveryPause(user, null, 'spend_cap', { traceId: 't' })).toBe(false);
-
-      // Next calendar month: the allowance is back and the pause lifts.
-      const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 2));
-      const resumed = await evaluateBillingSafeguards([user], {
-        store: repo,
-        now: next,
-        traceId: 't',
+      expect(access?.billing).toEqual({
+        status: 'free',
+        pastDueSince: null,
+        restrictedSince: null,
+        canceledAt: null,
       });
-      expect(resumed).toMatchObject({ resumed: 1 });
-      const [after] = await tx<{ r: string | null }[]>`
-        select delivery_paused_reason as r from public.billing_accounts where user_id = ${user}`;
-      expect(after!.r).toBeNull();
+      // Re-running records nothing new.
+      expect(await evaluateBillingSafeguards([user], { store: repo, now, traceId: 't' })).toEqual({
+        evaluated: 1,
+        alerts: 0,
+      });
     });
   });
 });
 
 describe('hourly sweep writes (T33)', () => {
-  it('lists past_due/canceled/paused/Pro accounts with their footprint and applies CAS transitions', async () => {
+  it('lists past_due/canceled/Pro accounts with their footprint and applies CAS transitions', async () => {
     await inRollback(sql, async (tx) => {
       const pastDue = await createUser(tx);
       const plain = await createUser(tx);
@@ -288,7 +266,7 @@ describe('meter export persistence (T31)', () => {
       const end = new Date('2026-12-04T09:30:00Z');
       await tx`insert into public.billing_periods (account_id, period_start, period_end, stripe_subscription_id)
                values (${user}, ${start}, ${end}, 'sub_1')`;
-      await deliveryRow(tx, user, 6 * BYTES_PER_GB, start);
+      await storageRow(tx, user, 21n * GB_MONTH, start);
       const repo = createMeterExportRepository(tx as unknown as postgres.Sql);
 
       const periods = await repo.exportPeriods({ endedAfter: new Date('2026-11-01'), limit: 100 });
@@ -311,16 +289,16 @@ describe('meter export persistence (T31)', () => {
       expect(entries).toHaveLength(1);
 
       const event = {
-        event_name: 'lumra_delivery_overage',
-        identifier: `${user}:delivery_bytes:${start.getTime() / 1000}:1764000000`,
+        event_name: 'lumra_storage_overage',
+        identifier: `${user}:storage_byte_seconds:${start.getTime() / 1000}:1764000000`,
         timestamp: 1_764_000_000,
         payload: { stripe_customer_id: 'cus_1', value: '1000' },
       };
-      const key = `delivery_bytes|${start.toISOString()}`;
+      const key = `storage_byte_seconds|${start.toISOString()}`;
       const record = (previous: Record<string, bigint>, next: Record<string, bigint>) =>
         repo.recordExport(
           user,
-          [{ event, metric: 'delivery_bytes', periodStart: start }],
+          [{ event, metric: 'storage_byte_seconds', periodStart: start }],
           previous,
           next,
           new Date('2026-11-24T00:00:00Z'),
