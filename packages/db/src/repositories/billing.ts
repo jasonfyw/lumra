@@ -12,6 +12,9 @@ import {
   type BillingAccountStore,
   type CostReservationStore,
   type DeliveryAccountContext,
+  type DeliveryPauseReason,
+  type EmailNotice,
+  type SafeguardStore,
   type LedgerEntry,
   type PlanStore,
   type Reservation,
@@ -21,6 +24,7 @@ import {
   type UsageMetric,
   type UsageUnit as BillingUsageUnit,
   accountPeriodKey,
+  billingPeriodAt,
   estimateStoredFootprintBytes,
   ledgerIdempotencyKey,
 } from '@lumra/billing';
@@ -567,6 +571,233 @@ export function createBillingRepository(sql: postgres.Sql): BillingRepository {
         moved = true;
       });
       return moved;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// billing state: delivery safety cutoff + hourly maintenance sweep (T28/T32/T33)
+// ---------------------------------------------------------------------------------------------
+
+/** Account the hourly sweep looks at, with what `fitsFreeCaps` needs. */
+export interface SweepCandidate {
+  accountId: string;
+  status: BillingAccountStatus;
+  pastDueSince: Date | null;
+  restrictedSince: Date | null;
+  canceledAt: Date | null;
+  deliveryPausedReason: DeliveryPauseReason | null;
+  activeGalleries: number;
+  /** Originals (uploaded/processing/ready) + derivatives in non-deleted galleries. */
+  storedBytes: number;
+}
+
+/** `SafeguardStore` (delivery cutoff, `@lumra/billing`) plus the hourly sweep's reads/writes. */
+export interface BillingStateRepository extends SafeguardStore {
+  /** past_due / canceled / paused / Pro accounts after `afterId` (keyset by id). */
+  sweepCandidates(afterId: string | null, limit: number): Promise<SweepCandidate[]>;
+  /** Compare-and-set status transition from the sweep, with access re-sync and notices. */
+  applySweep(
+    accountId: string,
+    expectedStatus: BillingAccountStatus,
+    next: { status: BillingAccountStatus; restrictedSince: Date | null; canceledAt: Date | null },
+    options: { traceId: string; notices: EmailNotice[] },
+  ): Promise<boolean>;
+}
+
+interface SafeguardRow extends RateColumns {
+  account_id: string;
+  status: BillingAccountStatus;
+  past_due_since: Date | string | null;
+  restricted_since: Date | string | null;
+  canceled_at: Date | string | null;
+  spend_cap_micro_usd: string | null;
+  warning_thresholds: string;
+  delivery_paused_reason: DeliveryPauseReason | null;
+  billing_period_start: Date | string | null;
+  billing_period_end: Date | string | null;
+}
+
+/** Runs `fn` in a transaction, or a savepoint when `sql` already is one (tests, composed writes). */
+function atomically(
+  sql: postgres.Sql,
+  fn: (tx: postgres.TransactionSql) => Promise<boolean>,
+): Promise<boolean> {
+  const maybeTx = sql as unknown as Partial<postgres.TransactionSql>;
+  return (
+    typeof maybeTx.savepoint === 'function' ? maybeTx.savepoint(fn) : sql.begin(fn)
+  ) as Promise<boolean>;
+}
+
+async function enqueueNotice(
+  tx: postgres.TransactionSql,
+  accountId: string,
+  notice: EmailNotice,
+  traceId: string,
+): Promise<void> {
+  await tx`select public.enqueue_account_email(
+    ${accountId}::uuid, ${notice.template}, ${notice.dedupeKey},
+    ${JSON.stringify(notice.data ?? {})}::text::jsonb, ${traceId})`;
+}
+
+export function createBillingStateRepository(sql: postgres.Sql): BillingStateRepository {
+  return {
+    async safeguardContexts(accountIds, now) {
+      if (accountIds.length === 0) return [];
+      const rows = await sql<SafeguardRow[]>`
+        select ba.user_id as account_id, ba.status, ba.past_due_since, ba.restricted_since,
+               ba.canceled_at, ba.spend_cap_micro_usd::text as spend_cap_micro_usd,
+               array_to_string(ba.warning_thresholds, ',') as warning_thresholds,
+               ba.delivery_paused_reason, ba.billing_period_start, ba.billing_period_end,
+               ${rateColumns(sql)}
+        from public.billing_accounts ba
+        left join public.profiles p on p.user_id = ba.user_id
+        join public.plans pl on pl.id = coalesce(p.plan_id, 'free')
+        join public.plan_rate_versions pv
+          on pv.plan_id = pl.id and pv.rate_version = pl.rate_version
+        where ba.user_id = any(${pgArray([...new Set(accountIds)])}::uuid[])`;
+      if (rows.length === 0) return [];
+      const periods = rows.map((r) => ({
+        r,
+        period: billingPeriodAt(
+          {
+            billingPeriodStart: toDateOrNull(r.billing_period_start),
+            billingPeriodEnd: toDateOrNull(r.billing_period_end),
+          },
+          now,
+        ),
+      }));
+      const payload = JSON.stringify(
+        periods.map(({ r, period }) => ({
+          account_id: r.account_id,
+          period_start: period.start.toISOString(),
+        })),
+      );
+      const totals = await sql<
+        { account_id: string; byte_seconds: string; delivery_bytes: string }[]
+      >`
+        select k.account_id,
+               coalesce(sum(l.quantity_micro_units)
+                 filter (where l.metric = 'storage_byte_seconds'), 0)::text as byte_seconds,
+               coalesce(sum(l.quantity_micro_units)
+                 filter (where l.metric = 'delivery_bytes'), 0)::text as delivery_bytes
+        from jsonb_to_recordset(${payload}::text::jsonb) as k(account_id uuid, period_start timestamptz)
+        left join public.usage_ledger l
+          on l.account_id = k.account_id and l.period_start = k.period_start
+        group by k.account_id`;
+      const byAccount = new Map(totals.map((t) => [t.account_id, t]));
+      return periods.map(({ r, period }) => {
+        const t = byAccount.get(r.account_id);
+        return {
+          accountId: r.account_id,
+          plan: ratesFromColumns(r),
+          account: {
+            status: r.status,
+            pastDueSince: toDateOrNull(r.past_due_since),
+            restrictedSince: toDateOrNull(r.restricted_since),
+            canceledAt: toDateOrNull(r.canceled_at),
+          },
+          spendCapMicroUsd: toIntOrNull(r.spend_cap_micro_usd, 'spend_cap_micro_usd'),
+          warningThresholdsPct: r.warning_thresholds
+            ? r.warning_thresholds.split(',').map((v) => toInt(v, 'warning_threshold'))
+            : [],
+          deliveryPausedReason: r.delivery_paused_reason,
+          period,
+          usage: {
+            storageByteSecondsToDate: BigInt(t?.byte_seconds ?? '0'),
+            // Compensating rows can be negative; a period total never counts below zero.
+            deliveryBytesToDate: Math.max(0, toInt(t?.delivery_bytes ?? '0', 'delivery_bytes')),
+          },
+        };
+      });
+    },
+
+    setDeliveryPause(accountId, expected, next, options) {
+      return atomically(sql, async (tx) => {
+        const rows = await tx<{ user_id: string }[]>`
+          update public.billing_accounts
+          set delivery_paused_reason = ${next},
+              delivery_paused_at = case when ${next}::text is null then null else now() end
+          where user_id = ${accountId}::uuid
+            and delivery_paused_reason is not distinct from ${expected}::text
+          returning user_id`;
+        if (rows.length === 0) return false;
+        await tx`select public.enqueue_owner_access_sync(${accountId}::uuid, ${options.traceId})`;
+        if (options.notice) await enqueueNotice(tx, accountId, options.notice, options.traceId);
+        return true;
+      });
+    },
+
+    async sweepCandidates(afterId, limit) {
+      const rows = await sql<
+        {
+          account_id: string;
+          status: BillingAccountStatus;
+          past_due_since: Date | string | null;
+          restricted_since: Date | string | null;
+          canceled_at: Date | string | null;
+          delivery_paused_reason: DeliveryPauseReason | null;
+          active_galleries: number;
+          stored_bytes: string;
+        }[]
+      >`
+        select ba.user_id as account_id, ba.status, ba.past_due_since, ba.restricted_since,
+               ba.canceled_at, ba.delivery_paused_reason,
+               (select count(*)::int from public.galleries g
+                 where g.owner_id = ba.user_id and g.deleted_at is null) as active_galleries,
+               (
+                 coalesce((
+                   select sum(m.byte_size) from public.media m
+                   join public.galleries g on g.id = m.gallery_id
+                   where g.owner_id = ba.user_id and g.deleted_at is null
+                     and m.deleted_at is null and m.status in ('uploaded', 'processing', 'ready')
+                 ), 0)
+                 + coalesce((
+                   select sum(mv.byte_size) from public.media_variants mv
+                   join public.media m on m.id = mv.media_id
+                   join public.galleries g on g.id = m.gallery_id
+                   where g.owner_id = ba.user_id and g.deleted_at is null and m.deleted_at is null
+                 ), 0)
+               )::text as stored_bytes
+        from public.billing_accounts ba
+        where (
+            ba.status in ('past_due', 'canceled') or ba.delivery_paused_reason is not null
+            -- Pro storage accrues hourly and can reach the spending cap without any delivery.
+            or exists (select 1 from public.profiles p where p.user_id = ba.user_id and p.plan_id = 'pro')
+          )
+          and (${afterId}::uuid is null or ba.user_id > ${afterId}::uuid)
+        order by ba.user_id
+        limit ${limit}`;
+      return rows.map((r) => ({
+        accountId: r.account_id,
+        status: r.status,
+        pastDueSince: toDateOrNull(r.past_due_since),
+        restrictedSince: toDateOrNull(r.restricted_since),
+        canceledAt: toDateOrNull(r.canceled_at),
+        deliveryPausedReason: r.delivery_paused_reason,
+        activeGalleries: r.active_galleries,
+        storedBytes: toInt(r.stored_bytes, 'stored_bytes'),
+      }));
+    },
+
+    applySweep(accountId, expectedStatus, next, options) {
+      return atomically(sql, async (tx) => {
+        const rows = await tx<{ user_id: string }[]>`
+          update public.billing_accounts
+          set status = ${next.status}::public.billing_account_status,
+              restricted_since = ${next.restrictedSince?.toISOString() ?? null}::timestamptz,
+              canceled_at = ${next.canceledAt?.toISOString() ?? null}::timestamptz,
+              past_due_since = case when ${next.status}::text = 'free' then null else past_due_since end
+          where user_id = ${accountId}::uuid
+            and status = ${expectedStatus}::public.billing_account_status
+          returning user_id`;
+        if (rows.length === 0) return false;
+        await tx`select public.enqueue_owner_access_sync(${accountId}::uuid, ${options.traceId})`;
+        for (const notice of options.notices) {
+          await enqueueNotice(tx, accountId, notice, options.traceId);
+        }
+        return true;
+      });
     },
   };
 }

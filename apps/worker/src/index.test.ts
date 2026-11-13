@@ -87,6 +87,13 @@ function fakeServices(claimBatches: number) {
     markFailed: vi.fn(async () => {}),
   };
   const close = vi.fn(async () => {});
+  // Billing state with nothing to do (no paused / past-due / Pro accounts).
+  const billingState = {
+    safeguardContexts: vi.fn(async () => []),
+    setDeliveryPause: vi.fn(async () => true),
+    sweepCandidates: vi.fn(async () => []),
+    applySweep: vi.fn(async () => true),
+  } as unknown as ReturnType<Services['billingStateRepo']>;
   const services = {
     outboxRepo: () => outbox,
     mediaRepo: () => {
@@ -104,6 +111,7 @@ function fakeServices(claimBatches: number) {
     billingRepo: () => {
       throw new Error('unused');
     },
+    billingStateRepo: () => billingState,
     deletionRepo: () => {
       throw new Error('unused');
     },
@@ -115,6 +123,10 @@ function fakeServices(claimBatches: number) {
 describe('queue consumer', () => {
   it('registers the media.uploaded handler (T12)', () => {
     expect(handlers['media.uploaded']).toBeTypeOf('function');
+  });
+
+  it('registers email.send (T33) so notices are acked, not dropped as unhandled', () => {
+    expect(handlers['email.send']).toBeTypeOf('function');
   });
 
   it('registers archive.build (T24) with the long archive deadline', () => {
@@ -330,6 +342,7 @@ describe('scheduled outbox relay', () => {
       storageAccrualCandidates: vi.fn(async () => []),
       storageByteSecondsToDate: vi.fn(),
       commitStorageAccrual: vi.fn(),
+      plans: { getCurrent: vi.fn(async () => RATE_CARD_V1.free) },
     };
     services.billingRepo = () => repo as unknown as ReturnType<Services['billingRepo']>;
     const w = createWorker({ createServices: () => services });
@@ -338,6 +351,7 @@ describe('scheduled outbox relay', () => {
     expect(outbox.claim).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
     expect(events().some((e) => e.msg === 'storage accrual finished')).toBe(true);
+    expect(events().some((e) => e.msg === 'billing sweep finished')).toBe(true);
   });
 
   it('runs the deletion sweep on its */15 cron (T13) and closes the pool', async () => {

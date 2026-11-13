@@ -11,3 +11,4 @@ export * from './queue';
 export * from './upload';
 export * from './public-gallery';
 export * from './processor';
+export * from './billing';

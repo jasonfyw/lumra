@@ -5,6 +5,10 @@ import { getAuthenticatedUser } from '@/lib/actor';
 import { serverEnv } from '@/lib/env';
 import { formatBytes, formatDate } from '@/lib/format';
 import { listGalleriesForOwner } from '@/lib/galleries';
+import { getDb } from '@/lib/db';
+import { getAccountUsageSummary } from '@/server/account';
+import { isBillingConfigured } from '@/server/stripe';
+import { BillingBanners } from '@/components/billing/billing-banners';
 import { signOutAction } from '../auth/actions';
 import { AppHeader, Icon, Tag, buttonClass } from '@/components/ui';
 import { CopyLinkButton, NewGalleryButton } from './dashboard-actions';
@@ -35,7 +39,11 @@ export default async function DashboardPage({
   const params = await searchParams;
   const rawCursor = typeof params.cursor === 'string' ? params.cursor : null;
   const cursor = rawCursor ? decodeKeysetCursor(rawCursor) : null;
-  const page = await listGalleriesForOwner(user.userId, { limit: PAGE_SIZE, cursor });
+  const [page, summary] = await Promise.all([
+    listGalleriesForOwner(user.userId, { limit: PAGE_SIZE, cursor }),
+    // Billing banners (past due, delivery paused, …) link to /account (T28/T33).
+    getAccountUsageSummary(getDb(), user, new Date(), { paymentsEnabled: isBillingConfigured() }),
+  ]);
   const appUrl = serverEnv().NEXT_PUBLIC_APP_URL;
 
   return (
@@ -61,6 +69,8 @@ export default async function DashboardPage({
           <h1 className="lm-title-1">Galleries</h1>
           <NewGalleryButton />
         </header>
+
+        <BillingBanners summary={summary} showAccountLink />
 
         {page.items.length === 0 && !cursor ? (
           <section className="lm-panel flex flex-col items-center gap-3 px-6 py-16 text-center">

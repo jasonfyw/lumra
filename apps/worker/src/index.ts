@@ -17,6 +17,7 @@ import type { Env } from './env';
 import { archiveCrc32 } from './crc';
 import { syncGalleryAccessState } from './handlers/access-state';
 import { handleArchiveBuild, RetryLaterError } from './handlers/archive-build';
+import { evaluateBillingSafeguards, handleEmailSend, runBillingSweep } from './handlers/billing';
 import { sweepArchives } from './handlers/archive-sweep';
 import { handleMediaUploaded } from './handlers/media-uploaded';
 import { ingestDeliveryEvents, runStorageAccrual } from './handlers/metering';
@@ -94,6 +95,12 @@ export const handlers: Partial<Record<QueueMessage['type'], JobHandler>> = {
   // FR-G06: KV tombstone first, then the R2 purge (T13).
   'gallery.delete': galleryDeleteJob,
   'media.delete': mediaDeleteJob,
+  // T33/T32: transition notices and spend-cap alerts (no provider yet: logged and acked).
+  'email.send': async (message, { log }) => {
+    if (message.type !== 'email.send') return;
+    const outcome = await handleEmailSend(message, { log });
+    log.info('email.send handled', { template: message.template, outcome });
+  },
 };
 
 /** `gallery.access_changed` / `gallery.delete`: rewrite the gateway's KV access state (T20). */
@@ -185,7 +192,10 @@ export const UNHANDLED_RETRY_SECONDS = 60;
 export const DELETION_SWEEP_CRON = '*/15 * * * *';
 /** Wall-time budget for one sweep; the rest of the backlog is picked up 15 minutes later. */
 export const DELETION_SWEEP_BUDGET_MS = 50_000;
-/** Hourly storage GB-month accrual (T27), off the hour and away from the other crons. */
+/**
+ * Hourly storage GB-month accrual (T27), off the hour and away from the other crons; the billing
+ * sweep (T33: past-due grace, canceled → free, delivery cutoff) runs right after it.
+ */
 export const STORAGE_ACCRUAL_CRON = '7 * * * *';
 /**
  * Archive TTL / stalled-job sweep (T25). Shares the 15-minute reconcile tick with the deletion
@@ -413,10 +423,10 @@ export function createWorker(options: WorkerOptions = {}) {
     const started = now();
     const timings: StepTimings = {};
     try {
-      const result = await withDeadline('usage batch', DEADLINES.jobMs, (signal) => {
+      const result = await withDeadline('usage batch', DEADLINES.jobMs, async (signal) => {
         const repo = services.billingRepo();
         const opts = { signal, timings };
-        return ingestDeliveryEvents(
+        const ingested = await ingestDeliveryEvents(
           valid.map((v) => v.event),
           {
             repo: bounded(repo, 'db', DEADLINES.dbStepMs, opts),
@@ -424,9 +434,28 @@ export function createWorker(options: WorkerOptions = {}) {
             log,
           },
         );
+        // Delivery safety cutoff (T28 Free cap / T32 spend cap) for the accounts just metered.
+        // A failure retries the batch: ingestion is idempotent, so only the evaluation re-runs.
+        const safeguards = await evaluateBillingSafeguards(ingested.accountIds, {
+          repo: bounded(services.billingStateRepo(), 'db.billing', DEADLINES.dbStepMs, opts),
+          log,
+          now: () => new Date(now()),
+          traceId: `usage:${batch.queue}`,
+        });
+        return { ingested, safeguards };
       });
       for (const { message } of valid) message.ack();
-      log.info('usage batch ingested', { ...result, ms: now() - started, steps: timings });
+      log.info('usage batch ingested', {
+        received: result.ingested.received,
+        inserted: result.ingested.inserted,
+        duplicates: result.ingested.duplicates,
+        skippedGuest: result.ingested.skippedGuest,
+        skippedUnknownGallery: result.ingested.skippedUnknownGallery,
+        skippedNoAccount: result.ingested.skippedNoAccount,
+        safeguards: result.safeguards,
+        ms: now() - started,
+        steps: timings,
+      });
     } catch (error) {
       const attempts = Math.max(...valid.map((v) => v.message.attempts));
       const delaySeconds = isDeadlineExceeded(error)
@@ -458,6 +487,23 @@ export function createWorker(options: WorkerOptions = {}) {
       budgetMs: STORAGE_ACCRUAL_BUDGET_MS,
     });
     log.info('storage accrual finished', { ...result, ms: now() - started, steps: timings });
+  }
+
+  /** Hourly billing maintenance (T33) + delivery cutoff re-evaluation (T28/T32). */
+  async function billingSweepTick(services: Services, log: Logger): Promise<void> {
+    const started = now();
+    const timings: StepTimings = {};
+    const repo = bounded(services.billingStateRepo(), 'db.billing', DEADLINES.dbStepMs, {
+      timings,
+    });
+    const result = await runBillingSweep({
+      repo,
+      plans: bounded(services.billingRepo().plans, 'db.plans', DEADLINES.dbStepMs, { timings }),
+      log,
+      now: () => new Date(now()),
+      traceId: 'cron:billing-sweep',
+    });
+    log.info('billing sweep finished', { ...result, ms: now() - started, steps: timings });
   }
 
   /** Backstop deletion sweep (T13). Per-item failures are logged inside the sweep. */
@@ -603,16 +649,29 @@ export function createWorker(options: WorkerOptions = {}) {
       parseEnv('worker', workerEnvSchema, env as unknown as Record<string, unknown>);
       const log = loggerFor(env);
       if (controller.cron === STORAGE_ACCRUAL_CRON) {
+        // Accrual first (it moves Pro spend), then the billing sweep reads the new totals. Each
+        // failure is reported on its own so one never blocks the other.
         const services = makeServices(env);
+        let firstError: unknown;
         try {
-          await storageAccrualTick(services, log);
-        } catch (error) {
-          log.error('storage accrual failed', { err: error });
-          Sentry.captureException(error);
-          throw error;
+          try {
+            await storageAccrualTick(services, log);
+          } catch (error) {
+            log.error('storage accrual failed', { err: error });
+            Sentry.captureException(error);
+            firstError ??= error;
+          }
+          try {
+            await billingSweepTick(services, log);
+          } catch (error) {
+            log.error('billing sweep failed', { err: error });
+            Sentry.captureException(error);
+            firstError ??= error;
+          }
         } finally {
           await closeServices(services, log, ctx);
         }
+        if (firstError !== undefined) throw firstError;
         return;
       }
       if (controller.cron === DELETION_SWEEP_CRON) {

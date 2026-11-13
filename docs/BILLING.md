@@ -8,8 +8,9 @@ Authoritative pricing logic lives in `packages/billing` and the versioned rate c
 - Free: 2 galleries, 1 GB stored, 3 GB/month delivery — hard caps, never billed.
 - Pro: $2/month (confirmed); 20 GB-month (confirmed) + 5 GB delivery included; $0.10/GB-month and $0.03/GB overages (Proposed);
   default $10 overage cap with 50/80/100% alerts (Proposed).
-- Internal `usage_ledger` is the real-time source of truth for caps; Stripe meters are exported daily with
-  idempotency keys and reconciled (ADR-004, T31).
+- Internal `usage_ledger` is the real-time source of truth for caps; Stripe meters receive **overage
+  only** (MB / MB-month above the allowance), exported daily with idempotency keys and reconciled
+  (ADR-004 + 2026-11-13 amendment, T31).
 
 Worked example (PRD §9.3): 30 GB-month stored + 45 GB delivered on Pro → $2.00 + 10 × $0.10 + 40 × $0.03 = **$4.20**.
 
@@ -89,4 +90,126 @@ Read-only summary for the signed-in owner (FR-N03), built by `getAccountUsageSum
   (admission additionally reserves an estimate for not-yet-generated derivatives).
 - **Delivery:** `usage_ledger` `delivery_bytes` for the current period. Shown as "Not yet tracked" until the ledger
   holds any delivery row for the account (filled by the T27 delivery ingestion once the usage consumer is deployed).
-- **Invoices, spending cap and alerts:** rendered disabled ("available when paid plans launch") until T29–T32.
+- **Billing:** plan actions (Upgrade → Checkout, Manage billing → Portal), state banners (below) and the
+  galleries count. Buttons are disabled with a reason when Stripe is not configured.
+- **Invoices, spending cap and alerts:** placeholders until T31–T32.
+
+A dev-only fixture renders every billing state without Stripe or a database: `/dev/account?state=…`
+(`free`, `free_at_caps`, `free_delivery_paused`, `checkout_pending`, `pro`, `pro_canceling`, `past_due`,
+`restricted`, `canceled`, `unconfigured`).
+
+## Free caps (T28)
+
+| Cap                              | Where it is enforced                                                                | What the user sees                                           |
+| -------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| 2 active galleries               | `POST /api/v1/galleries` and the guest claim (`checkGalleryCreation`, profile lock) | `quota_exceeded` + "See plans"                               |
+| 1 GB stored (incl. derivatives)  | upload intents (`checkAdmission`, account row lock, derivative estimate)            | uploader banner "Your Free storage is full" → Upgrade to Pro |
+| 3 GB delivery per calendar month | archive admission (`free_delivery_cap`) + **delivery safety cutoff** (below)        | viewers: "temporarily unavailable"; owner: banner + upgrade  |
+
+**Delivery safety cutoff** (PRD §9.4). After every `lumra-usage*` batch the worker re-evaluates the
+accounts it just metered with `checkDeliveryAllowance` (`evaluateBillingSafeguards`, `@lumra/billing`).
+Free at ≥ 3 GB this month — or Pro with estimated overage ≥ its spending cap — sets
+`billing_accounts.delivery_paused_reason` (`free_delivery_cap` / `spend_cap`) by compare-and-set and,
+in the same transaction, enqueues `gallery.access_changed` for every published gallery of the owner
+(`public.enqueue_owner_access_sync`) plus a once-per-period `delivery_paused` email. The KV writer
+mirrors the pause into `deliverySuspended`, so the media gateway answers 403 `gallery_suspended`
+(no gateway change); the recipient page and the public APIs answer `gallery_unavailable` (503) and
+render "This gallery is temporarily unavailable" — never a 500. The hourly sweep lifts pauses whose
+allowance is back (new period, higher cap); an upgrade lifts it at once (the webhook re-evaluates after
+commit).
+
+- In-flight transfers and the ≤ 10 s queue batching can overshoot the cap slightly; Free rows always
+  carry zero cost (property test: a Free account can never create a positive-overage ledger row).
+- Owner editor thumbnails go through the same gateway check, so they pause too while delivery is
+  paused (accepted for v1; the owner sees the banner explaining why).
+
+## Subscriptions and entitlements (T29, T30)
+
+- **Checkout** (`POST /api/v1/billing/checkout`, auth + same-origin + per-user rate limit): creates the
+  Stripe customer on first use (idempotency key `lumra-customer-{userId}`, stored by compare-and-set)
+  and a subscription-mode Checkout Session with **three line items**: the $2 base price (quantity 1)
+  and both metered overage prices (no quantity). Prices are found by lookup key
+  (`STRIPE_CATALOG_V1`, cached 10 min). 409 when a live subscription exists.
+- **Portal** (`POST /api/v1/billing/portal`): Billing Portal session for the owner's own customer,
+  using the configuration tagged `metadata.lumra_config=lumra_portal_v1` (fallback: account default).
+  409 without a customer.
+- **Webhook** (`POST /api/v1/billing/webhook`, Node runtime): signature verified over the raw body
+  (`request.text()`) with `STRIPE_WEBHOOK_SECRET`; bad/missing signature → 422, unconfigured → 503.
+  Each event runs in one transaction: claim `provider_webhook_events (provider, provider_event_id)` →
+  apply → mark `processed`/`ignored`. A replay (or a concurrent duplicate) finds the row handled and is
+  a no-op (G-06). A failure rolls everything back, answers 500 (Stripe retries) and records the
+  attempt as `failed` with the error class only. Payloads are not stored.
+- **Entitlements come only from `customer.subscription.*`** (`applySubscriptionSnapshot`):
+
+  | Stripe status                    | Billing status                              | Plan |
+  | -------------------------------- | ------------------------------------------- | ---- |
+  | `active`, `trialing`             | `active`                                    | pro  |
+  | `past_due`, `unpaid`             | `past_due` (grace clock keeps running)      | pro  |
+  | `paused`                         | `restricted`                                | pro  |
+  | `canceled`, `incomplete_expired` | `free` if within Free caps, else `canceled` | free |
+  | `incomplete`                     | no change                                   | —    |
+
+  Events older than the last applied one (`subscription_event_at`) are ignored; an old subscription
+  ending never touches a newer one. The plan switch updates `profiles.plan_id`, which drives limits and
+  branding (Pro hides "Made with Lumra"); status/plan changes re-sync KV for every published gallery and
+  enqueue the transition notice (`pro_activated`, `payment_failed`, `payment_recovered`,
+  `delivery_suspended`, `subscription_ended`; dedupe key per event). The Pro billing period comes from
+  the subscription items; `checkout.session.completed` only links the customer. The success redirect
+  (`/account?checkout=success`) changes wording only.
+
+- **Canceled over Free caps**: uploads, archives and public delivery stop; media is kept 30 days from
+  `canceled_at`. The hourly sweep moves the account to `free` as soon as it fits the Free caps (owner
+  deleted galleries/photos); subscribing again restores Pro.
+
+## Payment failures (T33)
+
+`deriveBillingRestrictions` is the rule; persisted transitions follow it:
+
+| State                                          | Uploads / new archives | Public delivery                            | Media                         |
+| ---------------------------------------------- | ---------------------- | ------------------------------------------ | ----------------------------- |
+| `past_due` (webhook)                           | stopped immediately    | continues for 7 days (`past_due_since`)    | kept                          |
+| `restricted` (sweep at grace end, or `paused`) | stopped                | suspended (`restricted_since` = grace end) | kept 30 days after suspension |
+| `active` again (payment)                       | resumed                | resumed                                    | —                             |
+
+The hourly sweep (`7 * * * *`, after storage accrual) persists `past_due → restricted` stamped at the
+grace end (not the sweep time), re-syncs KV and enqueues `delivery_suspended`. Nothing deletes data:
+retention end is shown on `/account`, and deletion requires an explicit policy + notice (PRD §9.4).
+
+## Notifications (`email.send`)
+
+Transition notices (and T32 alerts) are `email.send` outbox events (`public.enqueue_account_email`,
+once-only by dedupe key) carrying the account id and a template name — no address or personal data.
+**No application email provider is configured yet**: the worker acknowledges the message and logs
+`email not sent: no email provider configured` (template + account id). In-app banners on `/account`
+and the dashboard show the same states. To send mail: add a provider (e.g. Resend: `RESEND_API_KEY`
+worker secret + a verified sending domain with SPF/DKIM/DMARC, PLAN §5 #3), look up
+`profiles.email` by `accountId` in `handleEmailSend` and render the template.
+
+## Stripe setup (`scripts/stripe-setup.mjs`)
+
+Idempotent, dependency-free; runs in the mode of the key it is given and prints object ids only:
+
+```sh
+STRIPE_SECRET_KEY=sk_test_… node scripts/stripe-setup.mjs --dry-run      # report only
+STRIPE_SECRET_KEY=sk_test_… node scripts/stripe-setup.mjs --app-url https://www.lumra.photos
+```
+
+It ensures the "Lumra Pro" product, the base price `lumra_pro_monthly_v1` ($2/month), meters
+`lumra_storage_overage` / `lumra_delivery_overage` (sum, `stripe_customer_id` → customer, `value`), the
+metered prices `lumra_pro_storage_overage_v1` (0.01¢ per MB-month = $0.10/GB-month) and
+`lumra_pro_delivery_overage_v1` (0.003¢ per MB = $0.03/GB), and the Billing Portal configuration
+(payment method, invoices, cancel at period end, email/address). Existing objects are reused; a price
+with different terms is an error (ship `_v2` lookup keys with a new rate version). A unit test checks
+the script against `STRIPE_CATALOG_V1` and `RATE_CARD_V1`.
+
+## Environment and webhook endpoint
+
+| Variable                | Where           | Notes                                                                      |
+| ----------------------- | --------------- | -------------------------------------------------------------------------- |
+| `STRIPE_SECRET_KEY`     | Vercel (server) | `sk_…`/`rk_…`; unset ⇒ billing disabled gracefully. Test key outside prod. |
+| `STRIPE_WEBHOOK_SECRET` | Vercel (server) | Endpoint signing secret `whsec_…` for `/api/v1/billing/webhook`.           |
+
+Webhook endpoint: `https://www.lumra.photos/api/v1/billing/webhook` (the PRD's `/api/v1/webhooks/stripe`
+path sits with the other billing routes instead; ADR-004 amendment). Subscribe it to
+`checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated` and
+`customer.subscription.deleted`.

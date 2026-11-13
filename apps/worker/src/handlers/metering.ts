@@ -37,6 +37,8 @@ export interface DeliveryIngestResult {
   skippedUnknownGallery: number;
   /** Owners without a billing account (should not happen: created with the auth user). */
   skippedNoAccount: number;
+  /** Accounts that got new ledger rows: the delivery safety cutoff re-evaluates them (T28). */
+  accountIds: string[];
 }
 
 /**
@@ -55,6 +57,7 @@ export async function ingestDeliveryEvents(
     skippedGuest: 0,
     skippedUnknownGallery: 0,
     skippedNoAccount: 0,
+    accountIds: [],
   };
   if (messages.length === 0) return result;
 
@@ -95,6 +98,7 @@ export async function ingestDeliveryEvents(
   });
   result.inserted = await deps.ledger.appendMany(entries);
   result.duplicates = entries.length - result.inserted;
+  if (result.inserted > 0) result.accountIds = [...new Set(entries.map((e) => e.accountId))];
   return result;
 }
 

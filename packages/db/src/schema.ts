@@ -156,6 +156,13 @@ export const billingAccounts = pgTable('billing_accounts', {
   canceledAt: tstz('canceled_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+  // T29/T30: raw Stripe status, cancel flag and the event-ordering guard.
+  stripeSubscriptionStatus: text('stripe_subscription_status'),
+  cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
+  subscriptionEventAt: tstz('subscription_event_at'),
+  // T28/T32 delivery safety cutoff.
+  deliveryPausedReason: text('delivery_paused_reason').$type<'free_delivery_cap' | 'spend_cap'>(),
+  deliveryPausedAt: tstz('delivery_paused_at'),
 });
 
 export const guestSessions = pgTable('guest_sessions', {
@@ -416,6 +423,13 @@ export const providerWebhookEvents = pgTable(
     handledAt: tstz('handled_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    // T29
+    objectId: text('object_id'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastError: text('last_error'),
+    accountId: uuid('account_id').references(() => billingAccounts.userId, {
+      onDelete: 'set null',
+    }),
   },
   (t) => [unique('provider_webhook_events_provider_event_key').on(t.provider, t.providerEventId)],
 );

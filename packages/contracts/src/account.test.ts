@@ -15,6 +15,17 @@ describe('accountUsageSummarySchema', () => {
       itemCount: 12,
     },
     delivery: { usedBytes: null, limitBytes: 3_000_000_000, percentUsed: null, tracked: false },
+    billing: {
+      paymentsEnabled: true,
+      hasCustomer: false,
+      cancelAtPeriodEnd: false,
+      uploadsAllowed: true,
+      publicDeliveryAllowed: true,
+      deliverySuspendsAt: null,
+      retentionEndsAt: null,
+      deliveryPaused: null,
+      galleries: { active: 1, max: 2 },
+    },
   };
 
   it('accepts a summary with untracked delivery', () => {
@@ -26,5 +37,6 @@ describe('accountUsageSummarySchema', () => {
     expect(bad({ storage: { ...valid.storage, usedBytes: 1.5 } }).success).toBe(false);
     expect(bad({ storage: { ...valid.storage, percentUsed: 101 } }).success).toBe(false);
     expect(bad({ plan: 'enterprise' }).success).toBe(false);
+    expect(bad({ billing: { ...valid.billing, deliveryPaused: 'other' } }).success).toBe(false);
   });
 });

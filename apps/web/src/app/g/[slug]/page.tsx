@@ -55,6 +55,13 @@ export default async function GalleryPage({ params }: { params: Promise<{ slug: 
             body="The link you followed is no longer active. If you still need these photos, ask the person who shared it to extend the link."
           />
         );
+      case 'gallery_unavailable':
+        return (
+          <GalleryNotice
+            title="This gallery is temporarily unavailable"
+            body="The photos can’t be shown right now. Please try again later, or let the person who shared this link know."
+          />
+        );
       case 'rate_limited':
         return (
           <GalleryNotice

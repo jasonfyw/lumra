@@ -107,6 +107,7 @@ describe('ingestDeliveryEvents', () => {
       skippedGuest: 1,
       skippedUnknownGallery: 1,
       skippedNoAccount: 0,
+      accountIds: [OWNER],
     });
     const [row] = [...deps.ledger.rows.values()];
     expect(row).toMatchObject({

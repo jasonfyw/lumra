@@ -12,7 +12,9 @@ import {
   type PublicMediaItem,
   type PublicMediaVariant,
 } from '@lumra/contracts';
+import { publicDeliveryState } from '@lumra/billing';
 import {
+  billingAccounts,
   galleries,
   galleryAccessSessions,
   media,
@@ -75,6 +77,17 @@ const expiredError = () =>
     retryable: false,
   });
 
+/**
+ * Owner's delivery is paused or suspended (Free delivery cap, spending cap, billing suspension,
+ * PRD §9.4): a calm "temporarily unavailable" notice. The reason is not disclosed to recipients.
+ */
+export const galleryUnavailableError = () =>
+  new ApiFailure({
+    code: 'gallery_unavailable',
+    message: 'This gallery is temporarily unavailable.',
+    retryable: true,
+  });
+
 export const passwordRequiredError = () =>
   new ApiFailure({
     code: 'password_required',
@@ -105,16 +118,36 @@ export async function findViewableGallery(
       accessVersion: galleries.accessVersion,
       passwordHash: galleries.passwordHash,
       brandingVisible: plans.brandingVisible,
+      billingStatus: billingAccounts.status,
+      pastDueSince: billingAccounts.pastDueSince,
+      restrictedSince: billingAccounts.restrictedSince,
+      canceledAt: billingAccounts.canceledAt,
+      deliveryPausedReason: billingAccounts.deliveryPausedReason,
     })
     .from(galleries)
     .leftJoin(profiles, eq(profiles.userId, galleries.ownerId))
     .leftJoin(plans, eq(plans.id, profiles.planId))
+    .leftJoin(billingAccounts, eq(billingAccounts.userId, galleries.ownerId))
     .where(eq(galleries.slug, slug))
     .limit(1);
   if (!row || row.deletedAt) throw notFoundError();
   const state = galleryAccessState({ status: row.status, expiresAt: row.expiresAt }, now);
   if (state === 'expired') throw expiredError();
   if (state !== 'published') throw notFoundError();
+  // Same rule the worker mirrors into KV for the media gateway (`publicDeliveryState`).
+  const delivery = publicDeliveryState(
+    row.billingStatus
+      ? {
+          status: row.billingStatus,
+          pastDueSince: row.pastDueSince,
+          restrictedSince: row.restrictedSince,
+          canceledAt: row.canceledAt,
+          deliveryPausedReason: row.deliveryPausedReason ?? null,
+        }
+      : null,
+    now,
+  );
+  if (!delivery.available) throw galleryUnavailableError();
   return {
     id: row.id,
     slug: row.slug,
