@@ -119,6 +119,31 @@ describe.each([
   });
 });
 
+describe.each([
+  ['checkout', checkout, '/api/v1/billing/checkout', 'createCheckoutSession'],
+  ['portal', portal, '/api/v1/billing/portal', 'createPortalSession'],
+] as const)('POST /api/v1/billing/%s when Stripe rejects the request', (_n, handler, path, fn) => {
+  it('answers billing_unavailable (503) and logs the cause, not an unhandled 500', async () => {
+    const billing = await import('@/server/billing-checkout');
+    vi.mocked(billing[fn]).mockRejectedValueOnce(
+      new Stripe.errors.StripeInvalidRequestError({
+        type: 'invalid_request_error',
+        message: 'Invalid line_items[0]: the product tax code is missing.',
+        param: 'line_items[0]',
+      }),
+    );
+    const logged = vi.spyOn(console, 'error');
+    state.user = { id: '6f1c1a5e-1d2b-4c3a-9e8f-0a1b2c3d4e5f', email: 'a@example.test' };
+    const res = await handler(post(path, { origin: 'https://lumra.test' }), {});
+    expect(res.status).toBe(503);
+    expect((await res.json()).error.code).toBe('billing_unavailable');
+    const lines = logged.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(lines).toContain('stripe request failed');
+    expect(lines).toContain('product tax code is missing');
+    expect(lines).not.toContain(KEY);
+  });
+});
+
 describe('POST /api/v1/billing/webhook', () => {
   const event = {
     id: 'evt_test_1',

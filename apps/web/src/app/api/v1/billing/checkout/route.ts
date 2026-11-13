@@ -2,7 +2,11 @@ import { ApiFailure, ok } from '@/lib/api';
 import { NO_STORE } from '@/lib/request-guards';
 import { withRoute } from '@/lib/route';
 import { createCheckoutSession } from '@/server/billing-checkout';
-import { BILLING_UNAVAILABLE, billingSessionContext } from '@/server/billing-routes';
+import {
+  BILLING_UNAVAILABLE,
+  billingSessionContext,
+  rethrowStripeError,
+} from '@/server/billing-routes';
 import { StripeCatalogError } from '@/server/stripe';
 
 export const dynamic = 'force-dynamic';
@@ -25,6 +29,6 @@ export const POST = withRoute('POST /api/v1/billing/checkout', async (request, s
       scope.log.error('stripe catalog incomplete', { missing: error.missing });
       throw new ApiFailure(BILLING_UNAVAILABLE);
     }
-    throw error;
+    rethrowStripeError(error, scope, 'checkout');
   }
 });

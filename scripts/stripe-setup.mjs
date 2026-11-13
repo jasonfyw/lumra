@@ -25,6 +25,9 @@ export const STRIPE_API_VERSION = '2026-10-28.endive';
 export const CATALOG = {
   productKey: 'lumra_pro',
   productName: 'Lumra Pro',
+  // Required by Stripe Managed Payments (on by default): Checkout rejects products without one.
+  // SaaS - business use (owner-confirmed).
+  taxCode: 'txcd_10103001',
   currency: 'usd',
   base: { lookupKey: 'lumra_pro_monthly_v1', unitAmountCents: 200 },
   // Rates in micro-USD per GB(-month) from RATE_CARD_V1.pro; meter units are MB (10^6 bytes).
@@ -130,8 +133,15 @@ async function pricesByLookupKey(call) {
 
 async function ensureProduct(call, prices, dryRun) {
   const fromPrice = prices.get(CATALOG.base.lookupKey)?.product;
-  if (fromPrice && typeof fromPrice === 'object')
+  if (fromPrice && typeof fromPrice === 'object') {
+    if (!fromPrice.tax_code && !dryRun) {
+      const product = await call('POST', `/v1/products/${fromPrice.id}`, {
+        tax_code: CATALOG.taxCode,
+      });
+      return { product, action: 'found (base price), tax code set' };
+    }
     return { product: fromPrice, action: 'found (base price)' };
+  }
   const list = await call('GET', '/v1/products', { active: true, limit: 100 });
   const byMeta = list.data.find((p) => p.metadata?.lumra_product === CATALOG.productKey);
   const byName = list.data.find((p) => p.name === CATALOG.productName);
@@ -148,7 +158,11 @@ async function ensureProduct(call, prices, dryRun) {
   const product = await call(
     'POST',
     '/v1/products',
-    { name: CATALOG.productName, metadata: { lumra_product: CATALOG.productKey } },
+    {
+      name: CATALOG.productName,
+      tax_code: CATALOG.taxCode,
+      metadata: { lumra_product: CATALOG.productKey },
+    },
     `lumra-setup-product-${CATALOG.productKey}`,
   );
   return { product, action: 'created' };
