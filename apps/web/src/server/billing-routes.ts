@@ -1,4 +1,5 @@
 import 'server-only';
+import Stripe from 'stripe';
 import type { ApiError } from '@lumra/contracts';
 import { billingRedirectRequestSchema } from '@lumra/contracts';
 import { getAuthenticatedUser, type AuthenticatedUser } from '@/lib/actor';
@@ -42,4 +43,26 @@ export async function billingSessionContext(
   const stripe = getStripe();
   if (!stripe) throw new ApiFailure(BILLING_UNAVAILABLE);
   return { user, deps: { db, stripe, appUrl: new URL(appUrl).origin } };
+}
+
+/**
+ * Stripe rejected or failed a request (invalid parameters, account configuration such as a missing
+ * product tax code, network, auth). Logs the cause (Stripe's type/code/param/message and request
+ * id, never keys or request bodies) and answers `billing_unavailable` instead of an unhandled 500.
+ * Non-Stripe errors are rethrown.
+ */
+export function rethrowStripeError(error: unknown, scope: RouteScope, action: string): never {
+  if (error instanceof Stripe.errors.StripeError) {
+    scope.log.error('stripe request failed', {
+      action,
+      stripeType: error.type,
+      stripeCode: error.code ?? null,
+      stripeParam: error.param ?? null,
+      stripeStatus: error.statusCode ?? null,
+      stripeRequestId: error.requestId ?? null,
+      stripeMessage: error.message.slice(0, 500),
+    });
+    throw new ApiFailure(BILLING_UNAVAILABLE);
+  }
+  throw error;
 }
