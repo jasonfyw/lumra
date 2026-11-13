@@ -76,7 +76,9 @@
   // Top-level triggers are inherited by env.production.
   "triggers": { "crons": ["* * * * *", "*/15 * * * *", "7 * * * *", "17 3 * * *"] },
   // Secrets: DATABASE_URL (local only), SENTRY_DSN, WORKER_KICK_SECRET (enables the
-  // `POST /internal/relay` finalize kick; same value as the web app). Vars: PROCESSOR_URL (local).
+  // `POST /internal/relay` finalize kick; same value as the web app), STRIPE_SECRET_KEY (daily
+  // Billing Meter export, T31; unset ⇒ skipped). Vars: PROCESSOR_URL (local).
+  // 17 3 * * *: daily Stripe meter export (T31, METER_EXPORT_CRON).
   // Optional vars (T04): SENTRY_ENVIRONMENT, LOG_LEVEL, COMMIT_SHA (`--var COMMIT_SHA:<sha>`)
   "upload_source_maps": true,
   // Production (`wrangler deploy --env production`). Bindings are not inherited, so they are

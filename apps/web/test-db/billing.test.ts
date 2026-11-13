@@ -5,6 +5,8 @@ import { STRIPE_CATALOG_V1 } from '@lumra/config';
 import { POST as checkout } from '../src/app/api/v1/billing/checkout/route';
 import { POST as portal } from '../src/app/api/v1/billing/portal/route';
 import { POST as webhook } from '../src/app/api/v1/billing/webhook/route';
+import { PATCH as spendingCap } from '../src/app/api/v1/billing/spending-cap/route';
+import { getAccountUsageSummary } from '../src/server/account';
 import { getDb } from '../src/lib/db';
 import { resetServerEnvForTests } from '../src/lib/env';
 import { evaluateAccountAdmission } from '../src/server/admission';
@@ -94,6 +96,7 @@ afterAll(async () => {
               or (event_name = 'gallery.access_changed' and aggregate_id in (
                 select id from public.galleries where owner_id in ${sql(createdUsers)}))`;
     await sql`delete from public.provider_webhook_events where account_id in ${sql(createdUsers)}`;
+    await sql`delete from public.billing_periods where account_id in ${sql(createdUsers)}`;
   }
   setStripeForTests(undefined);
   await cleanup();
@@ -495,5 +498,140 @@ describe('POST /api/v1/billing/webhook (T29/T30/T33)', () => {
       {},
     );
     expect(res.status).toBe(422);
+  });
+});
+
+describe('PATCH /api/v1/billing/spending-cap (T32)', () => {
+  const patch = (body: unknown, headers: Record<string, string> = {}) =>
+    spendingCap(
+      jsonRequest('/api/v1/billing/spending-cap', { method: 'PATCH', body, headers }),
+      {},
+    );
+
+  it('401 signed out, 403 cross-origin, 409 on Free, 422 out of range', async () => {
+    expect((await patch({ capMicroUsd: 5_000_000 })).status).toBe(401);
+    const free = await newUser();
+    signInAs(free);
+    expect(
+      (await patch({ capMicroUsd: 5_000_000 }, { origin: 'https://evil.example' })).status,
+    ).toBe(403);
+    expect((await patch({ capMicroUsd: 5_000_000 })).status).toBe(409);
+    const pro = await newUser('pro');
+    signInAs(pro);
+    for (const capMicroUsd of [-1, 500_010_000, 1_234_567, 1.5]) {
+      expect((await patch({ capMicroUsd })).status).toBe(422);
+    }
+    expect((await patch({ capMicroUsd: 5_000_000, extra: true })).status).toBe(422);
+  });
+
+  it('sets the owner’s own cap ($0–max) and returns to the default with null', async () => {
+    const pro = await newUser('pro');
+    const other = await newUser('pro');
+    signInAs(pro);
+    const res = await patch({ capMicroUsd: 25_500_000 });
+    expect(res.status).toBe(200);
+    expect((await readJson<{ capMicroUsd: number; custom: boolean }>(res)).data).toMatchObject({
+      capMicroUsd: 25_500_000,
+      custom: true,
+    });
+    expect((await patch({ capMicroUsd: 0 })).status).toBe(200);
+    const [row] = await sql<{ cap: string | null }[]>`
+      select spend_cap_micro_usd::text as cap from public.billing_accounts where user_id = ${pro}`;
+    expect(row!.cap).toBe('0');
+    const [untouched] = await sql<{ cap: string | null }[]>`
+      select spend_cap_micro_usd::text as cap from public.billing_accounts where user_id = ${other}`;
+    expect(untouched!.cap).toBeNull();
+    const reset = await patch({ capMicroUsd: null });
+    expect((await readJson<{ capMicroUsd: number; custom: boolean }>(reset)).data).toMatchObject({
+      capMicroUsd: 10_000_000,
+      custom: false,
+    });
+  });
+});
+
+describe('invoice webhooks (T31)', () => {
+  function invoiceEvent(
+    type: string,
+    customer: string,
+    over: Record<string, unknown> = {},
+    created = Math.floor(Date.now() / 1000) + seq++,
+  ) {
+    return {
+      id: `evt_${randomUUID().replaceAll('-', '')}`,
+      object: 'event',
+      type,
+      created,
+      data: {
+        object: {
+          id: `in_${customer}`,
+          object: 'invoice',
+          customer,
+          number: 'ABCD-0001',
+          status: 'open',
+          billing_reason: 'subscription_create',
+          currency: 'usd',
+          subtotal: 200,
+          total: 200,
+          amount_due: 200,
+          amount_paid: 0,
+          period_start: 1_763_000_000,
+          period_end: 1_763_000_000,
+          created: 1_763_000_000,
+          hosted_invoice_url: 'https://invoice.stripe.com/i/test',
+          invoice_pdf: 'https://pay.stripe.com/invoice/test/pdf',
+          ...over,
+        },
+      },
+    };
+  }
+
+  it('stores invoices for the owner, keeps the newest status, and reconciles on finalize', async () => {
+    const user = await newUser('pro');
+    const customer = await linkCustomer(user);
+    await deliver(invoiceEvent('invoice.finalized', customer));
+    await deliver(invoiceEvent('invoice.paid', customer, { status: 'paid', amount_paid: 200 }));
+    // An older redelivery of the finalized state must not roll "paid" back to "open".
+    await deliver(invoiceEvent('invoice.finalized', customer, {}, 1_700_000_000));
+    const [inv] = await sql<{ status: string; amount_paid_cents: string }[]>`
+      select status, amount_paid_cents::text from public.billing_invoices
+      where stripe_invoice_id = ${`in_${customer}`}`;
+    expect(inv).toEqual({ status: 'paid', amount_paid_cents: '200' });
+    const [rec] = await sql<{ expected_cents: string; stripe_cents: string; flagged: boolean }[]>`
+      select expected_cents::text, stripe_cents::text, flagged from public.billing_reconciliations
+      where stripe_invoice_id = ${`in_${customer}`}`;
+    expect(rec).toEqual({ expected_cents: '200', stripe_cents: '200', flagged: false });
+
+    signInAs(user);
+    const summary = await getAccountUsageSummary(getDb(), { userId: user, email: null });
+    expect(summary.invoices).toMatchObject([
+      { id: `in_${customer}`, status: 'paid', totalCents: 200 },
+    ]);
+    expect(summary.spend).toMatchObject({ capMicroUsd: 10_000_000, estimatedOverageMicroUsd: 0 });
+  });
+
+  it('flags a finalized invoice that disagrees with the ledger by more than 10 %', async () => {
+    const user = await newUser('pro');
+    const customer = await linkCustomer(user);
+    await deliver(invoiceEvent('invoice.finalized', customer, { subtotal: 900, total: 900 }));
+    const [rec] = await sql<{ flagged: boolean; drift_bps: number }[]>`
+      select flagged, drift_bps from public.billing_reconciliations
+      where stripe_invoice_id = ${`in_${customer}`}`;
+    expect(rec).toEqual({ flagged: true, drift_bps: 35_000 });
+  });
+
+  it('records paid subscription periods (the only periods the meter export may send)', async () => {
+    const user = await newUser();
+    const customer = await linkCustomer(user);
+    await deliver(
+      subscriptionEvent('customer.subscription.created', { customer, status: 'active' }),
+    );
+    const periods = await sql<{ period_start: Date; stripe_subscription_id: string }[]>`
+      select period_start, stripe_subscription_id from public.billing_periods where account_id = ${user}`;
+    expect(periods).toEqual([
+      {
+        period_start: new Date(Date.UTC(2026, 10, 13, 10)),
+        stripe_subscription_id: `sub_${customer}`,
+      },
+    ]);
   });
 });

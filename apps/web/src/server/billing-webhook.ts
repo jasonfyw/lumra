@@ -3,12 +3,23 @@ import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import type Stripe from 'stripe';
 import {
   applySubscriptionSnapshot,
+  effectiveCapMicroUsd,
   fitsFreeCaps,
+  reconcileInvoice,
   type EntitlementState,
   type SubscriptionSnapshot,
 } from '@lumra/billing';
 import { RATE_CARD_V1, type PlanId } from '@lumra/config';
-import { billingAccounts, plans, planRatesFromRow, profiles, type Database } from '@lumra/db';
+import {
+  billingAccounts,
+  billingInvoices,
+  billingReconciliations,
+  plans,
+  planRatesFromRow,
+  planRateVersions,
+  profiles,
+  type Database,
+} from '@lumra/db';
 import type { Logger } from '@lumra/observability';
 import type { Tx } from '@/lib/db';
 import { accountFootprint, enqueueAccountEmail, enqueueOwnerAccessSync } from './billing-state';
@@ -35,6 +46,12 @@ export const HANDLED_STRIPE_EVENTS = [
   'customer.subscription.created',
   'customer.subscription.updated',
   'customer.subscription.deleted',
+  // T31: invoice history + reconciliation.
+  'invoice.finalized',
+  'invoice.paid',
+  'invoice.payment_failed',
+  'invoice.voided',
+  'invoice.marked_uncollectible',
 ] as const;
 
 export type WebhookOutcome = 'processed' | 'ignored' | 'duplicate';
@@ -149,6 +166,12 @@ async function applyEvent(tx: Tx, event: Stripe.Event, log: Logger): Promise<App
         metadataUserId: event.data.object.metadata?.lumra_user_id ?? null,
         log,
       });
+    case 'invoice.finalized':
+    case 'invoice.paid':
+    case 'invoice.payment_failed':
+    case 'invoice.voided':
+    case 'invoice.marked_uncollectible':
+      return applyInvoice(tx, event, event.data.object, log);
     default:
       return { outcome: 'ignored', accountId: null, reevaluate: false, reason: 'unhandled_type' };
   }
@@ -256,6 +279,21 @@ async function applySubscription(
       subscriptionEventAt: next.subscriptionEventAt,
     })
     .where(eq(billingAccounts.userId, userId));
+  if (
+    (next.status === 'active' || next.status === 'past_due' || next.status === 'restricted') &&
+    next.billingPeriodStart &&
+    next.billingPeriodEnd &&
+    next.stripeSubscriptionId
+  ) {
+    // Paid periods: the only periods whose usage the meter export may send (T31).
+    await tx.execute(sql`
+      insert into public.billing_periods (account_id, period_start, period_end, stripe_subscription_id)
+      values (${userId}::uuid, ${next.billingPeriodStart.toISOString()}::timestamptz,
+              ${next.billingPeriodEnd.toISOString()}::timestamptz, ${next.stripeSubscriptionId})
+      on conflict (account_id, period_start) do update
+        set period_end = excluded.period_end,
+            stripe_subscription_id = excluded.stripe_subscription_id`);
+  }
   if (next.planId !== current.planId) {
     // Plan drives limits (gallery/storage caps, overage) and branding ("Made with Lumra").
     await tx.update(profiles).set({ planId: next.planId }).where(eq(profiles.userId, userId));
@@ -278,4 +316,146 @@ async function applySubscription(
     plan: next.planId,
   });
   return { outcome: 'processed', accountId: userId, reevaluate: true };
+}
+
+// ---------------------------------------------------------------------------------------------
+// invoices (T31): history for /account + reconciliation against the internal ledger
+// ---------------------------------------------------------------------------------------------
+
+const INVOICE_STATUSES = new Set(['draft', 'open', 'paid', 'uncollectible', 'void']);
+const toDate = (seconds: number | null | undefined) =>
+  typeof seconds === 'number' && Number.isFinite(seconds) ? new Date(seconds * 1000) : null;
+const httpsOrNull = (url: string | null | undefined) =>
+  url && url.startsWith('https://') ? url : null;
+
+async function applyInvoice(
+  tx: Tx,
+  event: Stripe.Event,
+  invoice: Stripe.Invoice,
+  log: Logger,
+): Promise<Applied> {
+  const customer = stripeId(invoice.customer);
+  const [account] = customer
+    ? await tx
+        .select({ userId: billingAccounts.userId, spendCap: billingAccounts.spendCapMicroUsd })
+        .from(billingAccounts)
+        .where(eq(billingAccounts.stripeCustomerId, customer))
+    : [];
+  if (!account || !invoice.id) {
+    return { outcome: 'ignored', accountId: null, reevaluate: false, reason: 'unknown_customer' };
+  }
+  const status = INVOICE_STATUSES.has(invoice.status ?? '') ? invoice.status! : 'draft';
+  const eventAt = new Date(event.created * 1000);
+  const values = {
+    accountId: account.userId,
+    stripeInvoiceId: invoice.id,
+    number: invoice.number,
+    status: status as 'draft' | 'open' | 'paid' | 'uncollectible' | 'void',
+    billingReason: invoice.billing_reason,
+    currency: invoice.currency,
+    subtotalCents: invoice.subtotal,
+    totalCents: invoice.total,
+    amountDueCents: invoice.amount_due,
+    amountPaidCents: invoice.amount_paid,
+    periodStart: toDate(invoice.period_start),
+    periodEnd: toDate(invoice.period_end),
+    hostedInvoiceUrl: httpsOrNull(invoice.hosted_invoice_url),
+    invoicePdf: httpsOrNull(invoice.invoice_pdf),
+    stripeCreatedAt: new Date(invoice.created * 1000),
+    stripeEventAt: eventAt,
+  };
+  // Newer state wins; an older redelivery never rolls the status back.
+  await tx
+    .insert(billingInvoices)
+    .values(values)
+    .onConflictDoUpdate({
+      target: billingInvoices.stripeInvoiceId,
+      set: { ...values, accountId: undefined, stripeInvoiceId: undefined },
+      setWhere: sql`${billingInvoices.stripeEventAt} <= ${eventAt.toISOString()}::timestamptz`,
+    });
+
+  if (event.type === 'invoice.finalized' && invoice.billing_reason !== 'manual') {
+    await reconcile(tx, account, invoice, log);
+  }
+  return { outcome: 'processed', accountId: account.userId, reevaluate: false };
+}
+
+/**
+ * Internal vs Stripe for a finalized subscription invoice (PRD §9.5): renewal invoices carry the
+ * new period's base fee plus the ended period's metered overage; the first invoice the base fee.
+ * The usage period is the invoice's `period_start` (the ledger rows' period stamp).
+ */
+async function reconcile(
+  tx: Tx,
+  account: { userId: string; spendCap: number | null },
+  invoice: Stripe.Invoice,
+  log: Logger,
+) {
+  const firstInvoice = invoice.billing_reason === 'subscription_create';
+  const usagePeriod = toDate(invoice.period_start);
+  const [usage] = (await tx.execute<{
+    byte_seconds: string;
+    delivery: string;
+    version: number | null;
+  }>(sql`
+    select
+      coalesce(sum(quantity_micro_units) filter (where metric = 'storage_byte_seconds'), 0)::text
+        as byte_seconds,
+      coalesce(sum(quantity_micro_units) filter (where metric = 'delivery_bytes'), 0)::text
+        as delivery,
+      max(rating_version) as version
+    from public.usage_ledger
+    where account_id = ${account.userId}::uuid
+      and period_start = ${usagePeriod?.toISOString() ?? null}::timestamptz`)) as unknown as {
+    byte_seconds: string;
+    delivery: string;
+    version: number | null;
+  }[];
+  const [current] = await tx.select().from(plans).where(eq(plans.id, 'pro'));
+  let plan = current ? planRatesFromRow(current) : RATE_CARD_V1.pro;
+  if (usage?.version && usage.version !== plan.rateVersion) {
+    const [versioned] = await tx
+      .select()
+      .from(planRateVersions)
+      .where(
+        and(eq(planRateVersions.planId, 'pro'), eq(planRateVersions.rateVersion, usage.version)),
+      );
+    if (versioned) plan = planRatesFromRow(versioned);
+  }
+  const byteSeconds = BigInt(usage?.byte_seconds ?? '0');
+  const result = reconcileInvoice({
+    plan,
+    usage: {
+      storageByteSeconds: byteSeconds < 0n ? 0n : byteSeconds,
+      deliveryBytes: Math.max(0, Number(usage?.delivery ?? 0)),
+    },
+    stripeSubtotalCents: invoice.subtotal,
+    firstInvoice,
+    capMicroUsd: effectiveCapMicroUsd(plan, account.spendCap),
+  });
+  const row = {
+    accountId: account.userId,
+    stripeInvoiceId: invoice.id!,
+    usagePeriodStart: firstInvoice ? null : usagePeriod,
+    expectedCents: result.expectedCents,
+    stripeCents: result.stripeCents,
+    driftBps: result.driftBps,
+    flagged: result.flagged,
+    exceedsCapTolerance: result.exceedsCapTolerance,
+  };
+  await tx
+    .insert(billingReconciliations)
+    .values(row)
+    .onConflictDoUpdate({ target: billingReconciliations.stripeInvoiceId, set: row });
+  if (result.flagged || result.exceedsCapTolerance) {
+    // Operator alert (RUNBOOKS: billed vs internal drift). Ids and amounts only.
+    log.error('billing reconciliation mismatch', {
+      accountId: account.userId,
+      invoiceId: invoice.id,
+      expectedCents: result.expectedCents,
+      stripeCents: result.stripeCents,
+      driftBps: result.driftBps,
+      exceedsCapTolerance: result.exceedsCapTolerance,
+    });
+  }
 }

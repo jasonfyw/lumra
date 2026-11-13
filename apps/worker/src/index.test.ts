@@ -91,6 +91,7 @@ function fakeServices(claimBatches: number) {
   const billingState = {
     safeguardContexts: vi.fn(async () => []),
     setDeliveryPause: vi.fn(async () => true),
+    recordSpendAlerts: vi.fn(async () => []),
     sweepCandidates: vi.fn(async () => []),
     applySweep: vi.fn(async () => true),
   } as unknown as ReturnType<Services['billingStateRepo']>;
@@ -112,6 +113,9 @@ function fakeServices(claimBatches: number) {
       throw new Error('unused');
     },
     billingStateRepo: () => billingState,
+    meterExportRepo: () => {
+      throw new Error('unused');
+    },
     deletionRepo: () => {
       throw new Error('unused');
     },
@@ -418,11 +422,27 @@ describe('scheduled outbox relay', () => {
     expect(events().some((e) => e.msg === 'archive sweep finished')).toBe(true);
   });
 
-  it('ignores the nightly cron for now (remaining T13 reconcilers)', async () => {
-    const { services, outbox } = fakeServices(1);
+  it('runs the daily meter export on the nightly cron; skipped without a Stripe key (T31)', async () => {
+    const { services, outbox, close } = fakeServices(1);
+    const repo = { exportPeriods: vi.fn(async () => []), unsent: vi.fn(async () => []) };
+    services.meterExportRepo = () => repo as unknown as ReturnType<Services['meterExportRepo']>;
+    services.billingRepo = () =>
+      ({ plans: { getRates: vi.fn() } }) as unknown as ReturnType<Services['billingRepo']>;
     const w = createWorker({ createServices: () => services });
     await w.scheduled({ cron: '17 3 * * *' } as ScheduledController, {} as Env);
     expect(outbox.claim).not.toHaveBeenCalled();
+    expect(repo.exportPeriods).not.toHaveBeenCalled();
+    expect(events().some((e) => e.msg === 'meter export skipped: STRIPE_SECRET_KEY not set')).toBe(
+      true,
+    );
+    await w.scheduled(
+      { cron: '17 3 * * *' } as ScheduledController,
+      {
+        STRIPE_SECRET_KEY: 'sk_test_x',
+      } as Env,
+    );
+    expect(repo.exportPeriods).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalled();
   });
 });
 

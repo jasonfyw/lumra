@@ -69,7 +69,7 @@ describe('Drizzle schema mirrors SQL tables', () => {
 
   it('has the same set of public tables (PRD §8 + rate_limit_buckets + T27 metering)', () => {
     expect(drizzleTables.map((t) => t.name).sort()).toEqual(Object.keys(fromSql).sort());
-    expect(Object.keys(fromSql)).toHaveLength(19);
+    expect(Object.keys(fromSql)).toHaveLength(24);
   });
 
   for (const table of drizzleTables) {

@@ -8,7 +8,7 @@ Filled in as the relevant systems land (T13, T38). Each runbook: symptom → das
 - [x] [Deleted media / galleries not purged from R2 (T13)](#physical-deletion-purge-t13)
 - [ ] Media gateway 5xx > 1% for 10 min (T20)
 - [x] [Stripe webhook unresolved > 15 min / billing state (T29–T33)](#stripe-webhooks-and-billing-state-t29t33)
-- [ ] Billed vs provider consumption drift > 10% (T31)
+- [x] [Billed vs internal drift > 10% / meter export failures (T31)](#meter-export-and-reconciliation-t31)
 - [ ] Suspected unauthorized disclosure — P1 incident (T34)
 - [ ] Database restore from PITR (T37)
 - [ ] Disable uploads / checkout via feature flag; read-only mode (T38)
@@ -204,7 +204,9 @@ through the KV tombstone and the `access_version` bump.
    (`--dry-run` first). It prints product/price/meter/portal ids; nothing needs to be copied into env.
 2. Stripe Dashboard → Developers → Webhooks → add endpoint
    `https://www.lumra.photos/api/v1/billing/webhook` with events `checkout.session.completed`,
-   `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`.
+   `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`,
+   `invoice.finalized`, `invoice.paid`, `invoice.payment_failed`, `invoice.voided`,
+   `invoice.marked_uncollectible`.
    Copy its signing secret.
 3. Vercel → project env (Production; Preview with test keys): `STRIPE_SECRET_KEY`,
    `STRIPE_WEBHOOK_SECRET`. Redeploy. Locally: `stripe listen --forward-to
@@ -231,6 +233,32 @@ account (`delivery_paused_reason`) resumes automatically at the next period / ca
 lift it early set both pause columns to null and enqueue the same sync. Logs to grep:
 `stripe webhook handled` (`outcome`, `reason`), `billing account updated from stripe`,
 `delivery paused` / `delivery resumed`, `billing sweep finished`.
+
+## Meter export and reconciliation (T31)
+
+**Symptoms**: `billing reconciliation mismatch` (error log), `meter event send failed`,
+`meter export failed for account`, `meter export skipped: STRIPE_SECRET_KEY not set`.
+
+```sql
+select * from public.billing_reconciliations where flagged or exceeds_cap_tolerance order by created_at desc;
+select idempotency_key, status, attempt_count, last_error, created_at from public.billing_exports
+where status <> 'sent' order by created_at;
+select * from public.billing_meter_cursors where account_id = '…';
+```
+
+**Mitigate**:
+
+- Unsent rows retry on every run (hourly/daily). A `failed` row with `attempt_count ≥ 1000` was a
+  permanent 4xx (e.g. `timestamp_too_far_in_past` after an outage > 35 days): bill that usage with a
+  one-off invoice item in the dashboard and leave the row as the audit record.
+- `meter export failed for account` with `reconcile: true`: exported units exceed the ledger total
+  (a compensating ledger row lowered usage). Credit the customer in Stripe; never edit cursors down.
+- Drift: compare the invoice lines in Stripe with the account's `usage_ledger` totals for the
+  `usage_period_start`. Discounts or manual invoice items explain most drift; otherwise check unsent
+  exports for that period. Overage above cap + tolerance (`exceeds_cap_tolerance`): issue the credit
+  promised by the pricing page (ADR-004).
+- Never resend an event by hand with a new identifier; resend the stored payload (set the row back
+  to `pending` with `attempt_count = 0`).
 
 ## Observability (T04)
 

@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { AccountUsageSummary } from '@lumra/contracts';
 import { Icon, buttonClass } from '@/components/ui';
-import { formatDate, formatGigabytes } from '@/lib/format';
+import { formatDate, formatGigabytes, formatUsd } from '@/lib/format';
 import { BillingButton } from './billing-button';
 
 /**
@@ -12,7 +12,7 @@ export type CheckoutReturn = 'success' | null;
 
 export type BannerSummary = Pick<
   AccountUsageSummary,
-  'plan' | 'billingStatus' | 'period' | 'billing' | 'storage' | 'delivery'
+  'plan' | 'billingStatus' | 'period' | 'billing' | 'storage' | 'delivery' | 'spend'
 >;
 
 interface Banner {
@@ -95,6 +95,19 @@ export function billingBanners(summary: BannerSummary, checkout: CheckoutReturn 
     });
   }
 
+  // Spend-cap alerts (T32): the highest threshold reached this period, until the cap pauses.
+  const spend = summary.spend;
+  const reached = spend?.alertsReached.at(-1);
+  if (spend && reached !== undefined && billing.deliveryPaused !== 'spend_cap') {
+    banners.push({
+      key: 'spend_alert',
+      tone: 'cap',
+      title: `You’ve used ${reached}% of your spending cap`,
+      body: `Estimated overage this period is ${formatUsd(spend.estimatedOverageMicroUsd)} of your ${formatUsd(spend.capMicroUsd)} cap. At the cap, uploads that would exceed it are refused and delivery pauses until ${date(summary.period.end)}.`,
+      action: 'account',
+    });
+  }
+
   if (billing.cancelAtPeriodEnd && summary.billingStatus === 'active') {
     banners.push({
       key: 'cancel_at_period_end',
@@ -144,7 +157,7 @@ export function BillingBanners({
           {b.action &&
             (showAccountLink || b.action === 'account' ? (
               <Link
-                href="/account"
+                href={b.action === 'account' ? '/account#spending-cap' : '/account'}
                 className={buttonClass(
                   'secondary',
                   'sm',

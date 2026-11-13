@@ -1,7 +1,9 @@
 import type { PlanRates } from '@lumra/config';
 import type { BillingAccountState } from './account';
-import { checkDeliveryAllowance } from './admission';
+import { checkDeliveryAllowance, effectiveCapMicroUsd } from './admission';
 import { type DeliveryPauseReason, deliveryPauseFor } from './delivery-pause';
+import { estimateOverageMicroUsd, planBillsOverage } from './rating';
+import { newAlertThresholds } from './spend';
 import type { BillingPeriod } from './usage-summary';
 
 /**
@@ -22,6 +24,8 @@ export interface SafeguardContext {
   deliveryPausedReason: DeliveryPauseReason | null;
   period: BillingPeriod;
   usage: { storageByteSecondsToDate: bigint; deliveryBytesToDate: number };
+  /** Spend-cap alert thresholds already recorded for this period (T32 dedupe). */
+  alertsSent: number[];
 }
 
 /** An `email.send` outbox row; `dedupeKey` makes it once-only. */
@@ -44,6 +48,16 @@ export interface SafeguardStore {
     next: DeliveryPauseReason | null,
     options: { traceId: string; notice?: EmailNotice },
   ): Promise<boolean>;
+  /**
+   * Records spend-cap alerts once per (account, period, threshold) and enqueues one
+   * `spend_cap_alert` email per newly recorded threshold. Returns the thresholds recorded now.
+   */
+  recordSpendAlerts(
+    accountId: string,
+    periodStart: Date,
+    thresholdsPct: number[],
+    details: { spendMicroUsd: number; capMicroUsd: number; traceId: string },
+  ): Promise<number[]>;
 }
 
 export interface SafeguardChange {
@@ -58,6 +72,8 @@ export interface SafeguardResult {
   resumed: number;
   /** Another writer moved the pause first; the next evaluation converges. */
   conflicts: number;
+  /** Spend-cap alert thresholds recorded in this run (T32). */
+  alerts: number;
   changes: SafeguardChange[];
 }
 
@@ -70,12 +86,35 @@ export async function evaluateBillingSafeguards(
     paused: 0,
     resumed: 0,
     conflicts: 0,
+    alerts: 0,
     changes: [],
   };
   if (accountIds.length === 0) return result;
   const contexts = await deps.store.safeguardContexts(accountIds, deps.now);
   for (const ctx of contexts) {
     result.evaluated++;
+    // Spend-cap alerts at 50/80/100 % (PRD §9.4), deduped per period and threshold.
+    const cap = planBillsOverage(ctx.plan)
+      ? effectiveCapMicroUsd(ctx.plan, ctx.spendCapMicroUsd)
+      : null;
+    if (cap !== null) {
+      const spend = estimateOverageMicroUsd(
+        {
+          storageByteSeconds: ctx.usage.storageByteSecondsToDate,
+          deliveryBytes: ctx.usage.deliveryBytesToDate,
+        },
+        ctx.plan,
+      );
+      const due = newAlertThresholds(spend, cap, ctx.warningThresholdsPct, ctx.alertsSent);
+      if (due.length > 0) {
+        const recorded = await deps.store.recordSpendAlerts(ctx.accountId, ctx.period.start, due, {
+          spendMicroUsd: spend,
+          capMicroUsd: cap,
+          traceId: deps.traceId,
+        });
+        result.alerts += recorded.length;
+      }
+    }
     const decision = checkDeliveryAllowance({
       plan: ctx.plan,
       account: ctx.account,

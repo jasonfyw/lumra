@@ -1,10 +1,12 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { AccountUsageSummary, UsageMeter } from '@lumra/contracts';
-import { Tag, buttonClass } from '@/components/ui';
+import { Tag } from '@/components/ui';
 import { formatDate, formatGigabytes, formatUsd } from '@/lib/format';
 import { BillingBanners, type CheckoutReturn } from './billing-banners';
 import { BillingButton } from './billing-button';
+import { InvoiceList } from './invoice-list';
+import { SpendingCapForm } from './spending-cap-form';
 
 /**
  * `/account` body (PRD §4, FR-N03, T28–T33): profile, plan + billing actions, usage, invoices and
@@ -75,9 +77,8 @@ export interface AccountViewProps {
   checkout?: CheckoutReturn;
   /** Pro base fee from the current rate card (`plans`), for the upgrade button. */
   proMonthlyFeeMicroUsd: number;
-  /** Spending cap + alerts panel (T32); a placeholder until it ships. */
+  /** Overrides for the spending cap / invoices panels (tests). */
   spendingCap?: ReactNode;
-  /** Invoice list (T31); a placeholder until it ships. */
   invoices?: ReactNode;
 }
 
@@ -194,43 +195,30 @@ export function AccountView({
           Billing
         </h2>
         <div className="grid gap-6 sm:grid-cols-2">
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-3">
             <h3 className="font-medium">Invoices</h3>
-            {invoices ?? (
-              <>
-                <p className={muted}>
-                  {billing.hasCustomer
-                    ? 'Invoices and receipts are available in the billing portal.'
-                    : 'Invoices appear here once you subscribe to Pro.'}
-                </p>
-                {billing.hasCustomer && (
-                  <BillingButton
-                    action="portal"
-                    variant="secondary"
-                    disabled={!billing.paymentsEnabled}
-                  >
-                    View invoices
-                  </BillingButton>
-                )}
-              </>
+            {invoices ?? <InvoiceList invoices={summary.invoices} />}
+            {billing.hasCustomer && (
+              <BillingButton
+                action="portal"
+                variant="secondary"
+                disabled={!billing.paymentsEnabled}
+              >
+                All invoices and receipts
+              </BillingButton>
             )}
           </div>
-          <div className="flex flex-col gap-2">
+          <div id="spending-cap" className="flex scroll-mt-6 flex-col gap-3">
             <h3 className="font-medium">Spending cap and alerts</h3>
-            {spendingCap ?? (
-              <>
+            {spendingCap ??
+              (summary.spend ? (
+                <SpendingCapForm spend={summary.spend} />
+              ) : (
                 <p className={muted}>
-                  Pro accounts set a monthly overage cap and get alerts at 50%, 80% and 100% of it.
+                  Free never bills overage: limits are hard caps. On Pro you set a monthly overage
+                  cap and get alerts at 50%, 80% and 100% of it.
                 </p>
-                <button
-                  type="button"
-                  disabled
-                  className={buttonClass('secondary', 'md', 'self-start')}
-                >
-                  Set spending cap
-                </button>
-              </>
-            )}
+              ))}
           </div>
         </div>
       </section>

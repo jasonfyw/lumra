@@ -629,6 +629,16 @@ function atomically(
   ) as Promise<boolean>;
 }
 
+function atomicallyList<T>(
+  sql: postgres.Sql,
+  fn: (tx: postgres.TransactionSql) => Promise<T[]>,
+): Promise<T[]> {
+  const maybeTx = sql as unknown as Partial<postgres.TransactionSql>;
+  return (
+    typeof maybeTx.savepoint === 'function' ? maybeTx.savepoint(fn) : sql.begin(fn)
+  ) as Promise<T[]>;
+}
+
 async function enqueueNotice(
   tx: postgres.TransactionSql,
   accountId: string,
@@ -674,17 +684,25 @@ export function createBillingStateRepository(sql: postgres.Sql): BillingStateRep
         })),
       );
       const totals = await sql<
-        { account_id: string; byte_seconds: string; delivery_bytes: string }[]
+        {
+          account_id: string;
+          byte_seconds: string;
+          delivery_bytes: string;
+          alerts: string | null;
+        }[]
       >`
         select k.account_id,
                coalesce(sum(l.quantity_micro_units)
                  filter (where l.metric = 'storage_byte_seconds'), 0)::text as byte_seconds,
                coalesce(sum(l.quantity_micro_units)
-                 filter (where l.metric = 'delivery_bytes'), 0)::text as delivery_bytes
+                 filter (where l.metric = 'delivery_bytes'), 0)::text as delivery_bytes,
+               (select string_agg(a.threshold_pct::text, ',' order by a.threshold_pct)
+                from public.billing_alerts a
+                where a.account_id = k.account_id and a.period_start = k.period_start) as alerts
         from jsonb_to_recordset(${payload}::text::jsonb) as k(account_id uuid, period_start timestamptz)
         left join public.usage_ledger l
           on l.account_id = k.account_id and l.period_start = k.period_start
-        group by k.account_id`;
+        group by k.account_id, k.period_start`;
       const byAccount = new Map(totals.map((t) => [t.account_id, t]));
       return periods.map(({ r, period }) => {
         const t = byAccount.get(r.account_id);
@@ -708,6 +726,7 @@ export function createBillingStateRepository(sql: postgres.Sql): BillingStateRep
             // Compensating rows can be negative; a period total never counts below zero.
             deliveryBytesToDate: Math.max(0, toInt(t?.delivery_bytes ?? '0', 'delivery_bytes')),
           },
+          alertsSent: t?.alerts ? t.alerts.split(',').map((v) => toInt(v, 'threshold_pct')) : [],
         };
       });
     },
@@ -725,6 +744,39 @@ export function createBillingStateRepository(sql: postgres.Sql): BillingStateRep
         await tx`select public.enqueue_owner_access_sync(${accountId}::uuid, ${options.traceId})`;
         if (options.notice) await enqueueNotice(tx, accountId, options.notice, options.traceId);
         return true;
+      });
+    },
+
+    recordSpendAlerts(accountId, periodStart, thresholdsPct, details) {
+      return atomicallyList(sql, async (tx) => {
+        if (thresholdsPct.length === 0) return [];
+        const payload = JSON.stringify(thresholdsPct.map((t) => ({ t })));
+        const rows = await tx<{ threshold_pct: number }[]>`
+          insert into public.billing_alerts
+            (account_id, period_start, threshold_pct, spend_micro_usd, cap_micro_usd)
+          select ${accountId}::uuid, ${periodStart.toISOString()}::timestamptz, r.t,
+                 ${String(details.spendMicroUsd)}::bigint, ${String(details.capMicroUsd)}::bigint
+          from jsonb_to_recordset(${payload}::text::jsonb) as r(t smallint)
+          on conflict on constraint billing_alerts_once do nothing
+          returning threshold_pct`;
+        const recorded = rows.map((r) => Number(r.threshold_pct)).sort((a, b) => a - b);
+        for (const threshold of recorded) {
+          await enqueueNotice(
+            tx,
+            accountId,
+            {
+              template: 'spend_cap_alert',
+              dedupeKey: `email:spend_cap_alert:${accountId}:${periodStart.toISOString()}:${threshold}`,
+              data: {
+                thresholdPct: threshold,
+                spendMicroUsd: details.spendMicroUsd,
+                capMicroUsd: details.capMicroUsd,
+              },
+            },
+            details.traceId,
+          );
+        }
+        return recorded;
       });
     },
 

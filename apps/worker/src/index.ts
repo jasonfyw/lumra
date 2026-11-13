@@ -18,6 +18,7 @@ import { archiveCrc32 } from './crc';
 import { syncGalleryAccessState } from './handlers/access-state';
 import { handleArchiveBuild, RetryLaterError } from './handlers/archive-build';
 import { evaluateBillingSafeguards, handleEmailSend, runBillingSweep } from './handlers/billing';
+import { runMeterExport, stripeMeterSender } from './handlers/meter-export';
 import { sweepArchives } from './handlers/archive-sweep';
 import { handleMediaUploaded } from './handlers/media-uploaded';
 import { ingestDeliveryEvents, runStorageAccrual } from './handlers/metering';
@@ -202,6 +203,9 @@ export const STORAGE_ACCRUAL_CRON = '7 * * * *';
  * sweep (one cron string can only dispatch once), so it is an alias, not a separate trigger.
  */
 export const ARCHIVE_SWEEP_CRON = DELETION_SWEEP_CRON;
+
+/** Daily Stripe Billing Meter export (T31), off-peak; also the nightly reconcile tick. */
+export const METER_EXPORT_CRON = '17 3 * * *';
 
 /** Wall-time budget for one accrual run; unfinished accounts are picked up next hour. */
 export const STORAGE_ACCRUAL_BUDGET_MS = 50_000;
@@ -506,6 +510,30 @@ export function createWorker(options: WorkerOptions = {}) {
     log.info('billing sweep finished', { ...result, ms: now() - started, steps: timings });
   }
 
+  /** Stripe meter export (T31): daily for all open periods, hourly for periods just closed. */
+  async function meterExportTick(
+    env: Env,
+    services: Services,
+    log: Logger,
+    mode: 'daily' | 'period_close',
+  ): Promise<void> {
+    if (!env.STRIPE_SECRET_KEY) {
+      log.info('meter export skipped: STRIPE_SECRET_KEY not set', { mode });
+      return;
+    }
+    const started = now();
+    const timings: StepTimings = {};
+    const result = await runMeterExport({
+      repo: bounded(services.meterExportRepo(), 'db.meters', DEADLINES.dbStepMs, { timings }),
+      plans: bounded(services.billingRepo().plans, 'db.plans', DEADLINES.dbStepMs, { timings }),
+      send: stripeMeterSender(env.STRIPE_SECRET_KEY),
+      log,
+      now: () => new Date(now()),
+      mode,
+    });
+    log.info('meter export finished', { mode, ...result, ms: now() - started, steps: timings });
+  }
+
   /** Backstop deletion sweep (T13). Per-item failures are logged inside the sweep. */
   async function deletionSweepTick(env: Env, services: Services, log: Logger): Promise<void> {
     const started = now();
@@ -668,6 +696,14 @@ export function createWorker(options: WorkerOptions = {}) {
             Sentry.captureException(error);
             firstError ??= error;
           }
+          try {
+            // Final usage of periods that just closed, while Stripe's invoice is still a draft.
+            await meterExportTick(env, services, log, 'period_close');
+          } catch (error) {
+            log.error('meter export failed', { err: error, mode: 'period_close' });
+            Sentry.captureException(error);
+            firstError ??= error;
+          }
         } finally {
           await closeServices(services, log, ctx);
         }
@@ -700,8 +736,21 @@ export function createWorker(options: WorkerOptions = {}) {
         if (firstError !== undefined) throw firstError;
         return;
       }
+      if (controller.cron === METER_EXPORT_CRON) {
+        // Daily Stripe meter export (T31). Remaining T13 nightly reconcilers will join this tick.
+        const services = makeServices(env);
+        try {
+          await meterExportTick(env, services, log, 'daily');
+        } catch (error) {
+          log.error('meter export failed', { err: error, mode: 'daily' });
+          Sentry.captureException(error);
+          throw error;
+        } finally {
+          await closeServices(services, log, ctx);
+        }
+        return;
+      }
       if (controller.cron !== OUTBOX_RELAY_CRON) {
-        // Nightly R2 orphan reconcile and guest-draft expiry: remaining T13 work.
         log.info('scheduled tick', { cron: controller.cron });
         return;
       }

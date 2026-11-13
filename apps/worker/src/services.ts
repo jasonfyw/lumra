@@ -4,6 +4,7 @@ import {
   createBillingRepository,
   createBillingStateRepository,
   createDeletionRepository,
+  createMeterExportRepository,
   createMediaPipelineRepository,
   createOutboxRepository,
   createSqlClient,
@@ -12,6 +13,7 @@ import {
   type BillingRepository,
   type BillingStateRepository,
   type DeletionRepository,
+  type MeterExportRepository,
   type MediaPipelineRepository,
   type OutboxRepository,
 } from '@lumra/db';
@@ -33,6 +35,8 @@ export interface Services {
   billingRepo(): BillingRepository;
   /** Delivery safety cutoff + hourly billing sweep (T28/T33). */
   billingStateRepo(): BillingStateRepository;
+  /** Stripe meter export cursors and stored events (T31). */
+  meterExportRepo(): MeterExportRepository;
   /** Physical deletion: purge reads/marks and the backstop sweep (T13). */
   deletionRepo(): DeletionRepository;
   /**
@@ -110,6 +114,7 @@ export function createServices(env: Env): Services {
     archiveRepo: () => createArchiveRepository(db()),
     billingRepo: () => createBillingRepository(db()),
     billingStateRepo: () => createBillingStateRepository(db()),
+    meterExportRepo: () => createMeterExportRepository(db()),
     deletionRepo: () => createDeletionRepository(db()),
     processor: (slot) => {
       let client = processors.get(slot);

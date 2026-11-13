@@ -8,7 +8,11 @@ import type postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BYTES_PER_GB } from '@lumra/config';
 import { evaluateBillingSafeguards } from '@lumra/billing';
-import { createAccessStateRepository, createBillingStateRepository } from '../src';
+import {
+  createAccessStateRepository,
+  createBillingStateRepository,
+  createMeterExportRepository,
+} from '../src';
 import {
   CHECK_VIOLATION,
   DENIED,
@@ -243,6 +247,101 @@ describe('hourly sweep writes (T33)', () => {
       expect((await outboxFor(tx, [pastDue])).map((r) => r.payload.template)).toEqual([
         'delivery_suspended',
       ]);
+    });
+  });
+});
+
+describe('spend-cap alerts (T32)', () => {
+  it('records each threshold once per period and enqueues one email each', async () => {
+    await inRollback(sql, async (tx) => {
+      const user = await createUser(tx);
+      const repo = repoFor(tx);
+      const period = new Date('2026-11-04T09:30:00Z');
+      const details = { spendMicroUsd: 8_500_000, capMicroUsd: 10_000_000, traceId: 't' };
+      expect(await repo.recordSpendAlerts(user, period, [50, 80], details)).toEqual([50, 80]);
+      expect(await repo.recordSpendAlerts(user, period, [50, 80, 100], details)).toEqual([100]);
+      expect(await repo.recordSpendAlerts(user, period, [100], details)).toEqual([]);
+      const emails = await outboxFor(tx, [user]);
+      expect(emails.map((e) => e.payload.template)).toEqual([
+        'spend_cap_alert',
+        'spend_cap_alert',
+        'spend_cap_alert',
+      ]);
+      const [ctx] = await repo.safeguardContexts([user], new Date('2026-11-13T00:00:00Z'));
+      // Free account: the calendar period differs, so this period's alerts are not its own.
+      expect(ctx!.alertsSent).toEqual([]);
+
+      await actAs(tx, 'authenticated', user);
+      const visible = await tx`select threshold_pct from public.billing_alerts`;
+      expect(visible).toHaveLength(3);
+    });
+  });
+});
+
+describe('meter export persistence (T31)', () => {
+  it('stores events and cursors atomically with compare-and-set, then tracks sending', async () => {
+    await inRollback(sql, async (tx) => {
+      const user = await createUser(tx);
+      await tx`update public.billing_accounts set stripe_customer_id = ${`cus_${user.slice(0, 8)}`}
+               where user_id = ${user}`;
+      const start = new Date('2026-11-04T09:30:00Z');
+      const end = new Date('2026-12-04T09:30:00Z');
+      await tx`insert into public.billing_periods (account_id, period_start, period_end, stripe_subscription_id)
+               values (${user}, ${start}, ${end}, 'sub_1')`;
+      await deliveryRow(tx, user, 6 * BYTES_PER_GB, start);
+      const repo = createMeterExportRepository(tx as unknown as postgres.Sql);
+
+      const periods = await repo.exportPeriods({ endedAfter: new Date('2026-11-01'), limit: 100 });
+      expect(periods.filter((p) => p.accountId === user)).toEqual([
+        {
+          accountId: user,
+          stripeCustomerId: `cus_${user.slice(0, 8)}`,
+          periodStart: start,
+          periodEnd: end,
+        },
+      ]);
+      const closed = await repo.exportPeriods({
+        endedAfter: new Date('2026-11-01'),
+        closedFrom: new Date('2026-12-04T08:00:00Z'),
+        closedTo: new Date('2026-12-04T10:00:00Z'),
+        limit: 100,
+      });
+      expect(closed.some((p) => p.accountId === user)).toBe(true);
+      const entries = await repo.ledgerFor(user, [start], new Date(Date.now() + 60_000));
+      expect(entries).toHaveLength(1);
+
+      const event = {
+        event_name: 'lumra_delivery_overage',
+        identifier: `${user}:delivery_bytes:${start.getTime() / 1000}:1764000000`,
+        timestamp: 1_764_000_000,
+        payload: { stripe_customer_id: 'cus_1', value: '1000' },
+      };
+      const key = `delivery_bytes|${start.toISOString()}`;
+      const record = (previous: Record<string, bigint>, next: Record<string, bigint>) =>
+        repo.recordExport(
+          user,
+          [{ event, metric: 'delivery_bytes', periodStart: start }],
+          previous,
+          next,
+          new Date('2026-11-24T00:00:00Z'),
+        );
+      expect(await record({}, { [key]: 1000n })).toBe(true);
+      expect(await repo.cursors(user)).toEqual({ [key]: 1000n });
+      // A stale run (still thinks nothing was exported) writes nothing.
+      expect(await record({}, { [key]: 1000n })).toBe(false);
+      expect(await record({ [key]: 999n }, { [key]: 1500n })).toBe(false);
+
+      const unsent = (await repo.unsent(100, 20)).filter((u) => u.accountId === user);
+      expect(unsent).toHaveLength(1);
+      expect(unsent[0]!.event).toEqual(event);
+      await repo.markFailed(unsent[0]!.id, 'http_500', false);
+      expect((await repo.unsent(100, 20)).filter((u) => u.accountId === user)).toHaveLength(1);
+      await repo.markSent(unsent[0]!.id);
+      expect((await repo.unsent(100, 20)).filter((u) => u.accountId === user)).toHaveLength(0);
+
+      await actAs(tx, 'authenticated', user);
+      await expectSqlError(tx, DENIED, (sp) => sp`select * from public.billing_meter_cursors`);
+      await expectSqlError(tx, DENIED, (sp) => sp`select * from public.billing_periods`);
     });
   });
 });

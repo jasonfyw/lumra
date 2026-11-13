@@ -176,6 +176,8 @@ export const workerEnvSchema = z.object({
    * Same value as the web app's `WORKER_KICK_SECRET`. Unset ⇒ the endpoint fails closed (503).
    */
   WORKER_KICK_SECRET: secret.optional(),
+  /** Billing Meter export (T31). Unset ⇒ the daily export is skipped (logged). */
+  STRIPE_SECRET_KEY: unsetIfEmpty(stripeSecretKey),
   ...workerObservability,
 });
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;

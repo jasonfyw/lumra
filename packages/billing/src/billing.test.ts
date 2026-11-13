@@ -423,18 +423,21 @@ describe('buildMeterEvents', () => {
       rateVersion: 1,
     });
 
-  it('exports cumulative deltas with stable identifiers', () => {
-    const entries = [delivery('e1', 1_400, 1), delivery('e2', 1_400, 2)];
+  it('exports cumulative overage deltas in MB with stable identifiers', () => {
+    const included = RATE_CARD_V1.pro.includedDeliveryGb * BYTES_PER_GB;
+    // Day 1: allowance + 1.4 MB; day 2: another 1.4 MB.
+    const entries = [delivery('e1', included + 1_400_000, 1), delivery('e2', 1_400_000, 2)];
     const day1 = buildMeterEvents({
       stripeCustomerId: 'cus_1',
       accountId: 'acct_1',
+      plan: RATE_CARD_V1.pro,
       windowEnd: at(1),
       entries,
       exported: {},
     });
     expect(day1.events).toEqual([
       {
-        event_name: 'lumra_delivery_gb_micro',
+        event_name: 'lumra_delivery_overage',
         identifier: `acct_1:delivery_bytes:${periodStart.getTime() / 1000}:${at(1).getTime() / 1000}`,
         timestamp: at(1).getTime() / 1000,
         payload: { stripe_customer_id: 'cus_1', value: '1' },
@@ -443,13 +446,67 @@ describe('buildMeterEvents', () => {
     const day2 = buildMeterEvents({
       stripeCustomerId: 'cus_1',
       accountId: 'acct_1',
+      plan: RATE_CARD_V1.pro,
       windowEnd: at(2),
       entries,
       exported: day1.cursors,
     });
-    // 2 800 bytes → 3 micro GB in total; per-day rounding would have exported 1 + 1 = 2.
+    // 2.8 MB → 3 MB in total; per-day rounding would have exported 1 + 1 = 2.
     expect(day2.events.map((e) => e.payload.value)).toEqual(['2']);
     expect(day2.cursors[meterCursorKey('delivery_bytes', periodStart)]).toBe(3n);
+  });
+
+  it('exports storage as MB-months above the included GB-months', () => {
+    const month = BigInt(BILLING_POLICY_V1.secondsPerBillingMonth);
+    const gbMonth = BigInt(BYTES_PER_GB) * month;
+    const storage = buildLedgerEntry({
+      accountId: 'acct_1',
+      metric: 'storage_byte_seconds',
+      // 30 GB-month: 10 GB-month = 10 000 MB-month over the 20 included.
+      quantity: 30n * gbMonth,
+      unit: 'byte_second',
+      sourceId: 's1',
+      eventTime: at(3),
+      period,
+      rateVersion: 1,
+    });
+    const result = buildMeterEvents({
+      stripeCustomerId: 'cus_1',
+      accountId: 'acct_1',
+      plan: RATE_CARD_V1.pro,
+      windowEnd: at(3),
+      entries: [storage],
+      exported: {},
+    });
+    expect(result.events.map((e) => [e.event_name, e.payload.value])).toEqual([
+      ['lumra_storage_overage', '10000'],
+    ]);
+  });
+
+  it('timestamps usage exported after the period closed inside that period', () => {
+    const late = buildMeterEvents({
+      stripeCustomerId: 'cus_1',
+      accountId: 'acct_1',
+      plan: RATE_CARD_V1.pro,
+      windowEnd: at(31),
+      entries: [delivery('e1', 6 * BYTES_PER_GB, 29)],
+      exported: {},
+      periodEndFor: () => periodEnd,
+    });
+    expect(late.events[0]?.timestamp).toBe(periodEnd.getTime() / 1000 - 1);
+    expect(late.events[0]?.identifier.endsWith(`:${at(31).getTime() / 1000}`)).toBe(true);
+  });
+
+  it('never exports anything for Free', () => {
+    const free = buildMeterEvents({
+      stripeCustomerId: 'c',
+      accountId: 'acct_1',
+      plan: RATE_CARD_V1.free,
+      windowEnd: at(2),
+      entries: [delivery('e1', 50 * BYTES_PER_GB, 1)],
+      exported: {},
+    });
+    expect(free.events).toEqual([]);
   });
 
   it('emits nothing when nothing new is billable and rejects foreign or conflicting rows', () => {
@@ -457,6 +514,7 @@ describe('buildMeterEvents', () => {
     const first = buildMeterEvents({
       stripeCustomerId: 'c',
       accountId: 'acct_1',
+      plan: RATE_CARD_V1.pro,
       windowEnd: at(1),
       entries,
       exported: {},
@@ -466,6 +524,7 @@ describe('buildMeterEvents', () => {
       buildMeterEvents({
         stripeCustomerId: 'c',
         accountId: 'other',
+        plan: RATE_CARD_V1.pro,
         windowEnd: at(1),
         entries,
         exported: {},
@@ -475,6 +534,7 @@ describe('buildMeterEvents', () => {
       buildMeterEvents({
         stripeCustomerId: 'c',
         accountId: 'acct_1',
+        plan: RATE_CARD_V1.pro,
         windowEnd: at(2),
         entries: [delivery('e1', 10, 1), delivery('e1', 11, 1)],
         exported: {},

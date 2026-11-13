@@ -16,6 +16,11 @@ export interface Env {
    * endpoint answers 503 and processing relies on the once-a-minute cron relay alone.
    */
   WORKER_KICK_SECRET?: string;
+  /**
+   * Stripe secret key for the Billing Meter export (T31; secret). Unset ⇒ the export is skipped
+   * and nothing is built, so cursors never advance without a way to send.
+   */
+  STRIPE_SECRET_KEY?: string;
   HYPERDRIVE?: Hyperdrive;
   /** Cloudflare Containers Durable Object namespace for the image processor (ADR-002). */
   IMAGE_PROCESSOR?: DurableObjectNamespace;

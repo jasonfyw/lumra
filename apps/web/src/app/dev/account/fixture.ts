@@ -9,6 +9,8 @@ export const ACCOUNT_FIXTURE_STATES = [
   'checkout_pending',
   'pro',
   'pro_canceling',
+  'pro_alert_80',
+  'pro_spend_cap',
   'past_due',
   'restricted',
   'canceled',
@@ -23,7 +25,14 @@ export function makeAccountFixture(
   now = new Date('2026-11-13T12:00:00Z'),
 ): { summary: AccountUsageSummary; checkout: 'success' | null } {
   const { free, pro } = RATE_CARD_V1;
-  const isPro = ['pro', 'pro_canceling', 'past_due', 'restricted'].includes(state);
+  const isPro = [
+    'pro',
+    'pro_canceling',
+    'pro_alert_80',
+    'pro_spend_cap',
+    'past_due',
+    'restricted',
+  ].includes(state);
   const plan = isPro ? pro : free;
   const periodStart = isPro ? new Date('2026-11-04T09:30:00Z') : new Date('2026-11-01T00:00:00Z');
   const periodEnd = isPro ? new Date('2026-12-04T09:30:00Z') : new Date('2026-12-01T00:00:00Z');
@@ -99,12 +108,61 @@ export function makeAccountFixture(
                 canceledAt.getTime() + BILLING_POLICY_V1.retentionAfterSuspensionMs,
               ).toISOString()
             : null,
-      deliveryPaused: state === 'free_delivery_paused' ? 'free_delivery_cap' : null,
+      deliveryPaused:
+        state === 'free_delivery_paused'
+          ? 'free_delivery_cap'
+          : state === 'pro_spend_cap'
+            ? 'spend_cap'
+            : null,
       galleries: {
         active: state === 'canceled' ? 5 : state === 'free_at_caps' ? 2 : isPro ? 14 : 1,
         max: plan.maxActiveGalleries,
       },
     },
+    spend: isPro
+      ? {
+          capMicroUsd: state === 'pro_spend_cap' ? 5_000_000 : 10_000_000,
+          custom: state === 'pro_spend_cap',
+          defaultCapMicroUsd: pro.defaultOverageCapMicroUsd ?? 0,
+          maxCapMicroUsd: BILLING_POLICY_V1.maxSpendCapMicroUsd,
+          estimatedOverageMicroUsd:
+            state === 'pro_alert_80' ? 8_420_000 : state === 'pro_spend_cap' ? 5_030_000 : 84_000,
+          percentOfCap: state === 'pro_alert_80' ? 84 : state === 'pro_spend_cap' ? 100 : 0,
+          alertsReached:
+            state === 'pro_alert_80' ? [50, 80] : state === 'pro_spend_cap' ? [50, 80, 100] : [],
+          thresholdsPct: [...BILLING_POLICY_V1.defaultAlertThresholdsPct],
+        }
+      : null,
+    invoices: isPro
+      ? [
+          {
+            id: 'in_fixture_2',
+            number: 'A1B2C3D4-0002',
+            status: state === 'past_due' || state === 'restricted' ? 'open' : 'paid',
+            currency: 'usd',
+            totalCents: 284,
+            amountDueCents: 284,
+            createdAt: '2026-11-04T10:31:00.000Z',
+            periodStart: '2026-10-04T09:30:00.000Z',
+            periodEnd: '2026-11-04T09:30:00.000Z',
+            hostedInvoiceUrl: 'https://invoice.stripe.com/i/fixture_2',
+            invoicePdf: 'https://pay.stripe.com/invoice/fixture_2/pdf',
+          },
+          {
+            id: 'in_fixture_1',
+            number: 'A1B2C3D4-0001',
+            status: 'paid',
+            currency: 'usd',
+            totalCents: 200,
+            amountDueCents: 200,
+            createdAt: '2026-10-04T09:30:00.000Z',
+            periodStart: '2026-10-04T09:30:00.000Z',
+            periodEnd: '2026-10-04T09:30:00.000Z',
+            hostedInvoiceUrl: 'https://invoice.stripe.com/i/fixture_1',
+            invoicePdf: null,
+          },
+        ]
+      : [],
   };
   return {
     summary: accountUsageSummarySchema.parse(summary),
