@@ -122,6 +122,7 @@ export function GalleryUploader({
   }, [bridge, engine, snapshot]);
 
   const awaiting = snapshot.items.filter((i) => i.state === 'awaiting_file');
+  const planBlock = planBlockFor(snapshot.items);
 
   return (
     <div className="flex flex-col gap-6">
@@ -135,6 +136,18 @@ export function GalleryUploader({
           <div>
             <Link href={signInHref} className={buttonClass('primary')}>
               Sign in to keep uploading
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {planBlock && (
+        <div role="alert" className="lm-banner lm-banner-cap flex-col gap-3">
+          <p className="font-medium">{planBlock.title}</p>
+          <p className="text-[13px] leading-[18px]">{planBlock.body}</p>
+          <div>
+            <Link href={planBlock.href} className={buttonClass('primary')}>
+              {planBlock.cta}
             </Link>
           </div>
         </div>
@@ -193,4 +206,49 @@ export function GalleryUploader({
       />
     </div>
   );
+}
+
+interface PlanBlock {
+  title: string;
+  body: string;
+  cta: string;
+  href: string;
+}
+
+/**
+ * Plan admission refusals (T28/T32/T33) shown once above the list with the way out: the Free
+ * storage cap → upgrade; the spending cap → raise it; a billing hold → fix payment. Guest quota
+ * refusals are handled by the sign-in prompt instead.
+ */
+export function planBlockFor(
+  items: readonly { error?: { code: string; requiresAuth?: boolean } | null }[],
+): PlanBlock | null {
+  const codes = new Set(
+    items.flatMap((i) => (i.error && !i.error.requiresAuth ? [i.error.code] : [])),
+  );
+  if (codes.has('forbidden')) {
+    return {
+      title: 'Uploads are paused for this account',
+      body: 'There is a problem with your Pro payment. Photos already uploaded are safe; update your payment method to continue.',
+      cta: 'Go to billing',
+      href: '/account',
+    };
+  }
+  if (codes.has('spend_cap_reached')) {
+    return {
+      title: 'This upload would go over your spending cap',
+      body: 'Raise your monthly overage cap to keep uploading this period, or remove photos you no longer need.',
+      cta: 'Adjust spending cap',
+      href: '/account',
+    };
+  }
+  if (codes.has('quota_exceeded')) {
+    return {
+      title: 'Your Free storage is full',
+      body: 'You’ve reached the Free plan’s storage limit. Upgrade to Pro for a larger allowance with pay-as-you-go beyond it, or delete photos you no longer need.',
+      cta: 'Upgrade to Pro',
+      href: '/pricing',
+    };
+  }
+  return null;
 }

@@ -28,6 +28,31 @@ export const deliveryServedMessageSchema = z.object({
 });
 export type DeliveryServedMessage = z.infer<typeof deliveryServedMessageSchema>;
 
+/**
+ * Account emails (PRD §9.4 transition notices, T33; spend-cap alerts, T32). The payload names the
+ * account and a template only — the worker looks the address up at send time, so no personal
+ * data sits in the outbox or the queue. `data` holds small non-personal template values.
+ */
+export const EMAIL_TEMPLATES = [
+  'pro_activated',
+  'payment_failed',
+  'payment_recovered',
+  'delivery_suspended',
+  'subscription_ended',
+  'delivery_paused',
+  'spend_cap_alert',
+] as const;
+export type EmailTemplate = (typeof EMAIL_TEMPLATES)[number];
+
+export const emailSendMessageSchema = z.object({
+  type: z.literal('email.send'),
+  accountId: z.uuid(),
+  template: z.enum(EMAIL_TEMPLATES),
+  data: z.record(z.string(), z.union([z.string().max(200), z.number()])).default({}),
+  ...base,
+});
+export type EmailSendMessage = z.infer<typeof emailSendMessageSchema>;
+
 export const queueMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('media.uploaded'), mediaId: z.uuid(), ...base }),
   z.object({ type: z.literal('media.delete'), mediaId: z.uuid(), ...base }),
@@ -40,6 +65,7 @@ export const queueMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('archive.build'), jobId: z.uuid(), ...base }),
   z.object({ type: z.literal('guest.expire'), guestSessionId: z.uuid(), ...base }),
   deliveryServedMessageSchema,
+  emailSendMessageSchema,
 ]);
 export type QueueMessage = z.infer<typeof queueMessageSchema>;
 

@@ -214,6 +214,10 @@ export const RATE_LIMITS = {
   publicArchiveCreate: { limit: 20, windowSeconds: 60 * 60 },
   /** Per client IP: archive status polls (T25; every ~2 s while building, ~4 min when ready). */
   publicArchiveRead: { limit: 120, windowSeconds: 60 },
+  /** Per user: Stripe Checkout / Billing Portal session creation (T29). Each one is a Stripe call. */
+  billingSession: { limit: 30, windowSeconds: 60 * 60 },
+  /** Per user: spending-cap changes (T32). */
+  billingSettings: { limit: 30, windowSeconds: 60 * 60 },
 } as const satisfies Record<string, RateLimitRule>;
 export type RateLimitRuleName = keyof typeof RATE_LIMITS;
 

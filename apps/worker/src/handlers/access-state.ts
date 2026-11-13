@@ -1,4 +1,4 @@
-import { deriveBillingRestrictions } from '@lumra/billing';
+import { publicDeliveryState } from '@lumra/billing';
 import type { GalleryAccessState } from '@lumra/contracts';
 import type { AccessStateRepository, GalleryAccessRow } from '@lumra/db';
 import { galleryAccessSnapshot } from '@lumra/domain';
@@ -24,16 +24,12 @@ export interface AccessStateDeps {
 export type AccessStateOutcome = 'written' | 'tombstoned' | 'skipped_draft';
 
 /**
- * Public delivery is suspended when billing policy says so (PRD §9.4). A billing row that
- * violates its own invariants (e.g. `past_due` without `past_due_since`) fails closed.
+ * Public delivery is suspended when billing policy says so (PRD §9.4): past-due grace elapsed,
+ * restricted/canceled, or the delivery safety cutoff (Free delivery cap / spending cap, T28/T32).
+ * A billing row that violates its own invariants fails closed (`publicDeliveryState`).
  */
 export function isDeliverySuspended(row: GalleryAccessRow, now: Date): boolean {
-  if (!row.billing) return false;
-  try {
-    return !deriveBillingRestrictions(row.billing, now).publicDeliveryAllowed;
-  } catch {
-    return true;
-  }
+  return !publicDeliveryState(row.billing, now).available;
 }
 
 export function accessStateFor(row: GalleryAccessRow | null, now: Date): GalleryAccessState | null {

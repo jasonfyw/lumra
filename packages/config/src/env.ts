@@ -11,6 +11,16 @@ import { z } from 'zod';
 const url = z.url();
 const secret = z.string().min(32, 'must be at least 32 characters');
 const logLevel = z.enum(['debug', 'info', 'warn', 'error']);
+/** Secret (`sk_…`) or restricted (`rk_…`) Stripe API key. Messages never echo the value. */
+const stripeSecretKey = z
+  .string()
+  .regex(/^(sk|rk)_(test|live)_[A-Za-z0-9]+$/, 'must be a Stripe secret or restricted key');
+const stripeWebhookSecret = z
+  .string()
+  .regex(/^whsec_[A-Za-z0-9+/=]+$/, 'must be a Stripe webhook signing secret (whsec_…)');
+/** Optional var where an empty value (`KEY=` copied from .env.example) means "unset". */
+const unsetIfEmpty = <S extends z.ZodType>(schema: S) =>
+  z.preprocess((v) => (v === '' ? undefined : v), schema.optional());
 
 /**
  * Media-token keyring (ADR-001). Format: `kid:secret[,kid:secret...]`.
@@ -106,9 +116,11 @@ export const webServerEnvSchema = z
     // Cloudflare Turnstile: bot challenges are enforced only when the secret is set (FR-A05).
     TURNSTILE_SECRET_KEY: z.string().min(1).optional(),
     NEXT_PUBLIC_TURNSTILE_SITE_KEY: z.string().min(1).optional(),
-    STRIPE_SECRET_KEY: z.string().optional(), // required by T29
-    STRIPE_WEBHOOK_SECRET: z.string().optional(), // required by T29
-    STRIPE_PRICE_PRO_MONTHLY: z.string().optional(), // required by T29
+    // Stripe (T29, docs/BILLING.md). Server-only. Both unset ⇒ billing degrades gracefully:
+    // upgrade/portal buttons are disabled and the webhook answers 503 (Stripe retries).
+    // Prices are found by lookup key (STRIPE_CATALOG_V1), never by id, so test and live work alike.
+    STRIPE_SECRET_KEY: unsetIfEmpty(stripeSecretKey),
+    STRIPE_WEBHOOK_SECRET: unsetIfEmpty(stripeWebhookSecret),
     SENTRY_DSN: url.optional(), // server/edge; absent ⇒ Sentry disabled (T04)
     NEXT_PUBLIC_SENTRY_DSN: url.optional(), // browser; inlined at build time
     SENTRY_ENVIRONMENT: z.string().optional(), // defaults to VERCEL_ENV / NODE_ENV

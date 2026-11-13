@@ -52,6 +52,37 @@ describe('parseEnv', () => {
     }
   });
 
+  it('validates Stripe keys without echoing them; empty values mean unset (T29)', () => {
+    const base = { NEXT_PUBLIC_APP_URL: 'http://localhost:3000' };
+    const ok = parseEnv('web', webServerEnvSchema, {
+      ...base,
+      STRIPE_SECRET_KEY: 'sk_test_51Abc',
+      STRIPE_WEBHOOK_SECRET: 'whsec_abc123',
+    });
+    expect(ok.STRIPE_SECRET_KEY).toBe('sk_test_51Abc');
+    const empty = parseEnv('web', webServerEnvSchema, {
+      ...base,
+      STRIPE_SECRET_KEY: '',
+      STRIPE_WEBHOOK_SECRET: '',
+    });
+    expect(empty.STRIPE_SECRET_KEY).toBeUndefined();
+    expect(empty.STRIPE_WEBHOOK_SECRET).toBeUndefined();
+    try {
+      parseEnv('web', webServerEnvSchema, {
+        ...base,
+        STRIPE_SECRET_KEY: 'pk_live_notasecretkey',
+        STRIPE_WEBHOOK_SECRET: 'nope-secret-value',
+      });
+      expect.unreachable();
+    } catch (error) {
+      const message = (error as Error).message;
+      expect(message).toContain('STRIPE_SECRET_KEY');
+      expect(message).toContain('STRIPE_WEBHOOK_SECRET');
+      expect(message).not.toContain('pk_live_notasecretkey');
+      expect(message).not.toContain('nope-secret-value');
+    }
+  });
+
   it('accepts the optional worker kick settings and rejects short kick secrets', () => {
     const secret = 'k'.repeat(32);
     const web = parseEnv('web', webServerEnvSchema, {

@@ -1,6 +1,11 @@
 import 'server-only';
 import { sql } from 'drizzle-orm';
-import { currentBillingPeriod, summarizeUsage } from '@lumra/billing';
+import {
+  currentBillingPeriod,
+  deriveBillingRestrictions,
+  summarizeUsage,
+  type BillingRestrictions,
+} from '@lumra/billing';
 import type { AccountUsageSummary } from '@lumra/contracts';
 import type { Database } from '@lumra/db';
 
@@ -23,6 +28,14 @@ interface AccountRow extends Record<string, unknown> {
   status: AccountUsageSummary['billingStatus'] | null;
   billing_period_start: Date | string | null;
   billing_period_end: Date | string | null;
+  max_active_galleries: number | null;
+  has_customer: boolean | null;
+  cancel_at_period_end: boolean | null;
+  past_due_since: Date | string | null;
+  restricted_since: Date | string | null;
+  canceled_at: Date | string | null;
+  delivery_paused_reason: 'free_delivery_cap' | 'spend_cap' | null;
+  active_galleries: number;
 }
 
 interface StorageRow extends Record<string, unknown> {
@@ -40,10 +53,40 @@ const toDate = (v: Date | string | null): Date | null =>
   v === null ? null : v instanceof Date ? v : new Date(v);
 const toBytes = (v: string | null): number | null => (v === null ? null : Number(v));
 
+/** Restrictions for display; a row violating its own invariants reads as fully restricted. */
+function restrictionsFor(
+  status: AccountUsageSummary['billingStatus'],
+  row: AccountRow | undefined,
+  now: Date,
+): BillingRestrictions {
+  try {
+    return deriveBillingRestrictions(
+      {
+        status,
+        pastDueSince: toDate(row?.past_due_since ?? null),
+        restrictedSince: toDate(row?.restricted_since ?? null),
+        canceledAt: toDate(row?.canceled_at ?? null),
+      },
+      now,
+    );
+  } catch {
+    return {
+      effectiveStatus: status,
+      uploadsAllowed: false,
+      archivesAllowed: false,
+      publicDeliveryAllowed: false,
+      deliverySuspendsAt: null,
+      retentionEndsAt: null,
+      reasons: [],
+    };
+  }
+}
+
 export async function getAccountUsageSummary(
   db: Database,
   user: { userId: string; email: string | null },
   now = new Date(),
+  options: { paymentsEnabled?: boolean } = {},
 ): Promise<AccountUsageSummary> {
   const { userId } = user;
 
@@ -52,7 +95,12 @@ export async function getAccountUsageSummary(
     select p.email, p.plan_id,
            pl.max_storage_bytes::text as max_storage_bytes,
            pl.max_delivery_bytes_per_month::text as max_delivery_bytes_per_month,
-           ba.status, ba.billing_period_start, ba.billing_period_end
+           ba.status, ba.billing_period_start, ba.billing_period_end,
+           pl.max_active_galleries,
+           ba.stripe_customer_id is not null as has_customer, ba.cancel_at_period_end,
+           ba.past_due_since, ba.restricted_since, ba.canceled_at, ba.delivery_paused_reason,
+           (select count(*)::int from public.galleries g
+             where g.owner_id = u.user_id and g.deleted_at is null) as active_galleries
     from (select ${userId}::uuid as user_id) u
     left join public.profiles p on p.user_id = u.user_id
     left join public.plans pl on pl.id = coalesce(p.plan_id, 'free')
@@ -107,12 +155,30 @@ export async function getAccountUsageSummary(
     deliveryBytes,
   });
 
+  const billingStatus = account?.status ?? 'free';
+  const restrictions = restrictionsFor(billingStatus, account, now);
+  const iso = (d: Date | null) => (d ? d.toISOString() : null);
+
   return {
     email: user.email ?? account?.email ?? null,
     plan: account?.plan_id ?? 'free',
-    billingStatus: account?.status ?? 'free',
+    billingStatus,
     period: { start: period.start.toISOString(), end: period.end.toISOString() },
     storage: { ...usage.storage, itemCount: Number(storage?.item_count ?? 0) },
     delivery: usage.delivery,
+    billing: {
+      paymentsEnabled: options.paymentsEnabled ?? false,
+      hasCustomer: account?.has_customer === true,
+      cancelAtPeriodEnd: account?.cancel_at_period_end === true,
+      uploadsAllowed: restrictions.uploadsAllowed,
+      publicDeliveryAllowed: restrictions.publicDeliveryAllowed,
+      deliverySuspendsAt: iso(restrictions.deliverySuspendsAt),
+      retentionEndsAt: iso(restrictions.retentionEndsAt),
+      deliveryPaused: account?.delivery_paused_reason ?? null,
+      galleries: {
+        active: Number(account?.active_galleries ?? 0),
+        max: account?.max_active_galleries ?? null,
+      },
+    },
   };
 }

@@ -38,10 +38,11 @@ function sqlTables(): Record<string, Set<string>> {
     out[m[1]!] = cols;
   }
   // Later migrations add columns with `alter table public.x add column y ...`.
-  for (const m of sql.matchAll(
-    /alter table public\.(\w+)\s+add column (?:if not exists )?(\w+)/g,
-  )) {
-    out[m[1]!]?.add(m[2]!);
+  // One statement may add several columns (`add column a …, add column b …`).
+  for (const m of sql.matchAll(/alter table public\.(\w+)\s+([^;]*);/g)) {
+    for (const c of m[2]!.matchAll(/(?:^|,)\s*add column (?:if not exists )?(\w+)/g)) {
+      out[m[1]!]?.add(c[1]!);
+    }
   }
   return out;
 }

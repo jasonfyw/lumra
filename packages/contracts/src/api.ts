@@ -17,6 +17,13 @@ export const API_ERROR_CODES = [
   'password_required',
   /** Wrong gallery password (FR-G04). */
   'invalid_password',
+  /**
+   * Public gallery whose delivery is paused (owner's Free delivery cap or spending cap reached,
+   * or billing suspension, PRD §9.4): a calm "temporarily unavailable" notice, never a 500.
+   */
+  'gallery_unavailable',
+  /** Payments are not configured on this deployment (Stripe env unset, T29). */
+  'billing_unavailable',
   'internal',
 ] as const;
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -34,6 +41,8 @@ export const API_ERROR_STATUS: Record<ApiErrorCode, number> = {
   gallery_expired: 410,
   password_required: 401,
   invalid_password: 401,
+  gallery_unavailable: 503,
+  billing_unavailable: 503,
   internal: 500,
 };
 

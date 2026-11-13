@@ -7,7 +7,7 @@ Filled in as the relevant systems land (T13, T38). Each runbook: symptom → das
 - [x] [Gallery access state out of sync / gateway 403s (T20)](#gallery-access-state-kv-sync-t20)
 - [x] [Deleted media / galleries not purged from R2 (T13)](#physical-deletion-purge-t13)
 - [ ] Media gateway 5xx > 1% for 10 min (T20)
-- [ ] Stripe webhook unresolved > 15 min (T29)
+- [x] [Stripe webhook unresolved > 15 min / billing state (T29–T33)](#stripe-webhooks-and-billing-state-t29t33)
 - [ ] Billed vs provider consumption drift > 10% (T31)
 - [ ] Suspected unauthorized disclosure — P1 incident (T34)
 - [ ] Database restore from PITR (T37)
@@ -195,6 +195,42 @@ doesn't match the key scheme; those objects are left for the R2 orphan reconcile
 delete (≤ 5 min TTL) can fetch the object only until the purge removes it (normally within a minute
 of the delete; the gateway then answers 404 `object_missing`). Gallery deletion is enforced at once
 through the KV tombstone and the `access_version` bump.
+
+## Stripe webhooks and billing state (T29–T33)
+
+**Setup** (once per Stripe mode; see [BILLING.md](BILLING.md#stripe-setup-scriptsstripe-setupmjs)):
+
+1. `STRIPE_SECRET_KEY=sk_… node scripts/stripe-setup.mjs --app-url https://www.lumra.photos`
+   (`--dry-run` first). It prints product/price/meter/portal ids; nothing needs to be copied into env.
+2. Stripe Dashboard → Developers → Webhooks → add endpoint
+   `https://www.lumra.photos/api/v1/billing/webhook` with events `checkout.session.completed`,
+   `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`.
+   Copy its signing secret.
+3. Vercel → project env (Production; Preview with test keys): `STRIPE_SECRET_KEY`,
+   `STRIPE_WEBHOOK_SECRET`. Redeploy. Locally: `stripe listen --forward-to
+localhost:3000/api/v1/billing/webhook` prints a `whsec_…` for `.env.local`.
+
+**Symptoms**: Stripe shows failing deliveries; a customer paid but `/account` still says Free;
+`stripe webhook signature rejected` in logs (wrong secret / wrong mode); 503s on the webhook
+(env not set — Stripe keeps retrying for 3 days, so setting the env recovers everything).
+
+```sql
+-- Unhandled or failing events (payloads are not stored; look them up in Stripe by id).
+select provider_event_id, event_type, status, attempt_count, last_error, received_at
+from public.provider_webhook_events where status in ('received', 'failed') order by received_at;
+-- One account's billing state.
+select status, stripe_customer_id, stripe_subscription_id, stripe_subscription_status,
+       past_due_since, restricted_since, canceled_at, delivery_paused_reason, subscription_event_at
+from public.billing_accounts where user_id = '…';
+```
+
+**Mitigate**: fix the cause, then **resend the event from the Stripe Dashboard** (processing is
+idempotent; handled events are no-ops). Never edit `status` by hand without also enqueueing
+`select public.enqueue_owner_access_sync('<user>', 'manual')` so the gateway sees the change. A paused
+account (`delivery_paused_reason`) resumes automatically at the next period / cap raise / upgrade; to
+lift it early set both pause columns to null and enqueue the same sync. Logs to grep:
+`stripe webhook handled` (`outcome`, `reason`), `billing account updated from stripe`,
+`delivery paused` / `delivery resumed`, `billing sweep finished`.
 
 ## Observability (T04)
 

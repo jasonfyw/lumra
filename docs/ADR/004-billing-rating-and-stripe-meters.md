@@ -91,6 +91,46 @@ sampled step integration (previous sample held until the run, cursor moved atomi
 optimistic lock); delivery rows come from the gateway's `delivery.served` events keyed by their `dedupeKey`.
 Details and accepted approximations are in `docs/BILLING.md` ("Metering").
 
+## Amendment 2026-11-13 (T28–T33): overage-only meters, webhook route, cancellation policy
+
+**Meters carry overage only, in MB.** Superseding the "Stripe mapping" above: Lumra already
+computes the allowance, so Stripe receives only usage above it, and the Stripe prices are flat
+per-unit prices with no free tier. Two meters (`sum` aggregation, `stripe_customer_id` → customer,
+`value` payload key):
+
+- `lumra_storage_overage`: MB-months above the included GB-months (1 MB-month = 10⁶ bytes held for
+  one 30-day month). Price `lumra_pro_storage_overage_v1`: `unit_amount_decimal` 0.01 ¢
+  ($0.10/GB-month ÷ 1000).
+- `lumra_delivery_overage`: MB above the included GB. Price `lumra_pro_delivery_overage_v1`: 0.003 ¢
+  ($0.03/GB ÷ 1000).
+
+MB keeps meter values readable integers (1 TB of overage = 10⁶ units) while the rounding (½ MB per
+period, cumulative export) stays far below a cent. A graduated free tier in Stripe would duplicate the
+allowance in two places and break as soon as allowances change mid-period. Lookup keys (never ids)
+identify the prices, so test and live mode share code; `scripts/stripe-setup.mjs` creates the catalog
+idempotently (Billing Meters could not be created through the Stripe MCP). `buildMeterEvents` moves to
+these meters with T31; the cumulative-delta export and identifier rules above are unchanged.
+
+**Webhook route.** The endpoint is `POST /api/v1/billing/webhook` (PRD §10 lists
+`/api/v1/webhooks/stripe`), next to checkout/portal/usage; the contract (raw-body signature, dedupe
+by event id) is unchanged. Recorded here rather than adding a second path.
+
+**Entitlements and cancellation.** Billing status is derived only from `customer.subscription.*`
+payloads (`applySubscriptionSnapshot`), ordered by `event.created`. A cancellation becomes `free`
+when the account fits the Free caps; otherwise it stays `canceled` (uploads, archives and public
+delivery stopped, media kept 30 days) until the owner trims it or subscribes again — the
+`canceled → free` edge of the transition table, applied by the hourly sweep. `unpaid` keeps the
+original `past_due` grace clock; `paused` restricts at once. A `past_due`/`unpaid` event after the
+sweep restricted the account keeps it `restricted`.
+
+**Delivery cutoff persistence.** `checkDeliveryAllowance` decisions are persisted as
+`billing_accounts.delivery_paused_reason` and mirrored into the existing KV `deliverySuspended` flag,
+so the media gateway needed no change.
+
+**Notifications.** Transition notices and alerts are `email.send` outbox events keyed for
+once-only delivery; until an application email provider is configured the worker logs and acks them
+and the in-app banners carry the message.
+
 ## Consequences
 
 - Rating, estimation and invoices share one code path (`computeOverage`), so the estimate shown before an
