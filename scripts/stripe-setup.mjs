@@ -26,8 +26,8 @@ export const CATALOG = {
   productKey: 'lumra_pro',
   productName: 'Lumra Pro',
   // Required by Stripe Managed Payments (on by default): Checkout rejects products without one.
-  // SaaS - personal use.
-  taxCode: 'txcd_10103000',
+  // SaaS - business use (owner-confirmed).
+  taxCode: 'txcd_10103001',
   currency: 'usd',
   base: { lookupKey: 'lumra_pro_monthly_v1', unitAmountCents: 200 },
   // Rates in micro-USD per GB(-month) from RATE_CARD_V1.pro; meter units are MB (10^6 bytes).
