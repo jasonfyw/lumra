@@ -54,7 +54,6 @@ export class StripeCatalogError extends Error {
 export interface CatalogPrices {
   base: string;
   storageOverage: string;
-  deliveryOverage: string;
 }
 
 const CACHE_MS = 10 * 60 * 1000;
@@ -79,7 +78,6 @@ export async function resolveCatalogPrices(
   const prices: CatalogPrices = {
     base: byKey.get(catalog.prices.base)!,
     storageOverage: byKey.get(catalog.prices.storageOverage)!,
-    deliveryOverage: byKey.get(catalog.prices.deliveryOverage)!,
   };
   priceCache = { at: nowMs, prices };
   return prices;

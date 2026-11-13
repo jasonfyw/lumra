@@ -1,13 +1,7 @@
 import { BYTES_PER_GB, RATE_CARD_V1 } from '@lumra/config';
 import { describe, expect, it } from 'vitest';
 import { USAGE_METRICS, sumLedger } from './ledger';
-import {
-  METERED_ACTIONS,
-  billingPeriodAt,
-  planStorageAccrual,
-  rateDeliveryEvents,
-  type DeliveryAccountContext,
-} from './metering';
+import { METERED_ACTIONS, billingPeriodAt, planStorageAccrual } from './metering';
 import { rateInvoice } from './rating';
 import { storageGbMonthMicroUnits } from './units';
 
@@ -178,72 +172,14 @@ describe('planStorageAccrual', () => {
   });
 });
 
-describe('rateDeliveryEvents', () => {
-  const accounts = new Map<string, DeliveryAccountContext>([
-    [acct, { account: null, plan: pro }],
-    ['free-acct', { account: null, plan: free }],
-  ]);
-  const servedAt = new Date('2026-11-09T12:00:00Z');
-
-  it('builds one delivery_bytes row per event, deduping repeated source ids in a batch', () => {
-    const entries = rateDeliveryEvents({
-      events: [
-        { sourceId: 'jti-a:0-99', accountId: acct, bytes: 100, servedAt },
-        { sourceId: 'jti-a:0-99', accountId: acct, bytes: 100, servedAt },
-        { sourceId: 'jti-b:0-49', accountId: acct, bytes: 50, servedAt },
-      ],
-      accounts,
-      deliveryBytesToDate: () => 0n,
-    });
-    expect(entries.map((e) => [e.sourceId, e.quantity, e.unit])).toEqual([
-      ['jti-a:0-99', 100n, 'byte'],
-      ['jti-b:0-49', 50n, 'byte'],
-    ]);
-    expect(entries[0]!.idempotencyKey).toBe('delivery_bytes:jti-a:0-99');
-    expect(entries[0]!.periodStart).toEqual(new Date('2026-11-01T00:00:00Z'));
-  });
-
-  it('prices only bytes beyond the allowance, cumulatively across the batch', () => {
-    const fiveGb = 5n * BigInt(GB);
-    const entries = rateDeliveryEvents({
-      events: [
-        { sourceId: 'a', accountId: acct, bytes: GB / 2, servedAt },
-        { sourceId: 'b', accountId: acct, bytes: GB, servedAt: new Date(servedAt.getTime() + 1) },
-      ],
-      accounts,
-      deliveryBytesToDate: () => fiveGb - BigInt(GB / 2),
-    });
-    // First half-GB fills the allowance exactly; the next GB is $0.03.
-    expect(entries.map((e) => e.estimatedCostMicroUsd)).toEqual([0, 30_000]);
-  });
-
-  it('never prices Free delivery', () => {
-    const [row] = rateDeliveryEvents({
-      events: [{ sourceId: 'f', accountId: 'free-acct', bytes: 10 * GB, servedAt }],
-      accounts,
-      deliveryBytesToDate: () => 100n * BigInt(GB),
-    });
-    expect(row!.estimatedCostMicroUsd).toBe(0);
-  });
-
-  it('throws for an account without billing context', () => {
-    expect(() =>
-      rateDeliveryEvents({
-        events: [{ sourceId: 'x', accountId: 'unknown', bytes: 1, servedAt }],
-        accounts,
-        deliveryBytesToDate: () => 0n,
-      }),
-    ).toThrow();
-  });
-});
-
 describe('ledger coverage', () => {
-  it('every usage metric has a metered-action producer', () => {
+  it('every usage metric has a metered-action producer; storage is the only one (ADR-008)', () => {
     expect(Object.keys(METERED_ACTIONS).sort()).toEqual([...USAGE_METRICS].sort());
+    expect([...USAGE_METRICS]).toEqual(['storage_byte_seconds']);
   });
 
-  it('metered rows for the PRD §9.3 example rate to exactly $4.20', () => {
-    // 30 GB stored for a whole 30-day month, accrued hourly; 45 GB delivered in 45 responses.
+  it('metered rows for the PRD §9.3 example rate to exactly $3.00', () => {
+    // 30 GB stored for a whole 30-day month, accrued hourly: $2.00 + (30 − 20) × $0.10.
     const month = 30 * 24;
     const start = new Date('2026-11-01T00:00:00Z');
     let cursor = { accruedThrough: start, storedBytes: 30 * GB };
@@ -263,28 +199,15 @@ describe('ledger coverage', () => {
       toDate += result.entries.reduce((s, e) => s + e.quantity, 0n);
       cursor = result.nextCursor;
     }
-    rows.push(
-      ...rateDeliveryEvents({
-        events: Array.from({ length: 45 }, (_, i) => ({
-          sourceId: `jti-${i}:0-${GB - 1}`,
-          accountId: acct,
-          bytes: GB,
-          servedAt: new Date(start.getTime() + i * HOUR),
-        })),
-        accounts: new Map([[acct, { account: null, plan: pro }]]),
-        deliveryBytesToDate: () => 0n,
-      }),
-    );
     const totals = sumLedger(rows);
     const invoice = rateInvoice({
       plan: pro,
       rateVersion: 1,
       storageGbMonthMicro: storageGbMonthMicroUnits(totals.storage_byte_seconds),
-      deliveryBytes: totals.delivery_bytes,
     });
-    expect(invoice.totalMicroUsd).toBe(4_200_000);
-    expect(invoice.totalCents).toBe(420);
+    expect(invoice.totalMicroUsd).toBe(3_000_000);
+    expect(invoice.totalCents).toBe(300);
     // Row-level estimates add up to the same overage (no hidden rounding drift).
-    expect(rows.reduce((s, r) => s + r.estimatedCostMicroUsd, 0)).toBe(2_200_000);
+    expect(rows.reduce((s, r) => s + r.estimatedCostMicroUsd, 0)).toBe(1_000_000);
   });
 });

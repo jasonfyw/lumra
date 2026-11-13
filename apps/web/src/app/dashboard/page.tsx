@@ -41,7 +41,7 @@ export default async function DashboardPage({
   const cursor = rawCursor ? decodeKeysetCursor(rawCursor) : null;
   const [page, summary] = await Promise.all([
     listGalleriesForOwner(user.userId, { limit: PAGE_SIZE, cursor }),
-    // Billing banners (past due, delivery paused, …) link to /account (T28/T33).
+    // Billing banners (past due, spend-cap alerts, …) link to /account (T28/T33).
     getAccountUsageSummary(getDb(), user, new Date(), { paymentsEnabled: isBillingConfigured() }),
   ]);
   const appUrl = serverEnv().NEXT_PUBLIC_APP_URL;

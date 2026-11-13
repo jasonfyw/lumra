@@ -25,19 +25,17 @@ function Feature({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** PRD §9.3 example: 30 GB-month stored + 45 GB delivered on Pro. */
+/** PRD §9.3 example: 30 GB-month stored on Pro. Delivery is free (ADR-008). */
 export function workedExample(pro: PlanRates, policy: BillingPolicy = BILLING_POLICY_V1) {
   const storedGbMonth = 30;
-  const deliveredGb = 45;
   const byteSeconds =
     BigInt(storedGbMonth) * BigInt(BYTES_PER_GB) * BigInt(policy.secondsPerBillingMonth);
   const invoice = rateInvoice({
     plan: pro,
     storageGbMonthMicro: storageGbMonthMicroUnits(byteSeconds, policy.secondsPerBillingMonth),
-    deliveryBytes: deliveredGb * BYTES_PER_GB,
     rateVersion: pro.rateVersion,
   });
-  return { storedGbMonth, deliveredGb, invoice };
+  return { storedGbMonth, invoice };
 }
 
 export function PricingView({
@@ -64,7 +62,8 @@ export function PricingView({
         <h1 className="lm-title-1">Pricing</h1>
         <p className="lm-body-lg text-[var(--color-ink-muted)]">
           Start free. Pro is {formatUsd(pro.monthlyFeeMicroUsd)} a month with a generous allowance,
-          and you only pay for storage and delivery above it — with a spending cap you control.
+          and you only pay for storage above it — with a spending cap you control. Viewing and
+          downloading your galleries is never metered or charged.
         </p>
       </header>
 
@@ -88,15 +87,13 @@ export function PricingView({
           <ul className="flex flex-col gap-2">
             <Feature>{free.maxActiveGalleries ?? 'Unlimited'} active galleries</Feature>
             <Feature>{formatGigabytes(free.maxStorageBytes ?? 0)} of photos in total</Feature>
-            <Feature>
-              {formatGigabytes(free.maxDeliveryBytesPerMonth ?? 0)} of delivery a month
-            </Feature>
+            <Feature>Views and downloads included, not metered</Feature>
             <Feature>No card needed, never billed</Feature>
             <Feature>A small “Made with Lumra” badge on shared galleries</Feature>
           </ul>
           <p className="text-sm text-[var(--color-ink-muted)]">
-            Limits are hard caps: when one is reached, new uploads pause, or shared galleries show
-            “temporarily unavailable” until next month — you are never charged.
+            Limits are hard caps: when one is reached, new uploads or galleries are refused — you
+            are never charged. Shared galleries stay online.
           </p>
           <div className="mt-auto">
             <Link href="/new" className={buttonClass('secondary', 'md', 'min-h-11')}>
@@ -121,11 +118,10 @@ export function PricingView({
           <ul className="flex flex-col gap-2">
             <Feature>Unlimited galleries (fair use)</Feature>
             <Feature>{pro.includedStorageGbMonth} GB-month of storage included</Feature>
-            <Feature>{pro.includedDeliveryGb} GB of delivery a month included</Feature>
             <Feature>
-              Then {formatUsdRate(pro.storageOverageMicroUsdPerGbMonth ?? 0)} per GB-month and{' '}
-              {formatUsdRate(pro.deliveryOverageMicroUsdPerGb ?? 0)} per GB delivered
+              Then {formatUsdRate(pro.storageOverageMicroUsdPerGbMonth ?? 0)} per GB-month
             </Feature>
+            <Feature>Views and downloads included, not metered</Feature>
             {cap !== null && (
               <Feature>
                 Spending cap of {formatUsd(cap)} in overages by default, adjustable, with alerts at{' '}
@@ -169,9 +165,7 @@ export function PricingView({
         <h2 id="pricing-example" className="text-xl font-semibold">
           Example month on Pro
         </h2>
-        <p className="text-[var(--color-ink-muted)]">
-          {example.storedGbMonth} GB-month stored and {example.deliveredGb} GB delivered:
-        </p>
+        <p className="text-[var(--color-ink-muted)]">{example.storedGbMonth} GB-month stored:</p>
         <table className="w-full max-w-lg border-collapse text-left tabular-nums">
           <tbody>
             <tr className="border-b border-[var(--color-hairline)]">
@@ -189,15 +183,6 @@ export function PricingView({
               </th>
               <td className="py-2 text-right">
                 {formatUsd(line('storage_overage')?.amountMicroUsd ?? 0)}
-              </td>
-            </tr>
-            <tr className="border-b border-[var(--color-hairline)]">
-              <th scope="row" className="py-2 font-normal">
-                Delivery: ({example.deliveredGb} − {pro.includedDeliveryGb}) GB ×{' '}
-                {formatUsdRate(pro.deliveryOverageMicroUsdPerGb ?? 0)}
-              </th>
-              <td className="py-2 text-right">
-                {formatUsd(line('delivery_overage')?.amountMicroUsd ?? 0)}
               </td>
             </tr>
             <tr>
@@ -232,18 +217,18 @@ export function PricingView({
             </dd>
           </div>
           <div>
-            <dt className="font-medium">Delivery</dt>
+            <dt className="font-medium">Views and downloads</dt>
             <dd className="text-[var(--color-ink-muted)]">
-              Bytes of photos served to viewers — previews, full-size views and downloads. Repeat
-              retries of the same transfer are counted once.
+              Not metered and not charged on any plan: previews, full-size views and downloads are
+              included.
             </dd>
           </div>
           <div>
             <dt className="font-medium">Spending cap</dt>
             <dd className="text-[var(--color-ink-muted)]">
-              Uploads and downloads that would exceed your cap are refused, and delivery pauses at
-              the cap. Transfers already in progress can finish, so the final overage can exceed the
-              cap by at most{' '}
+              Covers storage overage. Uploads that would take your projected overage past the cap
+              are refused; shared galleries stay online. Usage readings lag slightly, so the final
+              overage can exceed the cap by at most{' '}
               {cap !== null ? formatUsd(spendCapToleranceMicroUsd(cap, policy)) : 'a small amount'}{' '}
               ({policy.spendCapToleranceBps / 100}% of the cap, at least{' '}
               {formatUsd(policy.spendCapToleranceMinMicroUsd)}).

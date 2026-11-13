@@ -1,6 +1,6 @@
 # 004. Billing rating, rounding and Stripe meter mapping
 
-Status: Accepted · Date: 2026-11-05 · Task: T27
+Status: Accepted · Date: 2026-11-05 · Task: T27 · Delivery parts superseded by ADR-008 (2026-11-13)
 
 ## Context
 
@@ -130,6 +130,17 @@ so the media gateway needed no change.
 **Notifications.** Transition notices and alerts are `email.send` outbox events keyed for
 once-only delivery; until an application email provider is configured the worker logs and acks them
 and the in-app banners carry the message.
+
+## Amendment 2026-11-13 (ADR-008): delivery removed from pricing
+
+Delivery is no longer tracked, capped or charged. Everything above about `delivery_bytes`, the
+delivery meter/price (`lumra_delivery_gb_micro`, `lumra_delivery_overage`,
+`lumra_pro_delivery_overage_v1`), delivery reservations for archives, the delivery safety cutoff
+(`checkDeliveryAllowance`, `delivery_paused_reason`) and the Free 3 GB delivery cap is **superseded**
+and removed from code and schema. Storage (`storage_byte_seconds`) is the only metric and the
+`lumra_storage_overage` meter the only meter; the spending cap covers storage overage only and is
+enforced at upload admission. The rounding, cumulative export and ledger rules are unchanged. See
+ADR-008 for the migration and risk.
 
 ## Consequences
 

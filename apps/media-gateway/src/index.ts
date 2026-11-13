@@ -1,6 +1,5 @@
 import * as Sentry from '@sentry/cloudflare';
 import { mediaGatewayEnvSchema, parseEnv, type MediaGatewayEnv } from '@lumra/config';
-import type { QueueMessage } from '@lumra/contracts';
 import {
   createLogger,
   generateRequestId,
@@ -29,8 +28,6 @@ export interface Env {
   ARCHIVES: R2Bucket;
   /** Gallery access state mirrored by the web app (`gallery:{id}`). */
   ACCESS_STATE: KVNamespace;
-  /** Producer for `delivery.served` usage events. */
-  USAGE: Queue<QueueMessage>;
 }
 
 // Per-isolate caches: parsed env and the KV store (whose ≤5 s memo must outlive a request).
@@ -111,7 +108,7 @@ async function route(
   let config: MediaGatewayEnv;
   try {
     config = loadEnv(env);
-    if (!env.ORIGINALS || !env.DERIVATIVES || !env.ARCHIVES || !env.ACCESS_STATE || !env.USAGE) {
+    if (!env.ORIGINALS || !env.DERIVATIVES || !env.ARCHIVES || !env.ACCESS_STATE) {
       throw new Error('missing binding');
     }
   } catch (error) {
@@ -144,10 +141,8 @@ async function route(
     keyring: config.MEDIA_TOKEN_SECRET,
     accessStore: accessStore(env.ACCESS_STATE),
     buckets: { originals: env.ORIGINALS, derivatives: env.DERIVATIVES, archives: env.ARCHIVES },
-    usage: env.USAGE,
     allowedOrigins: config.APP_ORIGIN,
     now: () => new Date(),
-    waitUntil: (promise) => ctx.waitUntil(promise),
     log: (level, msg, fields) => log[level](msg, fields),
   };
 

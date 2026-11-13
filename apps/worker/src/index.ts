@@ -1,11 +1,6 @@
 import * as Sentry from '@sentry/cloudflare';
 import { parseEnv, PROCESSOR_LIMITS, workerEnvSchema } from '@lumra/config';
-import {
-  deliveryServedMessageSchema,
-  queueMessageSchema,
-  type DeliveryServedMessage,
-  type QueueMessage,
-} from '@lumra/contracts';
+import { queueMessageSchema, type QueueMessage } from '@lumra/contracts';
 import {
   healthPayload,
   REQUEST_ID_HEADER,
@@ -17,11 +12,11 @@ import type { Env } from './env';
 import { archiveCrc32 } from './crc';
 import { syncGalleryAccessState } from './handlers/access-state';
 import { handleArchiveBuild, RetryLaterError } from './handlers/archive-build';
-import { evaluateBillingSafeguards, handleEmailSend, runBillingSweep } from './handlers/billing';
+import { handleEmailSend, runBillingSweep } from './handlers/billing';
 import { runMeterExport, stripeMeterSender } from './handlers/meter-export';
 import { sweepArchives } from './handlers/archive-sweep';
 import { handleMediaUploaded } from './handlers/media-uploaded';
-import { ingestDeliveryEvents, runStorageAccrual } from './handlers/metering';
+import { runStorageAccrual } from './handlers/metering';
 import { purgeGallery, purgeMedia, sweepDeletions, type PurgeDeps } from './handlers/purge';
 import { bounded, type StepTimings } from './instrument';
 import { loggerFor, type Logger } from './log';
@@ -195,7 +190,7 @@ export const DELETION_SWEEP_CRON = '*/15 * * * *';
 export const DELETION_SWEEP_BUDGET_MS = 50_000;
 /**
  * Hourly storage GB-month accrual (T27), off the hour and away from the other crons; the billing
- * sweep (T33: past-due grace, canceled → free, delivery cutoff) runs right after it.
+ * sweep (T33: past-due grace, canceled → free, spend-cap alerts) runs right after it.
  */
 export const STORAGE_ACCRUAL_CRON = '7 * * * *';
 /**
@@ -209,14 +204,6 @@ export const METER_EXPORT_CRON = '17 3 * * *';
 
 /** Wall-time budget for one accrual run; unfinished accounts are picked up next hour. */
 export const STORAGE_ACCRUAL_BUDGET_MS = 50_000;
-
-/**
- * Usage queues carry `delivery.served` events from the media gateway (`lumra-usage-dev`,
- * `lumra-usage-staging`, `lumra-usage`); they are ingested in whole batches into the ledger.
- */
-export function isUsageQueue(queueName: string): boolean {
-  return /^lumra-usage(-(dev|staging))?$/.test(queueName);
-}
 
 /** Path of the finalize "kick" (web → worker after an upload commits). */
 export const RELAY_KICK_PATH = '/internal/relay';
@@ -404,82 +391,6 @@ export function createWorker(options: WorkerOptions = {}) {
     }
   }
 
-  /**
-   * One `lumra-usage-*` batch → one ledger insert (T27). Malformed messages are acked and logged
-   * (they can never succeed); any DB failure retries the whole batch, which is safe because
-   * ingestion is idempotent per event `dedupeKey`.
-   */
-  async function runUsageBatch(
-    batch: MessageBatch<unknown>,
-    services: Services,
-    log: Logger,
-  ): Promise<void> {
-    const valid: { message: Message<unknown>; event: DeliveryServedMessage }[] = [];
-    for (const message of batch.messages) {
-      const parsed = deliveryServedMessageSchema.safeParse(message.body);
-      if (parsed.success) valid.push({ message, event: parsed.data });
-      else {
-        log.error('invalid usage message', { messageId: message.id, queue: batch.queue });
-        message.ack();
-      }
-    }
-    if (valid.length === 0) return;
-    const started = now();
-    const timings: StepTimings = {};
-    try {
-      const result = await withDeadline('usage batch', DEADLINES.jobMs, async (signal) => {
-        const repo = services.billingRepo();
-        const opts = { signal, timings };
-        const ingested = await ingestDeliveryEvents(
-          valid.map((v) => v.event),
-          {
-            repo: bounded(repo, 'db', DEADLINES.dbStepMs, opts),
-            ledger: bounded(repo.ledger, 'db.ledger', DEADLINES.dbStepMs, opts),
-            log,
-          },
-        );
-        // Delivery safety cutoff (T28 Free cap / T32 spend cap) for the accounts just metered.
-        // A failure retries the batch: ingestion is idempotent, so only the evaluation re-runs.
-        const safeguards = await evaluateBillingSafeguards(ingested.accountIds, {
-          repo: bounded(services.billingStateRepo(), 'db.billing', DEADLINES.dbStepMs, opts),
-          log,
-          now: () => new Date(now()),
-          traceId: `usage:${batch.queue}`,
-        });
-        return { ingested, safeguards };
-      });
-      for (const { message } of valid) message.ack();
-      log.info('usage batch ingested', {
-        received: result.ingested.received,
-        inserted: result.ingested.inserted,
-        duplicates: result.ingested.duplicates,
-        skippedGuest: result.ingested.skippedGuest,
-        skippedUnknownGallery: result.ingested.skippedUnknownGallery,
-        skippedNoAccount: result.ingested.skippedNoAccount,
-        safeguards: result.safeguards,
-        ms: now() - started,
-        steps: timings,
-      });
-    } catch (error) {
-      const attempts = Math.max(...valid.map((v) => v.message.attempts));
-      const delaySeconds = isDeadlineExceeded(error)
-        ? timeoutRetryDelaySeconds(attempts)
-        : retryDelaySeconds(attempts);
-      log.error('usage batch failed', {
-        size: valid.length,
-        attempt: attempts,
-        err: error,
-        retryInSeconds: delaySeconds,
-        steps: timings,
-      });
-      Sentry.withScope((scope) => {
-        scope.setTag('jobType', 'delivery.served');
-        Sentry.captureException(error);
-      });
-      for (const { message } of valid) message.retry({ delaySeconds });
-    }
-  }
-
   /** Hourly storage accrual run (T27). Per-account failures are logged inside the run. */
   async function storageAccrualTick(services: Services, log: Logger): Promise<void> {
     const started = now();
@@ -493,7 +404,7 @@ export function createWorker(options: WorkerOptions = {}) {
     log.info('storage accrual finished', { ...result, ms: now() - started, steps: timings });
   }
 
-  /** Hourly billing maintenance (T33) + delivery cutoff re-evaluation (T28/T32). */
+  /** Hourly billing maintenance (T33) + spend-cap alerts (T32). */
   async function billingSweepTick(services: Services, log: Logger): Promise<void> {
     const started = now();
     const timings: StepTimings = {};
@@ -630,14 +541,6 @@ export function createWorker(options: WorkerOptions = {}) {
       const log = loggerFor(env);
       const services = makeServices(env);
       const started = now();
-      if (isUsageQueue(batch.queue)) {
-        try {
-          await runUsageBatch(batch, services, log);
-        } finally {
-          await closeServices(services, log, ctx);
-        }
-        return;
-      }
       const offset = Math.floor(random() * PROCESSOR_POOL_SIZE) % PROCESSOR_POOL_SIZE;
       let nextSlot = 0;
       const slots = batch.messages.map((message) => {

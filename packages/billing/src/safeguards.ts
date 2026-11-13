@@ -1,29 +1,25 @@
 import type { PlanRates } from '@lumra/config';
-import type { BillingAccountState } from './account';
-import { checkDeliveryAllowance, effectiveCapMicroUsd } from './admission';
-import { type DeliveryPauseReason, deliveryPauseFor } from './delivery-pause';
+import { effectiveCapMicroUsd } from './admission';
 import { estimateOverageMicroUsd, planBillsOverage } from './rating';
 import { newAlertThresholds } from './spend';
 import type { BillingPeriod } from './usage-summary';
 
 /**
- * Delivery safety cutoff runner (PRD §9.4, T28/T32), shared by the worker (after every delivery
- * batch and in the hourly sweep) and the web app (after a webhook changes the plan, or the owner
- * changes the cap). The decision is `checkDeliveryAllowance`; this only compares it with the
- * persisted pause and asks the store to flip it. Persistence lives in `@lumra/db`
- * (`createBillingStateRepository`).
+ * Spend-cap alert runner (PRD §9.4, T32), shared by the worker (hourly sweep, after storage
+ * accrual) and the web app (after a webhook changes the plan, or the owner changes the cap).
+ * The cap only covers storage overage: uploads that would exceed it are refused at admission
+ * (`checkAdmission`); delivery is neither metered nor capped (ADR-008). Persistence lives in
+ * `@lumra/db` (`createBillingStateRepository`).
  */
 
-/** One account's inputs for `checkDeliveryAllowance` (period = the one containing `now`). */
+/** One account's inputs (period = the one containing `now`). */
 export interface SafeguardContext {
   accountId: string;
   plan: PlanRates;
-  account: BillingAccountState;
   spendCapMicroUsd: number | null;
   warningThresholdsPct: number[];
-  deliveryPausedReason: DeliveryPauseReason | null;
   period: BillingPeriod;
-  usage: { storageByteSecondsToDate: bigint; deliveryBytesToDate: number };
+  usage: { storageByteSecondsToDate: bigint };
   /** Spend-cap alert thresholds already recorded for this period (T32 dedupe). */
   alertsSent: number[];
 }
@@ -38,17 +34,6 @@ export interface EmailNotice {
 export interface SafeguardStore {
   safeguardContexts(accountIds: readonly string[], now: Date): Promise<SafeguardContext[]>;
   /**
-   * Compare-and-set of `delivery_paused_reason` from `expected` to `next`; in the same
-   * transaction the owner's published galleries are re-synced to KV and `notice` is enqueued.
-   * Returns false (writing nothing) when another writer changed it first.
-   */
-  setDeliveryPause(
-    accountId: string,
-    expected: DeliveryPauseReason | null,
-    next: DeliveryPauseReason | null,
-    options: { traceId: string; notice?: EmailNotice },
-  ): Promise<boolean>;
-  /**
    * Records spend-cap alerts once per (account, period, threshold) and enqueues one
    * `spend_cap_alert` email per newly recorded threshold. Returns the thresholds recorded now.
    */
@@ -60,35 +45,17 @@ export interface SafeguardStore {
   ): Promise<number[]>;
 }
 
-export interface SafeguardChange {
-  accountId: string;
-  /** New pause reason, or null when delivery resumed. */
-  paused: DeliveryPauseReason | null;
-}
-
 export interface SafeguardResult {
   evaluated: number;
-  paused: number;
-  resumed: number;
-  /** Another writer moved the pause first; the next evaluation converges. */
-  conflicts: number;
   /** Spend-cap alert thresholds recorded in this run (T32). */
   alerts: number;
-  changes: SafeguardChange[];
 }
 
 export async function evaluateBillingSafeguards(
   accountIds: readonly string[],
   deps: { store: SafeguardStore; now: Date; traceId: string },
 ): Promise<SafeguardResult> {
-  const result: SafeguardResult = {
-    evaluated: 0,
-    paused: 0,
-    resumed: 0,
-    conflicts: 0,
-    alerts: 0,
-    changes: [],
-  };
+  const result: SafeguardResult = { evaluated: 0, alerts: 0 };
   if (accountIds.length === 0) return result;
   const contexts = await deps.store.safeguardContexts(accountIds, deps.now);
   for (const ctx of contexts) {
@@ -97,56 +64,19 @@ export async function evaluateBillingSafeguards(
     const cap = planBillsOverage(ctx.plan)
       ? effectiveCapMicroUsd(ctx.plan, ctx.spendCapMicroUsd)
       : null;
-    if (cap !== null) {
-      const spend = estimateOverageMicroUsd(
-        {
-          storageByteSeconds: ctx.usage.storageByteSecondsToDate,
-          deliveryBytes: ctx.usage.deliveryBytesToDate,
-        },
-        ctx.plan,
-      );
-      const due = newAlertThresholds(spend, cap, ctx.warningThresholdsPct, ctx.alertsSent);
-      if (due.length > 0) {
-        const recorded = await deps.store.recordSpendAlerts(ctx.accountId, ctx.period.start, due, {
-          spendMicroUsd: spend,
-          capMicroUsd: cap,
-          traceId: deps.traceId,
-        });
-        result.alerts += recorded.length;
-      }
-    }
-    const decision = checkDeliveryAllowance({
-      plan: ctx.plan,
-      account: ctx.account,
-      now: deps.now,
-      usage: ctx.usage,
-      capMicroUsd: ctx.spendCapMicroUsd,
-    });
-    const next = deliveryPauseFor(decision);
-    if (next === ctx.deliveryPausedReason) continue;
-    const notice: EmailNotice | undefined = next
-      ? {
-          template: 'delivery_paused',
-          dedupeKey: `email:delivery_paused:${ctx.accountId}:${ctx.period.start.toISOString()}:${next}`,
-          data: { reason: next, periodEnd: ctx.period.end.toISOString() },
-        }
-      : undefined;
-    const changed = await deps.store.setDeliveryPause(
-      ctx.accountId,
-      ctx.deliveryPausedReason,
-      next,
-      {
-        traceId: deps.traceId,
-        ...(notice ? { notice } : {}),
-      },
+    if (cap === null) continue;
+    const spend = estimateOverageMicroUsd(
+      { storageByteSeconds: ctx.usage.storageByteSecondsToDate },
+      ctx.plan,
     );
-    if (!changed) {
-      result.conflicts++;
-      continue;
-    }
-    if (next) result.paused++;
-    else result.resumed++;
-    result.changes.push({ accountId: ctx.accountId, paused: next });
+    const due = newAlertThresholds(spend, cap, ctx.warningThresholdsPct, ctx.alertsSent);
+    if (due.length === 0) continue;
+    const recorded = await deps.store.recordSpendAlerts(ctx.accountId, ctx.period.start, due, {
+      spendMicroUsd: spend,
+      capMicroUsd: cap,
+      traceId: deps.traceId,
+    });
+    result.alerts += recorded.length;
   }
   return result;
 }

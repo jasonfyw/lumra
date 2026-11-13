@@ -3,7 +3,6 @@
  * (`@cloudflare/vitest-pool-workers` does not yet support the repo's Vitest major.)
  * They model only the binding behaviour the gateway relies on.
  */
-import type { QueueMessage } from '@lumra/contracts';
 
 interface StoredObject {
   bytes: Uint8Array;
@@ -72,16 +71,6 @@ export class FakeKv {
 
   async put(key: string, value: string): Promise<void> {
     this.data.set(key, value);
-  }
-}
-
-export class FakeQueue {
-  readonly messages: QueueMessage[] = [];
-  fail = false;
-
-  async send(message: QueueMessage): Promise<void> {
-    if (this.fail) throw new Error('queue unavailable');
-    this.messages.push(message);
   }
 }
 

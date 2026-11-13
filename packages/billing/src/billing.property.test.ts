@@ -26,17 +26,15 @@ const int = (min: number, max: number) =>
   fc.bigInt({ min: BigInt(min), max: BigInt(max) }).map(Number);
 
 const byteSeconds = fc.bigInt({ min: 0n, max: 10n ** 19n });
-const deliveryBytes = int(0, 10 ** 15);
 
 describe('rating properties', () => {
   it('Free never yields a positive overage or extra line', () => {
     fc.assert(
-      fc.property(byteSeconds, deliveryBytes, (bs, d) => {
-        expect(estimateOverageMicroUsd({ storageByteSeconds: bs, deliveryBytes: d }, free)).toBe(0);
+      fc.property(byteSeconds, (bs) => {
+        expect(estimateOverageMicroUsd({ storageByteSeconds: bs }, free)).toBe(0);
         const invoice = rateInvoice({
           plan: free,
           storageGbMonthMicro: storageGbMonthMicroUnits(bs),
-          deliveryBytes: d,
           rateVersion: free.rateVersion,
         });
         expect(invoice.lines).toHaveLength(1);
@@ -47,32 +45,21 @@ describe('rating properties', () => {
 
   it('is monotonic in usage', () => {
     fc.assert(
-      fc.property(
-        plans,
-        byteSeconds,
-        byteSeconds,
-        deliveryBytes,
-        deliveryBytes,
-        (plan, a, b, c, d) => {
-          const [s1, s2] = a <= b ? [a, b] : [b, a];
-          const [d1, d2] = c <= d ? [c, d] : [d, c];
-          expect(
-            estimateOverageMicroUsd({ storageByteSeconds: s1, deliveryBytes: d1 }, plan),
-          ).toBeLessThanOrEqual(
-            estimateOverageMicroUsd({ storageByteSeconds: s2, deliveryBytes: d2 }, plan),
-          );
-        },
-      ),
+      fc.property(plans, byteSeconds, byteSeconds, (plan, a, b) => {
+        const [s1, s2] = a <= b ? [a, b] : [b, a];
+        expect(estimateOverageMicroUsd({ storageByteSeconds: s1 }, plan)).toBeLessThanOrEqual(
+          estimateOverageMicroUsd({ storageByteSeconds: s2 }, plan),
+        );
+      }),
     );
   });
 
   it('produces integer-only money that adds up', () => {
     fc.assert(
-      fc.property(plans, byteSeconds, deliveryBytes, (plan, bs, d) => {
+      fc.property(plans, byteSeconds, (plan, bs) => {
         const invoice = rateInvoice({
           plan,
           storageGbMonthMicro: storageGbMonthMicroUnits(bs),
-          deliveryBytes: d,
           rateVersion: plan.rateVersion,
         });
         for (const line of invoice.lines) {
@@ -87,21 +74,18 @@ describe('rating properties', () => {
         expect(invoice.totalMicroUsd).toBe(invoice.lines.reduce((s, l) => s + l.amountMicroUsd, 0));
         expect(invoice.totalCents).toBe(invoice.lines.reduce((s, l) => s + l.amountCents, 0));
         expect(invoice.totalMicroUsd - plan.monthlyFeeMicroUsd).toBe(
-          estimateOverageMicroUsd({ storageByteSeconds: bs, deliveryBytes: d }, plan),
+          estimateOverageMicroUsd({ storageByteSeconds: bs }, plan),
         );
       }),
     );
   });
 
-  it('charges exactly rate × whole GB above the allowance', () => {
+  it('charges exactly rate × whole GB-month above the allowance', () => {
     fc.assert(
-      fc.property(int(0, 100_000), int(0, 100_000), (s, d) => {
-        const o = computeOverage(pro, BigInt(s) * 1_000_000n, d * BYTES_PER_GB);
+      fc.property(int(0, 100_000), (s) => {
+        const o = computeOverage(pro, BigInt(s) * 1_000_000n);
         expect(o.storageOverageMicroUsd).toBe(
           Math.max(0, s - pro.includedStorageGbMonth) * (pro.storageOverageMicroUsdPerGbMonth ?? 0),
-        );
-        expect(o.deliveryOverageMicroUsd).toBe(
-          Math.max(0, d - pro.includedDeliveryGb) * (pro.deliveryOverageMicroUsdPerGb ?? 0),
         );
       }),
     );
@@ -156,11 +140,10 @@ describe('admission properties', () => {
     fc.assert(
       fc.property(
         int(0, 2 * BYTES_PER_GB),
-        int(0, 5 * BYTES_PER_GB),
         fc.constantFrom('upload' as const, 'archive' as const),
         int(0, 2 * BYTES_PER_GB),
         int(0, span),
-        (stored, delivered, kind, bytes, elapsed) => {
+        (stored, kind, bytes, elapsed) => {
           const decision = checkAdmission({
             plan: free,
             account: { status: 'free' },
@@ -169,7 +152,6 @@ describe('admission properties', () => {
             currentUsage: {
               storedBytes: stored,
               storageByteSecondsToDate: BigInt(stored) * BigInt(Math.floor(elapsed / 1000)),
-              deliveryBytesToDate: delivered,
             },
             reservations: [],
             requested: { kind, bytes },
@@ -179,9 +161,8 @@ describe('admission properties', () => {
           if (decision.allowed && kind === 'upload') {
             expect(stored + bytes).toBeLessThanOrEqual(free.maxStorageBytes ?? 0);
           }
-          if (decision.allowed && kind === 'archive') {
-            expect(delivered + bytes).toBeLessThanOrEqual(free.maxDeliveryBytesPerMonth ?? 0);
-          }
+          // Archives are never billed, so a Free account in good standing always gets them.
+          if (kind === 'archive') expect(decision.allowed).toBe(true);
         },
       ),
     );
@@ -199,11 +180,7 @@ describe('admission properties', () => {
             account: { status: 'active' },
             now: periodStart,
             period: { start: periodStart, end: periodEnd },
-            currentUsage: {
-              storedBytes: stored,
-              storageByteSecondsToDate: 0n,
-              deliveryBytesToDate: 0,
-            },
+            currentUsage: { storedBytes: stored, storageByteSecondsToDate: 0n },
             reservations: [],
             requested: { kind: 'upload', bytes },
             capMicroUsd: cap,
@@ -242,7 +219,6 @@ describe('meter export properties', () => {
   const entriesArb = fc
     .array(
       fc.record({
-        metric: fc.constantFrom('storage_byte_seconds' as const, 'delivery_bytes' as const),
         quantity: fc.bigInt({ min: 0n, max: 10n ** 17n }),
         day: int(0, 29),
       }),
@@ -252,9 +228,9 @@ describe('meter export properties', () => {
       rows.map((r, i) =>
         buildLedgerEntry({
           accountId: 'acct',
-          metric: r.metric,
+          metric: 'storage_byte_seconds',
           quantity: r.quantity,
-          unit: r.metric === 'delivery_bytes' ? 'byte' : 'byte_second',
+          unit: 'byte_second',
           sourceId: `src_${i}`,
           eventTime: new Date(periodStart.getTime() + r.day * 86_400_000),
           period,

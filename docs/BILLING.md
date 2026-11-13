@@ -5,14 +5,17 @@ Authoritative pricing logic lives in `packages/billing` and the versioned rate c
 
 - Money is integer **micro-USD** internally; Stripe amounts in cents. No floating-point money.
 - Units are decimal: 1 GB = 10⁹ bytes. GB-month = byte-seconds / (10⁹ × 30 × 86,400).
-- Free: 2 galleries, 1 GB stored, 3 GB/month delivery — hard caps, never billed.
-- Pro: $2/month (confirmed); 20 GB-month (confirmed) + 5 GB delivery included; $0.10/GB-month and $0.03/GB overages (Proposed);
-  default $10 overage cap with 50/80/100% alerts (Proposed).
-- Internal `usage_ledger` is the real-time source of truth for caps; Stripe meters receive **overage
-  only** (MB / MB-month above the allowance), exported daily with idempotency keys and reconciled
-  (ADR-004 + 2026-11-13 amendment, T31).
+- Free: 2 active galleries, 1 GB stored — hard caps, never billed.
+- Pro: $2/month (confirmed); 20 GB-month included (confirmed); $0.10/GB-month storage overage (Proposed);
+  default $10 cap on storage overage with 50/80/100% alerts (Proposed).
+- **Delivery is not tracked, capped or charged on any plan** (ADR-008): views, downloads and archives
+  are free to recipients and owners. Risk: serving cost (R2 reads + Worker requests) is uncapped;
+  edge caching is tracked in jasonfyw/lumra#83.
+- Internal `usage_ledger` (storage only) is the real-time source of truth for caps; the Stripe meter
+  receives **overage only** (MB-months above the allowance), exported daily with idempotency keys and
+  reconciled (ADR-004 + 2026-11-13 amendment, T31).
 
-Worked example (PRD §9.3): 30 GB-month stored + 45 GB delivered on Pro → $2.00 + 10 × $0.10 + 40 × $0.03 = **$4.20**.
+Worked example (PRD §9.3): 30 GB-month stored on Pro → $2.00 + (30 − 20) × $0.10 = **$3.00**.
 
 ## Formulas (`@lumra/billing`, ADR-004)
 
@@ -20,25 +23,26 @@ All values come from the rate card (`RATE_CARD_V1`, `BILLING_POLICY_V1` in `@lum
 in logic. Money is a safe-integer `number` of micro-USD; byte-seconds and micro-unit quantities are `bigint`.
 Every rounding step is **half up** and applied once.
 
-| Quantity                   | Formula                                                                       | Function                    |
-| -------------------------- | ----------------------------------------------------------------------------- | --------------------------- |
-| Byte-seconds               | Σ stored bytes × duration, exact in byte-ms, then ÷ 1000                      | `integrateStorage`          |
-| Micro GB-month             | byte-seconds × 10⁶ ÷ (10⁹ × 2 592 000)                                        | `storageGbMonthMicroUnits`  |
-| Storage overage µ$         | max(0, µGB-month − included × 10⁶) × rate per GB-month ÷ 10⁶                  | `computeOverage`            |
-| Delivery overage µ$        | max(0, bytes − included × 10⁹) × rate per GB ÷ 10⁹                            | `computeOverage`            |
-| Invoice                    | base fee + overage lines; cents per line = µ$ ÷ 10 000; total = Σ lines       | `rateInvoice`               |
-| Admission projection       | stored-bytes reservations held until period end (ceiling); archives delivered | `checkAdmission`            |
-| Cap tolerance              | max(cap × 10 %, $0.25)                                                        | `spendCapToleranceMicroUsd` |
-| Meter value (daily, delta) | overage MB(-month) of the period-to-date total − already exported             | `buildMeterEvents`          |
+| Quantity                   | Formula                                                                    | Function                    |
+| -------------------------- | -------------------------------------------------------------------------- | --------------------------- |
+| Byte-seconds               | Σ stored bytes × duration, exact in byte-ms, then ÷ 1000                   | `integrateStorage`          |
+| Micro GB-month             | byte-seconds × 10⁶ ÷ (10⁹ × 2 592 000)                                     | `storageGbMonthMicroUnits`  |
+| Storage overage µ$         | max(0, µGB-month − included × 10⁶) × rate per GB-month ÷ 10⁶               | `computeOverage`            |
+| Invoice                    | base fee + overage lines; cents per line = µ$ ÷ 10 000; total = Σ lines    | `rateInvoice`               |
+| Admission projection       | stored-bytes reservations held until period end (ceiling); archives cost 0 | `checkAdmission`            |
+| Cap tolerance              | max(cap × 10 %, $0.25)                                                     | `spendCapToleranceMicroUsd` |
+| Meter value (daily, delta) | overage MB(-month) of the period-to-date total − already exported          | `buildMeterEvents`          |
 
-Admission reason codes: `free_storage_cap`, `free_delivery_cap`, `spend_cap`, `past_due`, `account_canceled`;
+Admission reason codes: `free_storage_cap`, `spend_cap`, `past_due`, `account_canceled`;
 gallery creation: `free_gallery_cap`. Past-due timeline (`deriveBillingRestrictions`): uploads and new archives
 stop immediately, public delivery is suspended after 7 days, and media is retained for 30 more days.
 
 ## Rate card storage (T27)
 
 - `plan_rate_versions` holds one **immutable** row per (plan, `rate_version`). v1 is the PRD §9.2 launch rate card
-  (equal to `RATE_CARD_V1`; a unit test checks the seed). Rates can never be updated or deleted (trigger,
+  (equal to `RATE_CARD_V1`; a unit test checks the seed). Its delivery columns were dropped by the
+  ADR-008 migration without a version bump (no storage or base rate changed and delivery was never
+  billed). Rates can never be updated or deleted (trigger,
   SQLSTATE 23001); the only allowed change is `decision` `proposed → confirmed` once the owner signs off.
 - `plans.rate_version` points at the current version; a trigger copies that version's rates onto the `plans` row,
   so existing readers of `plans` (admission, `/account`, pricing) always see the current version.
@@ -51,10 +55,11 @@ stop immediately, public delivery is suspended after 7 days, and media is retain
 Every metered action writes `usage_ledger` rows through `@lumra/billing` (`METERED_ACTIONS`); Postgres adapters
 are in `@lumra/db` (`createBillingRepository`), the jobs in `apps/worker/src/handlers/metering.ts`.
 
-| Metric                 | Producer                                                                            | Source id (UNIQUE with metric)        |
-| ---------------------- | ----------------------------------------------------------------------------------- | ------------------------------------- |
-| `storage_byte_seconds` | Hourly cron `7 * * * *` → `planStorageAccrual`, cursor in `storage_accrual_cursors` | `account:windowStart/windowEnd`       |
-| `delivery_bytes`       | `lumra-usage*` queue (`delivery.served` from the gateway) → `rateDeliveryEvents`    | gateway `dedupeKey` = `jti:start-end` |
+| Metric                 | Producer                                                                            | Source id (UNIQUE with metric)  |
+| ---------------------- | ----------------------------------------------------------------------------------- | ------------------------------- |
+| `storage_byte_seconds` | Hourly cron `7 * * * *` → `planStorageAccrual`, cursor in `storage_accrual_cursors` | `account:windowStart/windowEnd` |
+
+Storage is the only metric. The gateway emits no usage events and there is no usage queue (ADR-008).
 
 - **Periods.** Each row is stamped with `billingPeriodAt(account, time)`: the stored subscription period when it
   contains the time, else the UTC calendar month — the same `period_start` `/account` and admission read.
@@ -65,18 +70,12 @@ are in `@lumra/db` (`createBillingRepository`), the jobs in `apps/worker/src/han
   retried runs never double-count. An account's first run only creates the cursor (no back-billing before the job
   existed). Temporary archives (T24) count too: completed parts of `running`/`ready` jobs of the owner's
   non-deleted galleries, until they expire (24 h). `/account` still shows originals + derivatives only.
-- **Delivery ingestion** resolves gallery → owner, rates the batch and inserts it with one
-  `INSERT … ON CONFLICT DO NOTHING`. Redelivered events are dropped by the UNIQUE key; distinct tokens or ranges
-  count separately. Approximation (disclosed): one token re-downloading the _same_ byte range is counted once.
-  Guest-draft galleries (no owner) and deleted gallery rows are skipped and counted in the batch log.
 - **Estimated cost** per row is the marginal overage it adds to the period total so far (0 on Free and inside the
   Pro allowance); the invoice is still rated from period totals (`rateInvoice`), and the two agree.
 - **Reservations.** `CostReservationStore.pending` returns live upload intents (original + derivative estimate)
-  and archives being built (estimated as the gallery's ready originals) for admission. The web app's admission
-  (`apps/web/src/server/admission.ts`, shared by upload intents and archive requests) counts archives being built by
-  their `total_bytes`.
-- **Archive downloads** are metered by the gateway's `delivery.served` events (`action: 'archive'`) like any other
-  download; see docs/DOWNLOADS.md.
+  for admission. Archives reserve nothing: their downloads are not billed. The web app's admission
+  (`apps/web/src/server/admission.ts`, shared by upload intents and archive requests) gates archive requests by
+  billing status only.
 
 ## Account page (`/account`, `GET /api/v1/billing/usage`)
 
@@ -88,8 +87,6 @@ Read-only summary for the signed-in owner (FR-N03), built by `getAccountUsageSum
 - **Storage:** bytes of stored originals (`uploaded`/`processing`/`ready`) plus generated derivatives in the owner's
   non-deleted galleries — the dashboard's per-gallery size summed. Free shows it against the 1 GB hard cap
   (admission additionally reserves an estimate for not-yet-generated derivatives).
-- **Delivery:** `usage_ledger` `delivery_bytes` for the current period. Shown as "Not yet tracked" until the ledger
-  holds any delivery row for the account (filled by the T27 delivery ingestion once the usage consumer is deployed).
 - **Billing:** plan actions (Upgrade → Checkout, Manage billing → Portal), state banners (below) and the
   galleries count. Buttons are disabled with a reason when Stripe is not configured.
 - **Invoices:** the last 12 webhook-stored invoices (`billing_invoices`) with Stripe's hosted page,
@@ -97,40 +94,29 @@ Read-only summary for the signed-in owner (FR-N03), built by `getAccountUsageSum
 - **Spending cap and alerts (Pro):** cap control, estimated overage vs cap, alerts sent this period.
 
 A dev-only fixture renders every billing state without Stripe or a database: `/dev/account?state=…`
-(`free`, `free_at_caps`, `free_delivery_paused`, `checkout_pending`, `pro`, `pro_canceling`, `past_due`,
-`restricted`, `canceled`, `unconfigured`).
+(`free`, `free_at_caps`, `checkout_pending`, `pro`, `pro_canceling`, `pro_alert_80`, `pro_spend_cap`,
+`past_due`, `restricted`, `canceled`, `unconfigured`).
 
 ## Free caps (T28)
 
-| Cap                              | Where it is enforced                                                                | What the user sees                                           |
-| -------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| 2 active galleries               | `POST /api/v1/galleries` and the guest claim (`checkGalleryCreation`, profile lock) | `quota_exceeded` + "See plans"                               |
-| 1 GB stored (incl. derivatives)  | upload intents (`checkAdmission`, account row lock, derivative estimate)            | uploader banner "Your Free storage is full" → Upgrade to Pro |
-| 3 GB delivery per calendar month | archive admission (`free_delivery_cap`) + **delivery safety cutoff** (below)        | viewers: "temporarily unavailable"; owner: banner + upgrade  |
+| Cap                             | Where it is enforced                                                                | What the user sees                                           |
+| ------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| 2 active galleries              | `POST /api/v1/galleries` and the guest claim (`checkGalleryCreation`, profile lock) | `quota_exceeded` + "See plans"                               |
+| 1 GB stored (incl. derivatives) | upload intents (`checkAdmission`, account row lock, derivative estimate)            | uploader banner "Your Free storage is full" → Upgrade to Pro |
 
-**Delivery safety cutoff** (PRD §9.4). After every `lumra-usage*` batch the worker re-evaluates the
-accounts it just metered with `checkDeliveryAllowance` (`evaluateBillingSafeguards`, `@lumra/billing`).
-Free at ≥ 3 GB this month — or Pro with estimated overage ≥ its spending cap — sets
-`billing_accounts.delivery_paused_reason` (`free_delivery_cap` / `spend_cap`) by compare-and-set and,
-in the same transaction, enqueues `gallery.access_changed` for every published gallery of the owner
-(`public.enqueue_owner_access_sync`) plus a once-per-period `delivery_paused` email. The KV writer
-mirrors the pause into `deliverySuspended`, so the media gateway answers 403 `gallery_suspended`
-(no gateway change); the recipient page and the public APIs answer `gallery_unavailable` (503) and
-render "This gallery is temporarily unavailable" — never a 500. The hourly sweep lifts pauses whose
-allowance is back (new period, higher cap); an upgrade lifts it at once (the webhook re-evaluates after
-commit).
-
-- In-flight transfers and the ≤ 10 s queue batching can overshoot the cap slightly; Free rows always
-  carry zero cost (property test: a Free account can never create a positive-overage ledger row).
-- Owner editor thumbnails go through the same gateway check, so they pause too while delivery is
-  paused (accepted for v1; the owner sees the banner explaining why).
+There is no delivery cap: shared galleries, views and downloads are never paused for usage (ADR-008).
+Free storage rows always carry zero cost (property test: a Free account can never create a
+positive-overage ledger row). Galleries go offline only for billing status (`deliverySuspended` in
+KV = past due beyond grace, restricted or canceled): the gateway answers 403 `gallery_suspended` and
+the recipient page renders "This gallery is temporarily unavailable" (`gallery_unavailable`, 503).
 
 ## Subscriptions and entitlements (T29, T30)
 
 - **Checkout** (`POST /api/v1/billing/checkout`, auth + same-origin + per-user rate limit): creates the
   Stripe customer on first use (idempotency key `lumra-customer-{userId}`, stored by compare-and-set)
-  and a subscription-mode Checkout Session with **three line items**: the $2 base price (quantity 1)
-  and both metered overage prices (no quantity). Prices are found by lookup key
+  and a subscription-mode Checkout Session with **two line items**: the $2 base price (quantity 1)
+  and the metered storage overage price (no quantity). No delivery price (ADR-008). Prices are
+  found by lookup key
   (`STRIPE_CATALOG_V1`, cached 10 min). 409 when a live subscription exists.
 - **Portal** (`POST /api/v1/billing/portal`): Billing Portal session for the owner's own customer,
   using the configuration tagged `metadata.lumra_config=lumra_portal_v1` (fallback: account default).
@@ -194,19 +180,22 @@ Idempotent, dependency-free; runs in the mode of the key it is given and prints 
 ```sh
 STRIPE_SECRET_KEY=sk_test_… node scripts/stripe-setup.mjs --dry-run      # report only
 STRIPE_SECRET_KEY=sk_test_… node scripts/stripe-setup.mjs --app-url https://www.lumra.photos
+STRIPE_SECRET_KEY=sk_test_… node scripts/stripe-setup.mjs --archive-legacy  # only retire delivery objects
 ```
 
-It ensures the "Lumra Pro" product, the base price `lumra_pro_monthly_v1` ($2/month), meters
-`lumra_storage_overage` / `lumra_delivery_overage` (sum, `stripe_customer_id` → customer, `value`), the
-metered prices `lumra_pro_storage_overage_v1` (0.01¢ per MB-month = $0.10/GB-month) and
-`lumra_pro_delivery_overage_v1` (0.003¢ per MB = $0.03/GB), and the Billing Portal configuration
-(payment method, invoices, cancel at period end, email/address). Existing objects are reused; a price
+It ensures the "Lumra Pro" product, the base price `lumra_pro_monthly_v1` ($2/month), the meter
+`lumra_storage_overage` (sum, `stripe_customer_id` → customer, `value`), the metered price
+`lumra_pro_storage_overage_v1` (0.01¢ per MB-month = $0.10/GB-month), and the Billing Portal configuration
+(payment method, invoices, cancel at period end, email/address). It also retires the removed delivery
+charge (ADR-008, idempotent): archives the price `lumra_pro_delivery_overage_v1`, deactivates the meter
+`lumra_delivery_overage`, and lists (never modifies) subscriptions that still carry that price — their
+delivery line stays $0 because nothing reports to the meter. Existing objects are reused; a price
 with different terms is an error (ship `_v2` lookup keys with a new rate version). A unit test checks
 the script against `STRIPE_CATALOG_V1` and `RATE_CARD_V1`.
 
 ## Usage export to Stripe (T31)
 
-- **What is sent:** overage only, as integer MB-months (storage) and MB (delivery) above the plan
+- **What is sent:** storage overage only, as integer MB-months above the plan
   allowance (`toMeterUnits`), cumulative per period: each run sends `period-to-date units − already
 exported`, so rounding never accumulates and re-runs send nothing new.
 - **Which usage:** only periods in `billing_periods` — the paid subscription periods recorded by the
@@ -239,18 +228,18 @@ above 10 % (and more than 2 ¢) or overage above cap + tolerance logs `billing r
 
 - `PATCH /api/v1/billing/spending-cap` `{capMicroUsd}`: whole cents from $0 to
   `BILLING_POLICY_V1.maxSpendCapMicroUsd` ($500, Proposed), or `null` for the plan default ($10). Pro
-  only (409 on Free), same-origin, per-user rate limit, own account only. It re-runs the delivery
-  cutoff at once: raising the cap resumes delivery, lowering it below the estimate pauses it.
-- **Admission denial at cap:** upload intents and archive requests use `checkAdmission` with the
-  account's cap (`spend_cap_reached` → uploader banner "Adjust spending cap").
-- **Delivery safety cutoff:** see T28 above (`spend_cap` reason; viewers see the bandwidth notice).
-- **Alerts:** whenever usage lands (delivery batches, hourly sweep) `evaluateBillingSafeguards`
-  computes the estimated overage and records each reached threshold of `warning_thresholds`
-  (50/80/100 %) once per (account, period, threshold) in `billing_alerts`, enqueuing one
-  `spend_cap_alert` email each. `/account` and the dashboard show a banner for the highest threshold
-  reached (until the cap itself pauses delivery).
-- Tolerance: in-flight transfers and ≤ 10 s queue batching can overshoot; the disclosed maximum is
-  max(10 % of cap, $0.25) and reconciliation flags periods beyond it.
+  only (409 on Free), same-origin, per-user rate limit, own account only. Alerts are re-evaluated at
+  once. The cap covers **storage overage only** (ADR-008).
+- **Admission denial at cap:** upload intents use `checkAdmission` with the account's cap, projecting
+  stored bytes to the period end (`spend_cap_reached` → uploader banner "Adjust spending cap"). Archive
+  requests are never refused for the cap. Shared galleries are never paused for usage.
+- **Alerts:** in the hourly sweep (after storage accrual) and after cap/plan changes,
+  `evaluateBillingSafeguards` computes the estimated storage overage and records each reached threshold
+  of `warning_thresholds` (50/80/100 %) once per (account, period, threshold) in `billing_alerts`,
+  enqueuing one `spend_cap_alert` email each. `/account` and the dashboard show a banner for the
+  highest threshold reached.
+- Tolerance: the derivative-size estimate and hourly accrual can overshoot slightly; the disclosed
+  maximum is max(10 % of cap, $0.25) and reconciliation flags periods beyond it.
 
 ## Environment and webhook endpoint
 

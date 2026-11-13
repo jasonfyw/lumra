@@ -63,7 +63,6 @@ const published = (id: string, extra: Partial<GalleryAccessRow> = {}): GalleryAc
     pastDueSince: null,
     restrictedSince: null,
     canceledAt: null,
-    deliveryPausedReason: null,
   },
   ...extra,
 });
@@ -129,7 +128,6 @@ describe('syncGalleryAccessState', () => {
         pastDueSince: new Date('2026-10-01T00:00:00Z'),
         restrictedSince: new Date('2026-10-08T00:00:00Z'),
         canceledAt: null,
-        deliveryPausedReason: null,
       },
     });
     const { kv, deps } = setup([restricted]);
@@ -156,7 +154,6 @@ describe('isDeliverySuspended', () => {
         pastDueSince: new Date(now.getTime() - 86_400_000),
         restrictedSince: null,
         canceledAt: null,
-        deliveryPausedReason: null,
       },
     });
     expect(isDeliverySuspended(recentPastDue, now)).toBe(false);
@@ -166,25 +163,27 @@ describe('isDeliverySuspended', () => {
         pastDueSince: null,
         restrictedSince: null,
         canceledAt: null,
-        deliveryPausedReason: null,
       },
     });
     expect(isDeliverySuspended(broken, now)).toBe(true);
   });
 
-  it('suspends delivery while the safety cutoff is in force (T28 Free cap, T32 spend cap)', () => {
-    for (const reason of ['free_delivery_cap', 'spend_cap'] as const) {
-      const paused = published(G1, {
-        billing: {
-          status: reason === 'spend_cap' ? 'active' : 'free',
-          pastDueSince: null,
-          restrictedSince: null,
-          canceledAt: null,
-          deliveryPausedReason: reason,
-        },
+  it('never suspends delivery for usage: only billing status counts (ADR-008)', () => {
+    for (const status of ['free', 'active'] as const) {
+      const busy = published(G1, {
+        billing: { status, pastDueSince: null, restrictedSince: null, canceledAt: null },
       });
-      expect(isDeliverySuspended(paused, now)).toBe(true);
+      expect(isDeliverySuspended(busy, now)).toBe(false);
     }
+    const canceled = published(G1, {
+      billing: {
+        status: 'canceled',
+        pastDueSince: null,
+        restrictedSince: null,
+        canceledAt: new Date(now.getTime() - 86_400_000),
+      },
+    });
+    expect(isDeliverySuspended(canceled, now)).toBe(true);
   });
 });
 

@@ -33,7 +33,7 @@ export interface Services {
   archiveRepo(): ArchiveRepository;
   /** Rate card, usage ledger and metering reads/writes (T27). */
   billingRepo(): BillingRepository;
-  /** Delivery safety cutoff + hourly billing sweep (T28/T33). */
+  /** Spend-cap alerts + hourly billing sweep (T32/T33). */
   billingStateRepo(): BillingStateRepository;
   /** Stripe meter export cursors and stored events (T31). */
   meterExportRepo(): MeterExportRepository;

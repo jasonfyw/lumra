@@ -5,7 +5,6 @@
  */
 import type postgres from 'postgres';
 import type { GalleryVisibility } from '@lumra/contracts';
-import type { DeliveryPauseReason } from '@lumra/billing';
 import type { BillingAccountStatus } from '../enums';
 
 export interface GalleryAccessBilling {
@@ -13,8 +12,6 @@ export interface GalleryAccessBilling {
   pastDueSince: Date | null;
   restrictedSince: Date | null;
   canceledAt: Date | null;
-  /** Delivery safety cutoff in force (Free delivery cap / spending cap), T28/T32. */
-  deliveryPausedReason: DeliveryPauseReason | null;
 }
 
 export interface GalleryAccessRow {
@@ -47,7 +44,6 @@ interface Row {
   past_due_since: Date | null;
   restricted_since: Date | null;
   canceled_at: Date | null;
-  delivery_paused_reason: DeliveryPauseReason | null;
 }
 
 const toDate = (value: Date | string | null): Date | null =>
@@ -58,8 +54,7 @@ export function createAccessStateRepository(sql: postgres.Sql): AccessStateRepos
     async getGalleryAccess(galleryId) {
       const rows = await sql<Row[]>`
         select g.id, g.status, g.deleted_at, g.access_version, g.expires_at,
-               b.status as billing_status, b.past_due_since, b.restricted_since, b.canceled_at,
-               b.delivery_paused_reason
+               b.status as billing_status, b.past_due_since, b.restricted_since, b.canceled_at
         from public.galleries g
         left join public.billing_accounts b on b.user_id = g.owner_id
         where g.id = ${galleryId}`;
@@ -77,7 +72,6 @@ export function createAccessStateRepository(sql: postgres.Sql): AccessStateRepos
               pastDueSince: toDate(row.past_due_since),
               restrictedSince: toDate(row.restricted_since),
               canceledAt: toDate(row.canceled_at),
-              deliveryPausedReason: row.delivery_paused_reason ?? null,
             }
           : null,
       };

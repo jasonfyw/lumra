@@ -14,21 +14,15 @@ import type { Logger } from '../log';
 /**
  * Billing safeguards and maintenance (T28/T32/T33). Thin I/O shells around `@lumra/billing`:
  *
- * - `evaluateBillingSafeguards` runs after usage lands in the ledger (delivery batches) and in
- *   the hourly sweep. It applies the delivery safety cutoff (`checkDeliveryAllowance`): Free
- *   accounts pause at the monthly delivery cap, Pro accounts at the spending cap. Pausing or
- *   resuming flips `billing_accounts.delivery_paused_reason`, which the KV access state mirrors
- *   (the gateway then answers 403 and the recipient page shows "temporarily unavailable").
+ * - `evaluateBillingSafeguards` runs in the hourly sweep and records spend-cap alerts (50/80/100 %
+ *   of the cap, storage overage only). Delivery is not metered, capped or paused (ADR-008); the
+ *   spending cap is enforced at upload admission.
  * - `runBillingSweep` (hourly) persists time-based transitions — `past_due` → `restricted` when
- *   the grace ends, `canceled` → `free` once the account fits the Free caps — and lifts pauses
- *   whose allowance is back (new period, higher cap, upgrade).
+ *   the grace ends, `canceled` → `free` once the account fits the Free caps.
  */
 
 export interface SafeguardDeps {
-  repo: Pick<
-    BillingStateRepository,
-    'safeguardContexts' | 'setDeliveryPause' | 'recordSpendAlerts'
-  >;
+  repo: Pick<BillingStateRepository, 'safeguardContexts' | 'recordSpendAlerts'>;
   log: Logger;
   now: () => Date;
   traceId: string;
@@ -39,18 +33,14 @@ export type { SafeguardResult };
 export async function evaluateBillingSafeguards(
   accountIds: readonly string[],
   deps: SafeguardDeps,
-): Promise<Omit<SafeguardResult, 'changes'>> {
-  const { changes, ...counts } = await evaluateSafeguards(accountIds, {
+): Promise<SafeguardResult> {
+  const result = await evaluateSafeguards(accountIds, {
     store: deps.repo,
     now: deps.now(),
     traceId: deps.traceId,
   });
-  for (const change of changes) {
-    if (change.paused) {
-      deps.log.info('delivery paused', { accountId: change.accountId, reason: change.paused });
-    } else deps.log.info('delivery resumed', { accountId: change.accountId });
-  }
-  return counts;
+  if (result.alerts > 0) deps.log.info('spend-cap alerts recorded', { alerts: result.alerts });
+  return result;
 }
 
 export interface BillingSweepDeps extends SafeguardDeps {
@@ -64,7 +54,7 @@ export interface BillingSweepResult {
   restricted: number;
   freed: number;
   conflicts: number;
-  safeguards: Omit<SafeguardResult, 'changes'>;
+  safeguards: SafeguardResult;
 }
 
 /** Notice → once-only email key: one per account and transition instant. */
@@ -84,7 +74,7 @@ export async function runBillingSweep(deps: BillingSweepDeps): Promise<BillingSw
     restricted: 0,
     freed: 0,
     conflicts: 0,
-    safeguards: { evaluated: 0, paused: 0, resumed: 0, conflicts: 0, alerts: 0 },
+    safeguards: { evaluated: 0, alerts: 0 },
   };
   let after: string | null = null;
   while (true) {
@@ -108,9 +98,6 @@ export async function runBillingSweep(deps: BillingSweepDeps): Promise<BillingSw
     }
     const safeguards = await evaluateBillingSafeguards(reevaluate, deps);
     result.safeguards.evaluated += safeguards.evaluated;
-    result.safeguards.paused += safeguards.paused;
-    result.safeguards.resumed += safeguards.resumed;
-    result.safeguards.conflicts += safeguards.conflicts;
     result.safeguards.alerts += safeguards.alerts;
     after = page[page.length - 1]!.accountId;
     if (page.length < batchSize) break;

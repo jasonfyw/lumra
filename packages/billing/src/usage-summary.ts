@@ -58,20 +58,15 @@ function meter(used: number | null, limit: number | null): UsageMeterSummary {
 }
 
 export interface UsageSummaryInput {
-  plan: Pick<PlanRates, 'maxStorageBytes' | 'maxDeliveryBytesPerMonth'>;
+  plan: Pick<PlanRates, 'maxStorageBytes'>;
   storedBytes: number;
-  /** Delivered bytes this period, or `null` when the ledger holds no delivery data for the account. */
-  deliveryBytes: number | null;
 }
 
+/** Storage only: delivery is not tracked (ADR-008). */
 export interface UsageSummary {
   storage: UsageMeterSummary;
-  delivery: UsageMeterSummary;
 }
 
 export function summarizeUsage(input: UsageSummaryInput): UsageSummary {
-  return {
-    storage: meter(input.storedBytes, input.plan.maxStorageBytes),
-    delivery: meter(input.deliveryBytes, input.plan.maxDeliveryBytesPerMonth),
-  };
+  return { storage: meter(input.storedBytes, input.plan.maxStorageBytes) };
 }

@@ -17,11 +17,10 @@ import { type BillingPeriod, calendarMonthPeriod } from './usage-summary';
  *
  * Metered actions and their ledger producers (every metric has exactly one):
  *  - `storage_byte_seconds` ← `planStorageAccrual` (hourly cron, sampled stored bytes)
- *  - `delivery_bytes`       ← `rateDeliveryEvents` (media gateway `delivery.served` events)
+ * Delivery (served bytes) is not metered (ADR-008).
  */
 export const METERED_ACTIONS: Readonly<Record<UsageMetric, string>> = {
   storage_byte_seconds: 'storage accrual (apps/worker cron → planStorageAccrual)',
-  delivery_bytes: 'gateway delivery (delivery.served queue → rateDeliveryEvents)',
 };
 
 export interface StoredBillingPeriod {
@@ -131,8 +130,8 @@ export function planStorageAccrual(input: StorageAccrualInput): StorageAccrual |
           rateVersion: input.plan.rateVersion,
           estimatedCostMicroUsd: marginalOverageMicroUsd(
             input.plan,
-            { storageByteSeconds: toDate, deliveryBytes: 0 },
-            { storageByteSeconds: after, deliveryBytes: 0 },
+            { storageByteSeconds: toDate },
+            { storageByteSeconds: after },
             policy.secondsPerBillingMonth,
           ),
         }),
@@ -143,83 +142,4 @@ export function planStorageAccrual(input: StorageAccrualInput): StorageAccrual |
     segStart = segEnd;
   }
   return { entries, nextCursor: next };
-}
-
-// ---------------------------------------------------------------------------------------------
-// Delivery bytes
-// ---------------------------------------------------------------------------------------------
-
-export interface DeliveryEvent {
-  /** The gateway event's `dedupeKey` (`{jti}:{start}-{end}`): the ledger source id. */
-  sourceId: string;
-  accountId: string;
-  bytes: number;
-  servedAt: Date;
-}
-
-export interface DeliveryAccountContext {
-  account: StoredBillingPeriod | null;
-  plan: PlanRates;
-}
-
-export interface RateDeliveryInput {
-  events: readonly DeliveryEvent[];
-  /** Billing context per account id; events of an account without one are an error. */
-  accounts: ReadonlyMap<string, DeliveryAccountContext>;
-  /**
-   * Delivery bytes already in the ledger for (account, period start), for the estimated cost.
-   * Missing keys count as zero.
-   */
-  deliveryBytesToDate: (accountId: string, periodStart: Date) => bigint;
-  policy?: BillingPolicy;
-}
-
-/** Key for grouping per (account, billing period). */
-export const accountPeriodKey = (accountId: string, periodStart: Date): string =>
-  `${accountId}|${periodStart.toISOString()}`;
-
-/**
- * Builds `delivery_bytes` ledger rows from gateway events (FR-D04: bytes of each successful
- * byte-bearing response). Duplicate source ids inside the batch are dropped (the DB UNIQUE
- * drops cross-batch duplicates). Each row's estimated cost is the marginal overage it adds on
- * top of the period total so far, so Free rows and rows inside the Pro allowance cost zero.
- */
-export function rateDeliveryEvents(input: RateDeliveryInput): LedgerEntry[] {
-  const policy = input.policy ?? BILLING_POLICY_V1;
-  const running = new Map<string, bigint>();
-  const seen = new Set<string>();
-  const entries: LedgerEntry[] = [];
-  const ordered = [...input.events].sort(
-    (a, b) => a.servedAt.getTime() - b.servedAt.getTime() || (a.sourceId < b.sourceId ? -1 : 1),
-  );
-  for (const event of ordered) {
-    if (seen.has(event.sourceId)) continue;
-    seen.add(event.sourceId);
-    const ctx = input.accounts.get(event.accountId);
-    if (!ctx) throw new BillingArithmeticError(`no billing context for account`);
-    const period = billingPeriodAt(ctx.account, event.servedAt);
-    const key = accountPeriodKey(event.accountId, period.start);
-    const before = running.get(key) ?? input.deliveryBytesToDate(event.accountId, period.start);
-    const after = before + toNonNegativeBigInt(event.bytes, 'bytes');
-    running.set(key, after);
-    entries.push(
-      buildLedgerEntry({
-        accountId: event.accountId,
-        metric: 'delivery_bytes',
-        unit: METRIC_UNIT.delivery_bytes,
-        quantity: event.bytes,
-        sourceId: event.sourceId,
-        eventTime: event.servedAt,
-        period,
-        rateVersion: ctx.plan.rateVersion,
-        estimatedCostMicroUsd: marginalOverageMicroUsd(
-          ctx.plan,
-          { storageByteSeconds: 0n, deliveryBytes: before },
-          { storageByteSeconds: 0n, deliveryBytes: after },
-          policy.secondsPerBillingMonth,
-        ),
-      }),
-    );
-  }
-  return entries;
 }

@@ -3,17 +3,23 @@
  * Idempotent Stripe catalog setup for Lumra Pro (T29/T31, docs/BILLING.md "Stripe setup").
  *
  *   STRIPE_SECRET_KEY=sk_test_… node scripts/stripe-setup.mjs [--dry-run] [--app-url https://www.lumra.photos]
+ *   STRIPE_SECRET_KEY=sk_test_… node scripts/stripe-setup.mjs --archive-legacy [--dry-run]
  *
  * Runs against whichever mode the key belongs to (test or live) and ensures:
  *   - the "Lumra Pro" product and its $2/month base price (lookup key lumra_pro_monthly_v1);
- *   - Billing Meters `lumra_storage_overage` (MB-months above the included allowance) and
- *     `lumra_delivery_overage` (MB above the included allowance), sum aggregation, by customer id;
- *   - flat per-unit metered prices on those meters (lookup keys lumra_pro_storage_overage_v1,
- *     lumra_pro_delivery_overage_v1): the rate per GB ÷ 1000, in fractional cents;
- *   - the Billing Portal configuration (metadata lumra_config=lumra_portal_v1).
+ *   - the Billing Meter `lumra_storage_overage` (MB-months above the included allowance), sum
+ *     aggregation, by customer id;
+ *   - a flat per-unit metered price on it (lookup key lumra_pro_storage_overage_v1): the rate per
+ *     GB-month ÷ 1000, in fractional cents;
+ *   - the Billing Portal configuration (metadata lumra_config=lumra_portal_v1);
+ *   - the retired delivery charge (ADR-008) is switched off: the `lumra_pro_delivery_overage_v1`
+ *     price is archived and the `lumra_delivery_overage` meter deactivated, if present.
+ *     `--archive-legacy` runs only this step. Subscriptions that already carry the delivery price
+ *     are listed, never modified (their meter receives no events, so the line stays $0).
  * Existing objects are found by lookup key / event name / metadata and reused; an existing price
  * whose amount or meter differs is reported as an error (prices are immutable: ship `_v2` keys).
- * Prints object ids only — never the key. Zero dependencies (Node ≥ 22 `fetch`).
+ * Every step is idempotent. Prints object ids only — never the key. Zero dependencies (Node ≥ 22
+ * `fetch`).
  *
  * Values mirror STRIPE_CATALOG_V1 + RATE_CARD_V1 in @lumra/config; a unit test in
  * packages/billing (stripe-setup.test.ts) fails if they drift.
@@ -38,13 +44,13 @@ export const CATALOG = {
     displayName: 'Lumra storage overage (MB-month)',
     microUsdPerGb: 100_000,
   },
-  delivery: {
-    lookupKey: 'lumra_pro_delivery_overage_v1',
-    eventName: 'lumra_delivery_overage',
-    displayName: 'Lumra delivery overage (MB)',
-    microUsdPerGb: 30_000,
-  },
   portalKey: 'lumra_portal_v1',
+};
+
+/** Stripe objects of the removed delivery charge (ADR-008); mirrors RETIRED_STRIPE_OBJECTS. */
+export const RETIRED = {
+  prices: ['lumra_pro_delivery_overage_v1'],
+  meters: ['lumra_delivery_overage'],
 };
 
 /**
@@ -122,7 +128,7 @@ function client(key) {
 // ---------------------------------------------------------------------------------------------
 
 async function pricesByLookupKey(call) {
-  const keys = [CATALOG.base.lookupKey, CATALOG.storage.lookupKey, CATALOG.delivery.lookupKey];
+  const keys = [CATALOG.base.lookupKey, CATALOG.storage.lookupKey];
   const list = await call('GET', '/v1/prices', {
     lookup_keys: keys,
     limit: 10,
@@ -255,6 +261,53 @@ async function ensureMeteredPrice(call, prices, spec, productId, meterId, dryRun
   return { price, action: 'created' };
 }
 
+/**
+ * Archives the retired prices and deactivates the retired meters (ADR-008). Idempotent: already
+ * archived / inactive objects are reported as such. Subscriptions still carrying a retired price
+ * are only reported (ids), never changed.
+ */
+export async function retireLegacy(call, dryRun, log) {
+  const prices = await call('GET', '/v1/prices', { lookup_keys: RETIRED.prices, limit: 10 });
+  for (const lookupKey of RETIRED.prices) {
+    const price = prices.data.find((p) => p.lookup_key === lookupKey);
+    if (!price) {
+      log(`retired price ${lookupKey}`, null, 'not found');
+      continue;
+    }
+    let action = 'already archived';
+    if (price.active) {
+      action = dryRun ? 'would archive' : 'archived';
+      if (!dryRun) await call('POST', `/v1/prices/${price.id}`, { active: false });
+    }
+    log(`retired price ${lookupKey}`, price.id, action);
+    const subs = await call('GET', '/v1/subscriptions', {
+      price: price.id,
+      status: 'all',
+      limit: 100,
+    });
+    const live = subs.data.filter((s) => !['canceled', 'incomplete_expired'].includes(s.status));
+    log(
+      `  subscriptions on it`,
+      live.map((s) => `${s.id}:${s.status}`).join(', ') || null,
+      `${live.length} not canceled${subs.has_more ? ', more not listed' : ''}; left unchanged`,
+    );
+  }
+  const meters = await call('GET', '/v1/billing/meters', { limit: 100 });
+  for (const eventName of RETIRED.meters) {
+    const meter = meters.data.find((m) => m.event_name === eventName);
+    if (!meter) {
+      log(`retired meter ${eventName}`, null, 'not found');
+      continue;
+    }
+    let action = 'already inactive';
+    if (meter.status === 'active') {
+      action = dryRun ? 'would deactivate' : 'deactivated';
+      if (!dryRun) await call('POST', `/v1/billing/meters/${meter.id}/deactivate`);
+    }
+    log(`retired meter ${eventName}`, meter.id, action);
+  }
+}
+
 async function ensurePortal(call, appUrl, dryRun) {
   const params = {
     business_profile: { headline: 'Manage your Lumra Pro subscription' },
@@ -295,6 +348,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     return 1;
   }
   const dryRun = argv.includes('--dry-run');
+  const legacyOnly = argv.includes('--archive-legacy');
   const appUrlIndex = argv.indexOf('--app-url');
   const appUrl = appUrlIndex >= 0 ? argv[appUrlIndex + 1] : env.NEXT_PUBLIC_APP_URL;
   const mode = key.includes('_live_') ? 'LIVE' : 'test';
@@ -302,26 +356,31 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const log = (label, id, action) => console.log(`${label.padEnd(26)} ${id ?? '-'}  (${action})`);
 
   console.log(`Stripe mode: ${mode}${dryRun ? ' — dry run, nothing will be written' : ''}`);
+  if (legacyOnly) {
+    await retireLegacy(call, dryRun, log);
+    console.log('Done.');
+    return 0;
+  }
   const prices = await pricesByLookupKey(call);
   const { product, action: productAction } = await ensureProduct(call, prices, dryRun);
   log('product', product?.id, productAction);
   const base = await ensureBasePrice(call, prices, product?.id, dryRun);
   log(`price ${CATALOG.base.lookupKey}`, base.price?.id, base.action);
-  for (const spec of [CATALOG.storage, CATALOG.delivery]) {
-    const { meter, action } = await ensureMeter(call, spec, dryRun);
-    log(`meter ${spec.eventName}`, meter?.id, action);
-    const price = await ensureMeteredPrice(
-      call,
-      prices,
-      spec,
-      product?.id,
-      meter?.id ?? null,
-      dryRun,
-    );
-    log(`price ${spec.lookupKey}`, price.price?.id, price.action);
-  }
+  const spec = CATALOG.storage;
+  const { meter, action } = await ensureMeter(call, spec, dryRun);
+  log(`meter ${spec.eventName}`, meter?.id, action);
+  const price = await ensureMeteredPrice(
+    call,
+    prices,
+    spec,
+    product?.id,
+    meter?.id ?? null,
+    dryRun,
+  );
+  log(`price ${spec.lookupKey}`, price.price?.id, price.action);
   const portal = await ensurePortal(call, appUrl, dryRun);
   log('portal configuration', portal.configuration?.id, portal.action);
+  await retireLegacy(call, dryRun, log);
   console.log('Done. Code finds prices by lookup key; no ids need to be configured.');
   return 0;
 }

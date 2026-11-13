@@ -1,167 +1,17 @@
 import { RATE_CARD_V1 } from '@lumra/config';
-import type { DeliveryServedMessage } from '@lumra/contracts';
 import type { AccountBillingContext, StorageAccrualCandidate } from '@lumra/db';
 import type { LedgerEntry } from '@lumra/billing';
 import { describe, expect, it, vi } from 'vitest';
 import { silentLogger } from '../log';
-import {
-  accrualWindowEnd,
-  ingestDeliveryEvents,
-  runStorageAccrual,
-  type DeliveryIngestDeps,
-  type StorageAccrualDeps,
-} from './metering';
+import { accrualWindowEnd, runStorageAccrual, type StorageAccrualDeps } from './metering';
 
 const OWNER = '11111111-1111-4111-8111-111111111111';
-const OWNED_GALLERY = '22222222-2222-4222-8222-222222222222';
-const GUEST_GALLERY = '33333333-3333-4333-8333-333333333333';
-const GONE_GALLERY = '44444444-4444-4444-8444-444444444444';
-
-function delivery(galleryId: string, dedupeKey: string, bytes = 1000): DeliveryServedMessage {
-  return {
-    type: 'delivery.served',
-    galleryId,
-    action: 'preview',
-    mediaId: '55555555-5555-4555-8555-555555555555',
-    archivePartId: null,
-    variant: 'w640',
-    bytes,
-    servedAt: '2026-11-09T12:00:00.000Z',
-    traceId: 'ray-1',
-    dedupeKey,
-  };
-}
 
 const proContext: AccountBillingContext = {
   accountId: OWNER,
   account: { billingPeriodStart: null, billingPeriodEnd: null },
   plan: RATE_CARD_V1.pro,
 };
-
-/** In-memory ledger with the DB's UNIQUE (metric, source_id) semantics. */
-function memoryLedger() {
-  const rows = new Map<string, LedgerEntry>();
-  return {
-    rows,
-    appendMany: vi.fn(async (entries: readonly LedgerEntry[]) => {
-      let added = 0;
-      for (const e of entries) {
-        if (rows.has(e.idempotencyKey)) continue;
-        rows.set(e.idempotencyKey, e);
-        added++;
-      }
-      return added;
-    }),
-  };
-}
-
-function ingestDeps(ledger = memoryLedger()): DeliveryIngestDeps & { ledger: typeof ledger } {
-  return {
-    repo: {
-      galleryOwners: vi.fn(
-        async () =>
-          new Map<string, string | null>([
-            [OWNED_GALLERY, OWNER],
-            [GUEST_GALLERY, null],
-          ]),
-      ),
-      accountContexts: vi.fn(async () => new Map([[OWNER, proContext]])),
-      deliveryTotals: vi.fn(async () => new Map<string, bigint>()),
-    },
-    ledger,
-    log: silentLogger,
-  };
-}
-
-describe('ingestDeliveryEvents', () => {
-  it('meters archive-part downloads served by the gateway (T24 ledger coverage)', async () => {
-    const deps = ingestDeps();
-    const archive: DeliveryServedMessage = {
-      ...delivery(OWNED_GALLERY, 'jti-zip:0-1999999999', 2_000_000_000),
-      action: 'archive',
-      mediaId: null,
-      archivePartId: '66666666-6666-4666-8666-666666666666',
-      variant: null,
-    };
-    const result = await ingestDeliveryEvents([archive, archive], deps);
-    expect(result).toMatchObject({ received: 2, inserted: 1 }); // same response counted once
-    const [row] = [...deps.ledger.rows.values()];
-    expect(row).toMatchObject({ accountId: OWNER, metric: 'delivery_bytes' });
-    expect(row!.quantity).toBe(2_000_000_000n);
-  });
-
-  it('writes one delivery_bytes row per owned-gallery event, attributed to the owner', async () => {
-    const deps = ingestDeps();
-    const result = await ingestDeliveryEvents(
-      [
-        delivery(OWNED_GALLERY, 'jti-a:0-999'),
-        delivery(GUEST_GALLERY, 'jti-b:0-999'),
-        delivery(GONE_GALLERY, 'jti-c:0-999'),
-      ],
-      deps,
-    );
-    expect(result).toEqual({
-      received: 3,
-      inserted: 1,
-      duplicates: 0,
-      skippedGuest: 1,
-      skippedUnknownGallery: 1,
-      skippedNoAccount: 0,
-      accountIds: [OWNER],
-    });
-    const [row] = [...deps.ledger.rows.values()];
-    expect(row).toMatchObject({
-      accountId: OWNER,
-      metric: 'delivery_bytes',
-      quantity: 1000n,
-      sourceId: 'jti-a:0-999',
-      periodStart: new Date('2026-11-01T00:00:00Z'),
-      rateVersion: 1,
-    });
-    expect(deps.repo.deliveryTotals).toHaveBeenCalledWith([
-      { accountId: OWNER, periodStart: new Date('2026-11-01T00:00:00Z') },
-    ]);
-  });
-
-  it('is idempotent: a redelivered batch adds nothing (no double billing)', async () => {
-    const ledger = memoryLedger();
-    const batch = [delivery(OWNED_GALLERY, 'jti-a:0-999'), delivery(OWNED_GALLERY, 'jti-a:0-999')];
-    const first = await ingestDeliveryEvents(batch, ingestDeps(ledger));
-    const second = await ingestDeliveryEvents(batch, ingestDeps(ledger));
-    expect(first.inserted).toBe(1);
-    expect(second).toMatchObject({ inserted: 0, duplicates: 1 });
-    expect(ledger.rows.size).toBe(1);
-  });
-
-  it('counts legitimate repeated downloads (distinct tokens/ranges) separately', async () => {
-    const deps = ingestDeps();
-    await ingestDeliveryEvents(
-      [
-        delivery(OWNED_GALLERY, 'jti-a:0-999'),
-        delivery(OWNED_GALLERY, 'jti-b:0-999'),
-        delivery(OWNED_GALLERY, 'jti-a:1000-1999'),
-      ],
-      deps,
-    );
-    expect(deps.ledger.rows.size).toBe(3);
-  });
-
-  it('skips owners without a billing account and touches no ledger when nothing is billable', async () => {
-    const deps = ingestDeps();
-    deps.repo.accountContexts = vi.fn(async () => new Map());
-    const result = await ingestDeliveryEvents([delivery(OWNED_GALLERY, 'k')], deps);
-    expect(result.skippedNoAccount).toBe(1);
-    expect(deps.ledger.appendMany).not.toHaveBeenCalled();
-  });
-
-  it('propagates DB failures so the queue retries the batch', async () => {
-    const deps = ingestDeps();
-    deps.ledger.appendMany.mockRejectedValueOnce(new Error('db down'));
-    await expect(ingestDeliveryEvents([delivery(OWNED_GALLERY, 'k')], deps)).rejects.toThrow(
-      'db down',
-    );
-  });
-});
 
 describe('runStorageAccrual', () => {
   const GB = 1_000_000_000;

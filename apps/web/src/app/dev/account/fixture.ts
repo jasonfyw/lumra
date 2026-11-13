@@ -5,7 +5,6 @@ import { accountUsageSummarySchema, type AccountUsageSummary } from '@lumra/cont
 export const ACCOUNT_FIXTURE_STATES = [
   'free',
   'free_at_caps',
-  'free_delivery_paused',
   'checkout_pending',
   'pro',
   'pro_canceling',
@@ -48,12 +47,6 @@ export function makeAccountFixture(
         : isPro
           ? 12.4 * BYTES_PER_GB
           : 310_000_000;
-  const deliveredBytes =
-    state === 'free_delivery_paused'
-      ? 3 * BYTES_PER_GB
-      : isPro
-        ? 7.8 * BYTES_PER_GB
-        : 1.1 * BYTES_PER_GB;
   const pct = (used: number, limit: number | null) =>
     limit === null ? null : Math.min(100, Math.floor((used * 100) / limit));
 
@@ -80,12 +73,6 @@ export function makeAccountFixture(
       tracked: true,
       itemCount: Math.round(storedBytes / 9_000_000),
     },
-    delivery: {
-      usedBytes: Math.round(deliveredBytes),
-      limitBytes: plan.maxDeliveryBytesPerMonth,
-      percentUsed: pct(deliveredBytes, plan.maxDeliveryBytesPerMonth),
-      tracked: true,
-    },
     billing: {
       paymentsEnabled: state !== 'unconfigured',
       hasCustomer: isPro || state === 'canceled',
@@ -107,12 +94,6 @@ export function makeAccountFixture(
             ? new Date(
                 canceledAt.getTime() + BILLING_POLICY_V1.retentionAfterSuspensionMs,
               ).toISOString()
-            : null,
-      deliveryPaused:
-        state === 'free_delivery_paused'
-          ? 'free_delivery_cap'
-          : state === 'pro_spend_cap'
-            ? 'spend_cap'
             : null,
       galleries: {
         active: state === 'canceled' ? 5 : state === 'free_at_caps' ? 2 : isPro ? 14 : 1,

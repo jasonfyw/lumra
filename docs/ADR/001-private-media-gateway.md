@@ -1,12 +1,13 @@
 # 001. Private media gateway vs presigned GETs
 
-Status: Accepted · Date: 2026-11-05 · Task: T20
+Status: Accepted · Date: 2026-11-05 · Task: T20 · Amended 2026-11-13 by ADR-008 (no delivery metering)
 
 ## Context
 
 Gallery media must not be readable by guessing R2 keys or by bypassing a gallery password with a direct
 object URL (FR-V01/V02, PRD §11). Password changes, expiry, billing suspension and deletion must stop new
-deliveries quickly, delivery bytes must be metered (FR-D04), and media bytes must never pass through Vercel.
+deliveries quickly, and media bytes must never pass through Vercel. (Delivery bytes were originally metered,
+FR-D04; ADR-008 removed delivery metering.)
 
 ## Decision
 
@@ -18,8 +19,10 @@ exposes `GET|HEAD /m/:token`. Per request it:
 2. loads the gallery's access state and requires `access_version` to match, not deleted, not expired, not
    delivery-suspended;
 3. rebuilds the object key from token claims with the `@lumra/media` key builders and streams from the R2
-   binding (Range → 206, `If-None-Match` → 304, `If-Range`);
-4. emits one `delivery.served` queue message (`USAGE` binding) per byte-bearing response.
+   binding (Range → 206, `If-None-Match` → 304, `If-Range`).
+
+It emits no usage events and has no queue binding (ADR-008; it used to send one `delivery.served` message
+per byte-bearing response). `deliverySuspended` means billing suspension only.
 
 Authorization always completes before any R2 read. Every denial is a generic `401` (token), `403`
 (revoked/expired/suspended), `404` (deleted/missing) or `503` (state unavailable) with
@@ -35,8 +38,7 @@ Authorization always completes before any R2 read. Every denial is a generic `40
   needs so it never touches the database: `preview` → `media_id`, `variant`, `variant_hash`; `original` →
   `media_id`, `variant=original`, `owner_ref`, optional `filename`; `archive` → `archive_part_id`,
   `archive_job_id`, `archive_part_no`, optional `filename`. Segments are re-validated by the key builders.
-- `exp − iat ≤ 300 s` and `exp − now ≤ 300 s + skew`; 30 s clock skew tolerated; `jti` required (also the
-  usage dedupe prefix).
+- `exp − iat ≤ 300 s` and `exp − now ≤ 300 s + skew`; 30 s clock skew tolerated; `jti` required.
 - Uses WebCrypto only, so the Next.js server (Node 22) signs and the Worker verifies with the same code.
 - **Keyring env (`MEDIA_TOKEN_SECRET`)**: `kid:secret[,kid:secret…]`, each secret ≥ 32 chars, no `,`/`:`
   (e.g. `k2:$(openssl rand -hex 32)`). The web app signs with the **first** entry; the gateway accepts
@@ -108,7 +110,7 @@ deliverySuspended, updatedAt}` stored as JSON in KV namespace `ACCESS_STATE`, ke
   tombstone (deleted), any `access_version` mismatch and `deliverySuspended` deny owner previews too.
   `scope` exists only on `preview` claims, so originals and archives are unaffected.
 - Bounded exposure: a leaked owner token is one derivative of one item for ≤ 5 min, the same as any
-  recipient token. Owner previews are delivery like any other preview (one `delivery.served` event).
+  recipient token.
 - The editor keeps the URL a tile first rendered with; when an image fails to load (typically an
   expired token on a lazily loaded tile) it refetches the detail once per item per minute and
   swaps in the fresh URL.
@@ -131,11 +133,9 @@ filename*=UTF-8''…` from the sanitized `filename` claim (last path segment, no
 
 ### Usage metering
 
-`delivery.served` (`@lumra/contracts` queue schema) carries `galleryId`, `action`, `mediaId` or
-`archivePartId`, `variant`, `bytes` (object size, or range length for 206), `servedAt`, `traceId` (`cf-ray`)
-and `dedupeKey = {jti}:{start}-{end}`. No event for `HEAD`, `304`, `416` or denials. Sent via `waitUntil`;
-a send failure is logged and never fails the response. Bytes are the bytes the response is committed to
-send; a client aborting mid-stream is still counted in full (bounded by the object/range size and token TTL).
+Removed by ADR-008: delivery is not tracked. (Previously a `delivery.served` event per byte-bearing
+response fed the `lumra-usage-*` queues.) Serving cost is uncapped; edge caching is tracked in
+jasonfyw/lumra#83.
 
 ## Consequences
 
@@ -145,8 +145,7 @@ send; a client aborting mid-stream is still counted in full (bounded by the obje
 - One extra R2 `head` for conditional/range requests; unconditional GETs are a single R2 operation.
 - Gallery reads cost one KV read per gallery per isolate per 5 s.
 - The web app and gateway share `MEDIA_TOKEN_SECRET`; the gateway never needs DB credentials.
-- The `lumra-usage-*` queues need a consumer (usage-ledger ingestion, T27) before launch; until then
-  messages wait in the queue.
+- No usage queue: the `lumra-usage-*` queues are unbound since ADR-008 and can be deleted.
 
 ## Alternatives considered
 

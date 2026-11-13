@@ -2,7 +2,8 @@ import { z } from 'zod';
 
 /**
  * `GET /api/v1/billing/usage` and the `/account` page (PRD §4, FR-N03): the signed-in owner's
- * plan, a small usage summary and the billing state (T28–T33). Bytes are integers (decimal GB
+ * plan, a small usage summary and the billing state (T28–T33). Storage is the only usage shown:
+ * delivery is not tracked (ADR-008). Bytes are integers (decimal GB
  * in the UI); money is integer micro-USD.
  */
 export const PLAN_IDS = ['free', 'pro'] as const;
@@ -26,14 +27,10 @@ export const usageMeterSchema = z.object({
   limitBytes: bytes.nullable(),
   /** Whole percent of `limitBytes` used (0–100, clamped); `null` without a limit or data. */
   percentUsed: z.number().int().min(0).max(100).nullable(),
-  /** False until this meter is populated for the account (e.g. delivery metering, T27). */
+  /** False until this meter is populated for the account. */
   tracked: z.boolean(),
 });
 export type UsageMeter = z.infer<typeof usageMeterSchema>;
-
-/** Why public delivery is paused by the safety cutoff (PRD §9.4, `billing_accounts`). */
-export const DELIVERY_PAUSE_REASON_VALUES = ['free_delivery_cap', 'spend_cap'] as const;
-export const deliveryPauseReasonSchema = z.enum(DELIVERY_PAUSE_REASON_VALUES);
 
 const isoOrNull = z.iso.datetime().nullable();
 
@@ -46,13 +43,12 @@ export const accountBillingSchema = z.object({
   /** Pro ends at the period end (canceled in the portal, still active until then). */
   cancelAtPeriodEnd: z.boolean(),
   uploadsAllowed: z.boolean(),
+  /** Public galleries are served (false only for billing suspension: past due/canceled). */
   publicDeliveryAllowed: z.boolean(),
-  /** past_due: when public delivery stops; restricted/canceled: when it stopped. */
+  /** past_due: when public galleries stop; restricted/canceled: when they stopped. */
   deliverySuspendsAt: isoOrNull,
   /** End of the media-preservation window (past_due/restricted/canceled). */
   retentionEndsAt: isoOrNull,
-  /** Delivery safety cutoff currently in force, if any. */
-  deliveryPaused: deliveryPauseReasonSchema.nullable(),
   galleries: z.object({
     active: z.number().int().nonnegative(),
     /** Plan maximum of non-deleted galleries; null = unlimited (Pro). */
@@ -71,7 +67,7 @@ export const accountSpendSchema = z.object({
   custom: z.boolean(),
   defaultCapMicroUsd: microUsd,
   maxCapMicroUsd: microUsd,
-  /** Estimated overage this period from the internal ledger (base fee and taxes excluded). */
+  /** Estimated storage overage this period from the internal ledger (base fee and taxes excluded). */
   estimatedOverageMicroUsd: microUsd,
   /** Whole percent of the cap used (0–100, clamped). */
   percentOfCap: z.number().int().min(0).max(100),
@@ -106,8 +102,6 @@ export const accountUsageSummarySchema = z.object({
   period: z.object({ start: z.iso.datetime(), end: z.iso.datetime() }),
   /** Originals plus generated derivatives currently stored, across non-deleted galleries. */
   storage: usageMeterSchema.extend({ itemCount: z.number().int().nonnegative() }),
-  /** Delivered bytes this billing period, from the usage ledger. */
-  delivery: usageMeterSchema,
   billing: accountBillingSchema,
   /** Spending cap + alerts (Pro), null for Free. */
   spend: accountSpendSchema.nullable(),

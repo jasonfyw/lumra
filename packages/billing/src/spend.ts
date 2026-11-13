@@ -97,7 +97,6 @@ export function reconcileInvoice(input: ReconciliationInput): Reconciliation {
     storageGbMonthMicro: input.firstInvoice
       ? 0n
       : storageGbMonthMicroUnits(input.usage.storageByteSeconds, policy.secondsPerBillingMonth),
-    deliveryBytes: input.firstInvoice ? 0 : input.usage.deliveryBytes,
     rateVersion: input.plan.rateVersion,
   });
   const overageMicroUsd = input.firstInvoice

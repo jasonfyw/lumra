@@ -98,9 +98,9 @@ export async function createCheckoutSession(
     client_reference_id: user.userId,
     line_items: [
       { price: prices.base, quantity: 1 },
-      // Metered prices take no quantity: usage arrives through Billing Meter events (T31).
+      // Metered price takes no quantity: usage arrives through Billing Meter events (T31).
+      // Storage only: delivery is not billed (ADR-008).
       { price: prices.storageOverage },
-      { price: prices.deliveryOverage },
     ],
     subscription_data: { metadata: { lumra_user_id: user.userId } },
     metadata: { lumra_user_id: user.userId },

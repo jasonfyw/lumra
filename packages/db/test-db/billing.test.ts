@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import type postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RATE_CARD_V1 } from '@lumra/config';
-import { buildLedgerEntry, planStorageAccrual, rateDeliveryEvents } from '@lumra/billing';
+import { buildLedgerEntry, planStorageAccrual } from '@lumra/billing';
 import { createBillingRepository } from '../src';
 import {
   CHECK_VIOLATION,
@@ -68,7 +68,7 @@ describe('plan_rate_versions', () => {
       await expectSqlError(
         tx,
         RESTRICT,
-        (sp) => sp`update public.plan_rate_versions set delivery_overage_micro_usd_per_gb = 1
+        (sp) => sp`update public.plan_rate_versions set storage_overage_micro_usd_per_gb_month = 1
                    where plan_id = 'pro'`,
       );
       await expectSqlError(tx, RESTRICT, (sp) => sp`delete from public.plan_rate_versions`);
@@ -92,17 +92,18 @@ describe('plan_rate_versions', () => {
       await tx`
         insert into public.plan_rate_versions (
           plan_id, rate_version, monthly_fee_micro_usd, included_storage_gb_month,
-          included_delivery_gb, storage_overage_micro_usd_per_gb_month,
-          delivery_overage_micro_usd_per_gb, default_overage_cap_micro_usd, branding_visible
-        ) values ('pro', 2, 2000000, 3, 10, 80000, 20000, 15000000, false)`;
+          storage_overage_micro_usd_per_gb_month, default_overage_cap_micro_usd, branding_visible
+        ) values ('pro', 2, 2000000, 30, 80000, 15000000, false)`;
       // Direct writes to the projected columns are overwritten from the version row.
       await tx`update public.plans set rate_version = 2, monthly_fee_micro_usd = 1 where id = 'pro'`;
       const repo = repoFor(tx);
       const current = await repo.plans.getCurrent('pro');
-      expect(current).toMatchObject({ rateVersion: 2, includedDeliveryGb: 10 });
-      const [plan] = await tx<{ monthly_fee_micro_usd: string; included_delivery_gb: number }[]>`
-        select monthly_fee_micro_usd::text, included_delivery_gb from public.plans where id = 'pro'`;
-      expect(plan).toEqual({ monthly_fee_micro_usd: '2000000', included_delivery_gb: 10 });
+      expect(current).toMatchObject({ rateVersion: 2, includedStorageGbMonth: 30 });
+      const [plan] = await tx<
+        { monthly_fee_micro_usd: string; included_storage_gb_month: number }[]
+      >`
+        select monthly_fee_micro_usd::text, included_storage_gb_month from public.plans where id = 'pro'`;
+      expect(plan).toEqual({ monthly_fee_micro_usd: '2000000', included_storage_gb_month: 30 });
       // v1 stays available for rating periods recorded under it.
       expect(await repo.plans.getRates('pro', 1)).toEqual(RATE_CARD_V1.pro);
       await expectSqlError(
@@ -130,12 +131,12 @@ describe('usage ledger adapter', () => {
         period: { start: nov, end: dec },
         rateVersion: 1,
       });
-      const delivery = buildLedgerEntry({
+      const later = buildLedgerEntry({
         accountId,
-        metric: 'delivery_bytes',
-        unit: 'byte',
+        metric: 'storage_byte_seconds',
+        unit: 'byte_second',
         quantity: 1234,
-        sourceId: `jti-${randomUUID()}:0-1233`,
+        sourceId: `${accountId}:w2`,
         eventTime: new Date('2026-11-09T01:00:00Z'),
         period: { start: nov, end: dec },
         rateVersion: 1,
@@ -143,13 +144,12 @@ describe('usage ledger adapter', () => {
       });
       expect(await repo.ledger.appendIfAbsent(storage)).toBe(true);
       expect(await repo.ledger.appendIfAbsent(storage)).toBe(false);
-      expect(await repo.ledger.appendMany([delivery, delivery, storage])).toBe(1);
+      expect(await repo.ledger.appendMany([later, later, storage])).toBe(1);
 
       expect(await repo.ledger.totals(accountId, nov)).toEqual({
-        storage_byte_seconds: huge,
-        delivery_bytes: 1234n,
+        storage_byte_seconds: huge + 1234n,
       });
-      expect(await repo.ledger.list(accountId, nov, dec)).toEqual([storage, delivery]);
+      expect(await repo.ledger.list(accountId, nov, dec)).toEqual([storage, later]);
       const [unitRow] = await tx<{ unit: string }[]>`
         select unit from public.usage_ledger where source_id = ${storage.sourceId}`;
       expect(unitRow!.unit).toBe('byte_seconds');
@@ -192,40 +192,6 @@ describe('billing account + reservations adapters', () => {
 });
 
 describe('metering repository', () => {
-  it('resolves gallery owners and account contexts for delivery ingestion', async () => {
-    await inRollback(sql, async (tx) => {
-      const accountId = await createUser(tx);
-      const galleryId = await createGallery(tx, accountId);
-      const repo = repoFor(tx);
-      const owners = await repo.galleryOwners([galleryId, randomUUID()]);
-      expect([...owners]).toEqual([[galleryId, accountId]]);
-      const contexts = await repo.accountContexts([accountId]);
-      expect(contexts.get(accountId)?.plan).toEqual(RATE_CARD_V1.free);
-
-      const entries = rateDeliveryEvents({
-        events: [
-          {
-            sourceId: 'jti-x:0-9',
-            accountId,
-            bytes: 10,
-            servedAt: new Date('2026-11-09T00:00:00Z'),
-          },
-          {
-            sourceId: 'jti-y:0-9',
-            accountId,
-            bytes: 5,
-            servedAt: new Date('2026-11-09T00:00:01Z'),
-          },
-        ],
-        accounts: contexts,
-        deliveryBytesToDate: () => 0n,
-      });
-      expect(await repo.ledger.appendMany(entries)).toBe(2);
-      const totals = await repo.deliveryTotals([{ accountId, periodStart: nov }]);
-      expect(totals.get(`${accountId}|${nov.toISOString()}`)).toBe(15n);
-    });
-  });
-
   it('accrues storage once per window: cursor init, accrual, and lost-race rejection', async () => {
     await inRollback(sql, async (tx) => {
       const accountId = await createUser(tx);

@@ -125,12 +125,11 @@ async function account(userId: string) {
       past_due_since: Date | null;
       canceled_at: Date | null;
       billing_period_start: Date | null;
-      delivery_paused_reason: string | null;
       cancel_at_period_end: boolean;
     }[]
   >`
     select ba.status, p.plan_id, ba.stripe_customer_id, ba.stripe_subscription_id,
-           ba.past_due_since, ba.canceled_at, ba.billing_period_start, ba.delivery_paused_reason,
+           ba.past_due_since, ba.canceled_at, ba.billing_period_start,
            ba.cancel_at_period_end
     from public.billing_accounts ba join public.profiles p on p.user_id = ba.user_id
     where ba.user_id = ${userId}`;
@@ -236,8 +235,8 @@ describe('POST /api/v1/billing/checkout', () => {
       subscription_data: { metadata: { lumra_user_id: user } },
       line_items: [
         { price: `price_${STRIPE_CATALOG_V1.prices.base}`, quantity: 1 },
+        // Storage overage only: no delivery price (ADR-008).
         { price: `price_${STRIPE_CATALOG_V1.prices.storageOverage}` },
-        { price: `price_${STRIPE_CATALOG_V1.prices.deliveryOverage}` },
       ],
     });
     expect(session?.success_url).toBe('https://lumra.test/account?checkout=success');
@@ -441,25 +440,6 @@ describe('POST /api/v1/billing/webhook (T29/T30/T33)', () => {
     expect(state.canceled_at).not.toBeNull();
     await expect(findViewableGallery(getDb(), gallery.slug)).rejects.toMatchObject({
       error: { code: 'gallery_unavailable' },
-    });
-  });
-
-  it('an upgrade lifts a Free delivery-cap pause right away', async () => {
-    const user = await newUser();
-    const customer = await linkCustomer(user);
-    const gallery = await publishedGallery(user);
-    await sql`update public.billing_accounts
-              set delivery_paused_reason = 'free_delivery_cap', delivery_paused_at = now()
-              where user_id = ${user}`;
-    await expect(findViewableGallery(getDb(), gallery.slug)).rejects.toMatchObject({
-      error: { code: 'gallery_unavailable' },
-    });
-    await deliver(
-      subscriptionEvent('customer.subscription.created', { customer, status: 'active' }),
-    );
-    expect((await account(user)).delivery_paused_reason).toBeNull();
-    await expect(findViewableGallery(getDb(), gallery.slug)).resolves.toMatchObject({
-      id: gallery.id,
     });
   });
 

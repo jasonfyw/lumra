@@ -18,8 +18,8 @@ export const API_ERROR_CODES = [
   /** Wrong gallery password (FR-G04). */
   'invalid_password',
   /**
-   * Public gallery whose delivery is paused (owner's Free delivery cap or spending cap reached,
-   * or billing suspension, PRD §9.4): a calm "temporarily unavailable" notice, never a 500.
+   * Public gallery suspended for the owner's billing status (past due beyond grace, restricted
+   * or canceled, PRD §9.4): a calm "temporarily unavailable" notice, never a 500.
    */
   'gallery_unavailable',
   /** Payments are not configured on this deployment (Stripe env unset, T29). */

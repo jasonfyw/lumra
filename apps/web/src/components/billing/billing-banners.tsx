@@ -12,7 +12,7 @@ export type CheckoutReturn = 'success' | null;
 
 export type BannerSummary = Pick<
   AccountUsageSummary,
-  'plan' | 'billingStatus' | 'period' | 'billing' | 'storage' | 'delivery' | 'spend'
+  'plan' | 'billingStatus' | 'period' | 'billing' | 'storage' | 'spend'
 >;
 
 interface Banner {
@@ -77,33 +77,16 @@ export function billingBanners(summary: BannerSummary, checkout: CheckoutReturn 
       break;
   }
 
-  if (billing.deliveryPaused === 'free_delivery_cap') {
-    banners.push({
-      key: 'delivery_cap',
-      tone: 'cap',
-      title: 'Monthly delivery limit reached',
-      body: `Your galleries used this month’s Free delivery allowance (${gb(summary.delivery.limitBytes)}), so viewers see “temporarily unavailable” until ${date(summary.period.end)}. Upgrade to Pro to keep sharing now.`,
-      action: 'checkout',
-    });
-  } else if (billing.deliveryPaused === 'spend_cap') {
-    banners.push({
-      key: 'spend_cap',
-      tone: 'cap',
-      title: 'Spending cap reached',
-      body: `Your galleries reached this period’s overage spending cap, so viewers see a bandwidth-limit notice until ${date(summary.period.end)}. Raise the cap to resume delivery now.`,
-      action: 'account',
-    });
-  }
-
-  // Spend-cap alerts (T32): the highest threshold reached this period, until the cap pauses.
+  // Spend-cap alerts (T32): the highest threshold reached this period. The cap covers storage
+  // overage only; shared galleries are never paused for usage (ADR-008).
   const spend = summary.spend;
   const reached = spend?.alertsReached.at(-1);
-  if (spend && reached !== undefined && billing.deliveryPaused !== 'spend_cap') {
+  if (spend && reached !== undefined) {
     banners.push({
       key: 'spend_alert',
       tone: 'cap',
       title: `You’ve used ${reached}% of your spending cap`,
-      body: `Estimated overage this period is ${formatUsd(spend.estimatedOverageMicroUsd)} of your ${formatUsd(spend.capMicroUsd)} cap. At the cap, uploads that would exceed it are refused and delivery pauses until ${date(summary.period.end)}.`,
+      body: `Estimated storage overage this period is ${formatUsd(spend.estimatedOverageMicroUsd)} of your ${formatUsd(spend.capMicroUsd)} cap. Uploads that would go over the cap are refused until ${date(summary.period.end)}; shared galleries stay online.`,
       action: 'account',
     });
   }

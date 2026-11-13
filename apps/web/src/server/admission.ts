@@ -17,8 +17,8 @@ import type { Tx } from '@/lib/db';
  * one account are admitted one at a time against the same totals.
  *
  * Inputs: stored bytes (committed originals with the conservative derivative estimate,
- * `estimateStoredFootprintBytes`), this period's ledger totals, and pending reservations — live
- * upload intents and archives still being built (estimated as fully delivered, BILLING.md).
+ * `estimateStoredFootprintBytes`), this period's storage ledger total, and pending reservations —
+ * live upload intents. Archives are not billed (ADR-008): they are only gated by billing status.
  */
 export async function evaluateAccountAdmission(
   tx: Tx,
@@ -67,18 +67,10 @@ export async function evaluateAccountAdmission(
       left join public.upload_sessions us on us.id = m.upload_session_id
       where g.owner_id = ${userId}::uuid and m.status <> 'deleted'
     ) m`);
-  // Archives requested but not built yet: their originals will be delivered (T24).
-  const [archives] = await tx.execute<{ bytes: string }>(sql`
-    select coalesce(sum(aj.total_bytes), 0)::text as bytes
-    from public.archive_jobs aj
-    join public.galleries g on g.id = aj.gallery_id
-    where g.owner_id = ${userId}::uuid and aj.status in ('requested', 'queued', 'running')`);
-  const [ledger] = await tx.execute<{ byte_seconds: string; delivery_bytes: string }>(sql`
+  const [ledger] = await tx.execute<{ byte_seconds: string }>(sql`
     select
       coalesce(sum(quantity_micro_units) filter (where metric = 'storage_byte_seconds'), 0)::text
-        as byte_seconds,
-      coalesce(sum(quantity_micro_units) filter (where metric = 'delivery_bytes'), 0)::text
-        as delivery_bytes
+        as byte_seconds
     from public.usage_ledger
     where account_id = ${userId}::uuid and period_start = ${period.start.toISOString()}::timestamptz`);
 
@@ -98,7 +90,6 @@ export async function evaluateAccountAdmission(
         items: Number(usage?.committed_items ?? 0),
       }),
       storageByteSecondsToDate: BigInt(ledger?.byte_seconds ?? '0'),
-      deliveryBytesToDate: Number(ledger?.delivery_bytes ?? 0),
     },
     reservations: [
       {
@@ -108,7 +99,6 @@ export async function evaluateAccountAdmission(
           items: Number(usage?.pending_items ?? 0),
         }),
       },
-      { kind: 'archive', bytes: Number(archives?.bytes ?? 0) },
     ],
     requested,
     capMicroUsd: account?.spendCapMicroUsd ?? null,

@@ -175,7 +175,7 @@ async function admitAccountUpload(tx: Tx, userId: string, size: number, now: Dat
           retryable: false,
           details,
         }
-      : decision.reason === 'free_storage_cap' || decision.reason === 'free_delivery_cap'
+      : decision.reason === 'free_storage_cap'
         ? {
             code: 'quota_exceeded',
             message: 'This upload would exceed your plan’s storage limit.',

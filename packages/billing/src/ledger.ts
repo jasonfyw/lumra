@@ -3,23 +3,23 @@ import { BillingArithmeticError, toNonNegativeBigInt } from './units';
 
 /**
  * Usage ledger rows (PRD §8 `usage_ledger`). The ledger is append-only and authoritative;
- * Stripe meter events are derived from it (ADR-004).
+ * Stripe meter events are derived from it (ADR-004). Storage is the only metered quantity:
+ * delivery (served bytes) is not tracked or billed (ADR-008).
  *
  * `quantity` maps to `usage_ledger.quantity_micro_units BIGINT` and holds the exact integer
- * quantity in the row's `unit` (byte-seconds or bytes). Conversion to billing micro-units
- * (micro GB-month / micro GB) happens only when rating or exporting, so ingestion never rounds.
+ * quantity in the row's `unit` (byte-seconds). Conversion to billing micro-units
+ * (micro GB-month) happens only when rating or exporting, so ingestion never rounds.
  */
-export const USAGE_METRICS = ['storage_byte_seconds', 'delivery_bytes'] as const;
+export const USAGE_METRICS = ['storage_byte_seconds'] as const;
 export const usageMetricSchema = z.enum(USAGE_METRICS);
 export type UsageMetric = z.infer<typeof usageMetricSchema>;
 
-export const USAGE_UNITS = ['byte_second', 'byte'] as const;
+export const USAGE_UNITS = ['byte_second'] as const;
 export const usageUnitSchema = z.enum(USAGE_UNITS);
 export type UsageUnit = z.infer<typeof usageUnitSchema>;
 
 export const METRIC_UNIT: Readonly<Record<UsageMetric, UsageUnit>> = {
   storage_byte_seconds: 'byte_second',
-  delivery_bytes: 'byte',
 };
 
 export const ledgerEntrySchema = z
@@ -71,7 +71,7 @@ export interface BuildLedgerEntryInput {
   metric: UsageMetric;
   quantity: number | bigint;
   unit: UsageUnit;
-  /** Gateway delivery event id, or `storageWindowSourceId(...)` for storage. */
+  /** `storageWindowSourceId(...)` for storage. */
   sourceId: string;
   eventTime: Date;
   period: { start: Date; end: Date };
@@ -113,7 +113,7 @@ export function buildLedgerEntry(input: BuildLedgerEntryInput): LedgerEntry {
 /** Sums quantities per metric, ignoring duplicate idempotency keys (as the DB UNIQUE would). */
 export function sumLedger(entries: readonly LedgerEntry[]): Record<UsageMetric, bigint> {
   const seen = new Set<string>();
-  const totals: Record<UsageMetric, bigint> = { storage_byte_seconds: 0n, delivery_bytes: 0n };
+  const totals: Record<UsageMetric, bigint> = { storage_byte_seconds: 0n };
   for (const entry of entries) {
     if (seen.has(entry.idempotencyKey)) continue;
     seen.add(entry.idempotencyKey);

@@ -14,6 +14,6 @@ export * from './storage';
 export * from './units';
 export * from './usage-summary';
 export * from './subscription';
-export * from './delivery-pause';
+export * from './public-delivery';
 export * from './safeguards';
 export * from './spend';

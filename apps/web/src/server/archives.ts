@@ -194,7 +194,7 @@ export async function createArchive(
         )})`);
     if ((active?.n ?? 0) >= ARCHIVE_LIMITS.maxActiveJobsPerGallery) throw tooManyJobsError();
 
-    // Spending safeguards (PRD §9.4): past-due/canceled owners, Free delivery cap, spend cap.
+    // Billing status (PRD §9.4): past-due/canceled owners. Archives are never capped (ADR-008).
     if (gallery.owner_id) {
       const decision = await evaluateAccountAdmission(
         tx,

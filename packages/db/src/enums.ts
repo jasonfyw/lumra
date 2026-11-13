@@ -29,12 +29,14 @@ export type BillingExportStatus = (typeof BILLING_EXPORT_STATUSES)[number];
 export const GALLERY_EVENT_TYPES = ['view', 'item_download', 'archive_download'] as const;
 export type GalleryEventType = (typeof GALLERY_EVENT_TYPES)[number];
 
-/** Metered quantities in `usage_ledger` (raw integers; unit is byte_seconds or bytes). */
-export const USAGE_METRICS = ['storage_byte_seconds', 'delivery_bytes'] as const;
+/**
+ * Metered quantities in `usage_ledger` (raw integers; unit is byte_seconds). Storage is the only
+ * metered quantity: delivery is not tracked or billed (ADR-008).
+ */
+export const USAGE_METRICS = ['storage_byte_seconds'] as const;
 export type UsageMetric = (typeof USAGE_METRICS)[number];
 export const USAGE_METRIC_UNITS = {
   storage_byte_seconds: 'byte_seconds',
-  delivery_bytes: 'bytes',
 } as const satisfies Record<UsageMetric, string>;
 export type UsageUnit = (typeof USAGE_METRIC_UNITS)[UsageMetric];
 

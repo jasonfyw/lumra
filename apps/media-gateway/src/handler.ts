@@ -1,10 +1,5 @@
 import type { MediaTokenKeyring } from '@lumra/config';
-import {
-  queueMessageSchema,
-  type DeliveryServedMessage,
-  type MediaTokenClaims,
-  type QueueMessage,
-} from '@lumra/contracts';
+import type { MediaTokenClaims } from '@lumra/contracts';
 import { sanitizeDownloadFilename } from '@lumra/domain';
 import { archivePartKey, derivativeKey, originalKey } from '@lumra/media';
 import {
@@ -19,17 +14,14 @@ import {
   ifNoneMatchHits,
   ifRangeAllows,
   parseRange,
-  type ByteRange,
 } from './http';
 
 export interface GatewayDeps {
   keyring: MediaTokenKeyring;
   accessStore: GalleryAccessStore;
   buckets: { originals: R2Bucket; derivatives: R2Bucket; archives: R2Bucket };
-  usage: Queue<QueueMessage>;
   allowedOrigins: readonly string[];
   now: () => Date;
-  waitUntil: (promise: Promise<unknown>) => void;
   log: (level: 'info' | 'warn' | 'error', msg: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -138,41 +130,6 @@ function contentHeaders(ctx: RequestContext, claims: MediaTokenClaims, object: R
 
 const ensureZip = (name: string) => (/\.zip$/i.test(name) ? name : `${name}.zip`);
 
-function emitUsage(
-  ctx: RequestContext,
-  claims: MediaTokenClaims,
-  range: ByteRange,
-  servedAt: Date,
-): void {
-  const bytes = range.end - range.start + 1;
-  if (bytes <= 0) return;
-  const parsed = queueMessageSchema.safeParse({
-    type: 'delivery.served',
-    galleryId: claims.gallery_id,
-    action: claims.action,
-    mediaId: claims.action === 'archive' ? null : claims.media_id,
-    archivePartId: claims.action === 'archive' ? claims.archive_part_id : null,
-    variant: claims.action === 'archive' ? null : claims.variant,
-    bytes,
-    servedAt: servedAt.toISOString(),
-    traceId: ctx.requestId,
-    dedupeKey: `${claims.jti}:${range.start}-${range.end}`,
-  } satisfies DeliveryServedMessage);
-  if (!parsed.success) {
-    ctx.deps.log('error', 'invalid usage event', { requestId: ctx.requestId });
-    return;
-  }
-  ctx.deps.waitUntil(
-    ctx.deps.usage.send(parsed.data).catch((error: unknown) => {
-      // Delivery already happened; reconciliation (T27/T13) covers lost events.
-      ctx.deps.log('error', 'usage event send failed', {
-        requestId: ctx.requestId,
-        error: error instanceof Error ? error.name : 'unknown',
-      });
-    }),
-  );
-}
-
 /** Handles `GET|HEAD /m/:token`. Authorization always completes before any R2 read. */
 export async function handleMediaRequest(
   request: Request,
@@ -222,7 +179,6 @@ export async function handleMediaRequest(
     if (!object || !('body' in object)) return deny(ctx, 404, 'object_missing');
     const headers = contentHeaders(ctx, claims, object);
     headers.set('Content-Length', String(object.size));
-    if (object.size > 0) emitUsage(ctx, claims, { start: 0, end: object.size - 1 }, now);
     return new Response(object.body, { status: 200, headers });
   }
 
@@ -257,10 +213,8 @@ export async function handleMediaRequest(
   if (range) {
     headers.set('Content-Range', `bytes ${range.start}-${range.end}/${meta.size}`);
     headers.set('Content-Length', String(range.end - range.start + 1));
-    emitUsage(ctx, claims, range, now);
     return new Response(object.body, { status: 206, headers });
   }
   headers.set('Content-Length', String(meta.size));
-  if (meta.size > 0) emitUsage(ctx, claims, { start: 0, end: meta.size - 1 }, now);
   return new Response(object.body, { status: 200, headers });
 }

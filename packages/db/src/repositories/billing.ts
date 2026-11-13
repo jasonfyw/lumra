@@ -1,18 +1,16 @@
 /**
  * SERVER-ONLY. Postgres adapters for the `@lumra/billing` ports (T27, ADR-004) plus the reads and
- * writes the metering jobs need (storage accrual, delivery ingestion). Raw SQL over postgres.js
- * like the other worker repositories; money and quantities cross the wire as text and are parsed
+ * writes the metering job needs (storage accrual; delivery is not metered, ADR-008). Raw SQL over
+ * postgres.js like the other worker repositories; money and quantities cross the wire as text and are parsed
  * into integers here, so nothing passes through floating point.
  *
- * DB ↔ TS vocabulary: `usage_ledger.unit` is `byte_seconds`/`bytes` in SQL and
- * `byte_second`/`byte` in `@lumra/billing`; `quantity_micro_units` is the raw integer quantity.
+ * DB ↔ TS vocabulary: `usage_ledger.unit` is `byte_seconds` in SQL and `byte_second` in
+ * `@lumra/billing`; `quantity_micro_units` is the raw integer quantity.
  */
 import type postgres from 'postgres';
 import {
   type BillingAccountStore,
   type CostReservationStore,
-  type DeliveryAccountContext,
-  type DeliveryPauseReason,
   type EmailNotice,
   type SafeguardStore,
   type LedgerEntry,
@@ -23,7 +21,6 @@ import {
   type UsageLedgerStore,
   type UsageMetric,
   type UsageUnit as BillingUsageUnit,
-  accountPeriodKey,
   billingPeriodAt,
   estimateStoredFootprintBytes,
   ledgerIdempotencyKey,
@@ -34,11 +31,9 @@ import { USAGE_METRIC_UNITS, type BillingAccountStatus, type UsageUnit } from '.
 
 const DB_UNIT: Record<BillingUsageUnit, UsageUnit> = {
   byte_second: 'byte_seconds',
-  byte: 'bytes',
 };
 const BILLING_UNIT: Record<UsageUnit, BillingUsageUnit> = {
   byte_seconds: 'byte_second',
-  bytes: 'byte',
 };
 
 export class RateVersionNotFoundError extends Error {
@@ -56,11 +51,8 @@ export interface PlanRatesRow {
   monthlyFeeMicroUsd: number;
   maxActiveGalleries: number | null;
   maxStorageBytes: number | null;
-  maxDeliveryBytesPerMonth: number | null;
   includedStorageGbMonth: number;
-  includedDeliveryGb: number;
   storageOverageMicroUsdPerGbMonth: number | null;
-  deliveryOverageMicroUsdPerGb: number | null;
   defaultOverageCapMicroUsd: number | null;
   brandingVisible: boolean;
 }
@@ -75,11 +67,8 @@ export function planRatesFromRow(row: PlanRatesRow): PlanRates {
     monthlyFeeMicroUsd: row.monthlyFeeMicroUsd,
     maxActiveGalleries: row.maxActiveGalleries,
     maxStorageBytes: row.maxStorageBytes,
-    maxDeliveryBytesPerMonth: row.maxDeliveryBytesPerMonth,
     includedStorageGbMonth: row.includedStorageGbMonth,
-    includedDeliveryGb: row.includedDeliveryGb,
     storageOverageMicroUsdPerGbMonth: row.storageOverageMicroUsdPerGbMonth,
-    deliveryOverageMicroUsdPerGb: row.deliveryOverageMicroUsdPerGb,
     defaultOverageCapMicroUsd: row.defaultOverageCapMicroUsd,
     brandingVisible: row.brandingVisible,
   };
@@ -109,11 +98,8 @@ interface RateColumns {
   monthly_fee_micro_usd: string;
   max_active_galleries: number | null;
   max_storage_bytes: string | null;
-  max_delivery_bytes_per_month: string | null;
   included_storage_gb_month: number;
-  included_delivery_gb: number;
   storage_overage_micro_usd_per_gb_month: string | null;
-  delivery_overage_micro_usd_per_gb: string | null;
   default_overage_cap_micro_usd: string | null;
   branding_visible: boolean;
 }
@@ -125,19 +111,10 @@ function ratesFromColumns(r: RateColumns): PlanRates {
     monthlyFeeMicroUsd: toInt(r.monthly_fee_micro_usd, 'monthly_fee_micro_usd'),
     maxActiveGalleries: r.max_active_galleries,
     maxStorageBytes: toIntOrNull(r.max_storage_bytes, 'max_storage_bytes'),
-    maxDeliveryBytesPerMonth: toIntOrNull(
-      r.max_delivery_bytes_per_month,
-      'max_delivery_bytes_per_month',
-    ),
     includedStorageGbMonth: r.included_storage_gb_month,
-    includedDeliveryGb: r.included_delivery_gb,
     storageOverageMicroUsdPerGbMonth: toIntOrNull(
       r.storage_overage_micro_usd_per_gb_month,
       'storage_overage_micro_usd_per_gb_month',
-    ),
-    deliveryOverageMicroUsdPerGb: toIntOrNull(
-      r.delivery_overage_micro_usd_per_gb,
-      'delivery_overage_micro_usd_per_gb',
     ),
     defaultOverageCapMicroUsd: toIntOrNull(
       r.default_overage_cap_micro_usd,
@@ -153,10 +130,8 @@ function rateColumns(sql: postgres.Sql) {
     pv.monthly_fee_micro_usd::text as monthly_fee_micro_usd,
     pv.max_active_galleries,
     pv.max_storage_bytes::text as max_storage_bytes,
-    pv.max_delivery_bytes_per_month::text as max_delivery_bytes_per_month,
-    pv.included_storage_gb_month, pv.included_delivery_gb,
+    pv.included_storage_gb_month,
     pv.storage_overage_micro_usd_per_gb_month::text as storage_overage_micro_usd_per_gb_month,
-    pv.delivery_overage_micro_usd_per_gb::text as delivery_overage_micro_usd_per_gb,
     pv.default_overage_cap_micro_usd::text as default_overage_cap_micro_usd,
     pv.branding_visible`;
 }
@@ -236,9 +211,11 @@ async function insertLedger(
 // metering-specific shapes
 // ---------------------------------------------------------------------------------------------
 
-export interface AccountBillingContext extends DeliveryAccountContext {
+export interface AccountBillingContext {
   accountId: string;
   account: StoredBillingPeriod;
+  /** The account's *current* plan rates. */
+  plan: PlanRates;
 }
 
 export interface StorageAccrualCandidate extends AccountBillingContext {
@@ -252,15 +229,6 @@ export interface BillingRepository {
   ledger: UsageLedgerStore;
   accounts: BillingAccountStore;
   reservations: CostReservationStore;
-
-  /** Owner (billing account id) per gallery id; `null` for guest galleries. Unknown ids are absent. */
-  galleryOwners(galleryIds: readonly string[]): Promise<Map<string, string | null>>;
-  /** Stored period and *current* plan rates per account id. Accounts without a row are absent. */
-  accountContexts(accountIds: readonly string[]): Promise<Map<string, AccountBillingContext>>;
-  /** `delivery_bytes` ledger totals keyed by `accountPeriodKey(accountId, periodStart)`. */
-  deliveryTotals(
-    pairs: readonly { accountId: string; periodStart: Date }[],
-  ): Promise<Map<string, bigint>>;
 
   /** Accounts whose storage cursor is missing or older than `windowEnd`, stalest first. */
   storageAccrualCandidates(windowEnd: Date, limit: number): Promise<StorageAccrualCandidate[]>;
@@ -335,7 +303,7 @@ export function createBillingRepository(sql: postgres.Sql): BillingRepository {
         where account_id = ${accountId}::uuid
           and period_start = ${periodStart.toISOString()}::timestamptz
         group by metric`;
-      const totals: Record<UsageMetric, bigint> = { storage_byte_seconds: 0n, delivery_bytes: 0n };
+      const totals: Record<UsageMetric, bigint> = { storage_byte_seconds: 0n };
       for (const r of rows) totals[r.metric] = BigInt(r.total);
       return totals;
     },
@@ -402,36 +370,25 @@ export function createBillingRepository(sql: postgres.Sql): BillingRepository {
 
   const reservations: CostReservationStore = {
     /**
-     * Live upload intents (original + estimated derivatives, the same estimate admission uses)
-     * and archives being built (estimated as the gallery's ready originals, all delivered).
+     * Live upload intents (original + estimated derivatives, the same estimate admission uses).
+     * Archives are not billed (ADR-008), so they reserve nothing.
      */
     async pending(accountId) {
-      const rows = await sql<{ kind: 'upload' | 'archive'; bytes: string }[]>`
-        select 'upload' as kind, m.byte_size::text as bytes
+      const rows = await sql<{ bytes: string }[]>`
+        select m.byte_size::text as bytes
         from public.media m
         join public.galleries g on g.id = m.gallery_id
         join public.upload_sessions us on us.id = m.upload_session_id
         where g.owner_id = ${accountId}::uuid
           and m.status in ('reserved', 'uploading')
-          and us.status = 'pending' and us.expires_at > now()
-        union all
-        select 'archive' as kind, coalesce((
-          select sum(mm.byte_size) from public.media mm
-          where mm.gallery_id = aj.gallery_id and mm.deleted_at is null and mm.status = 'ready'
-        ), 0)::text as bytes
-        from public.archive_jobs aj
-        join public.galleries g on g.id = aj.gallery_id
-        where g.owner_id = ${accountId}::uuid
-          and aj.status in ('requested', 'queued', 'running')`;
-      return rows.map((r): Reservation => {
-        const bytes = toInt(r.bytes, 'reservation bytes');
-        return r.kind === 'upload'
-          ? {
-              kind: 'upload',
-              bytes: estimateStoredFootprintBytes({ originalBytes: bytes, items: 1 }),
-            }
-          : { kind: 'archive', bytes };
-      });
+          and us.status = 'pending' and us.expires_at > now()`;
+      return rows.map((r): Reservation => ({
+        kind: 'upload',
+        bytes: estimateStoredFootprintBytes({
+          originalBytes: toInt(r.bytes, 'reservation bytes'),
+          items: 1,
+        }),
+      }));
     },
   };
 
@@ -440,48 +397,6 @@ export function createBillingRepository(sql: postgres.Sql): BillingRepository {
     ledger,
     accounts,
     reservations,
-
-    async galleryOwners(galleryIds) {
-      const out = new Map<string, string | null>();
-      if (galleryIds.length === 0) return out;
-      const rows = await sql<{ id: string; owner_id: string | null }[]>`
-        select id, owner_id from public.galleries
-        where id = any(${pgArray([...new Set(galleryIds)])}::uuid[])`;
-      for (const r of rows) out.set(r.id, r.owner_id);
-      return out;
-    },
-
-    async accountContexts(accountIds) {
-      const out = new Map<string, AccountBillingContext>();
-      if (accountIds.length === 0) return out;
-      const rows = await sql<AccountContextRow[]>`
-        select ba.user_id as account_id, ba.billing_period_start, ba.billing_period_end, ${rateColumns(sql)}
-        ${accountContextFrom()}
-        where ba.user_id = any(${pgArray([...new Set(accountIds)])}::uuid[])`;
-      for (const r of rows) out.set(r.account_id, contextFromRow(r));
-      return out;
-    },
-
-    async deliveryTotals(pairs) {
-      const out = new Map<string, bigint>();
-      if (pairs.length === 0) return out;
-      const payload = JSON.stringify(
-        pairs.map((p) => ({ account_id: p.accountId, period_start: p.periodStart.toISOString() })),
-      );
-      const rows = await sql<{ account_id: string; period_start: Date | string; total: string }[]>`
-        select l.account_id, l.period_start, sum(l.quantity_micro_units)::text as total
-        from public.usage_ledger l
-        join (
-          select distinct account_id, period_start
-          from jsonb_to_recordset(${payload}::text::jsonb) as r(account_id uuid, period_start timestamptz)
-        ) k on k.account_id = l.account_id and k.period_start = l.period_start
-        where l.metric = 'delivery_bytes'
-        group by l.account_id, l.period_start`;
-      for (const r of rows) {
-        out.set(accountPeriodKey(r.account_id, toDate(r.period_start)), BigInt(r.total));
-      }
-      return out;
-    },
 
     async storageAccrualCandidates(windowEnd, limit) {
       const rows = await sql<
@@ -576,7 +491,7 @@ export function createBillingRepository(sql: postgres.Sql): BillingRepository {
 }
 
 // ---------------------------------------------------------------------------------------------
-// billing state: delivery safety cutoff + hourly maintenance sweep (T28/T32/T33)
+// billing state: spend-cap alerts + hourly maintenance sweep (T32/T33)
 // ---------------------------------------------------------------------------------------------
 
 /** Account the hourly sweep looks at, with what `fitsFreeCaps` needs. */
@@ -586,15 +501,14 @@ export interface SweepCandidate {
   pastDueSince: Date | null;
   restrictedSince: Date | null;
   canceledAt: Date | null;
-  deliveryPausedReason: DeliveryPauseReason | null;
   activeGalleries: number;
   /** Originals (uploaded/processing/ready) + derivatives in non-deleted galleries. */
   storedBytes: number;
 }
 
-/** `SafeguardStore` (delivery cutoff, `@lumra/billing`) plus the hourly sweep's reads/writes. */
+/** `SafeguardStore` (spend-cap alerts, `@lumra/billing`) plus the hourly sweep's reads/writes. */
 export interface BillingStateRepository extends SafeguardStore {
-  /** past_due / canceled / paused / Pro accounts after `afterId` (keyset by id). */
+  /** past_due / canceled / Pro accounts after `afterId` (keyset by id). */
   sweepCandidates(afterId: string | null, limit: number): Promise<SweepCandidate[]>;
   /** Compare-and-set status transition from the sweep, with access re-sync and notices. */
   applySweep(
@@ -607,13 +521,8 @@ export interface BillingStateRepository extends SafeguardStore {
 
 interface SafeguardRow extends RateColumns {
   account_id: string;
-  status: BillingAccountStatus;
-  past_due_since: Date | string | null;
-  restricted_since: Date | string | null;
-  canceled_at: Date | string | null;
   spend_cap_micro_usd: string | null;
   warning_thresholds: string;
-  delivery_paused_reason: DeliveryPauseReason | null;
   billing_period_start: Date | string | null;
   billing_period_end: Date | string | null;
 }
@@ -655,10 +564,9 @@ export function createBillingStateRepository(sql: postgres.Sql): BillingStateRep
     async safeguardContexts(accountIds, now) {
       if (accountIds.length === 0) return [];
       const rows = await sql<SafeguardRow[]>`
-        select ba.user_id as account_id, ba.status, ba.past_due_since, ba.restricted_since,
-               ba.canceled_at, ba.spend_cap_micro_usd::text as spend_cap_micro_usd,
+        select ba.user_id as account_id, ba.spend_cap_micro_usd::text as spend_cap_micro_usd,
                array_to_string(ba.warning_thresholds, ',') as warning_thresholds,
-               ba.delivery_paused_reason, ba.billing_period_start, ba.billing_period_end,
+               ba.billing_period_start, ba.billing_period_end,
                ${rateColumns(sql)}
         from public.billing_accounts ba
         left join public.profiles p on p.user_id = ba.user_id
@@ -687,15 +595,12 @@ export function createBillingStateRepository(sql: postgres.Sql): BillingStateRep
         {
           account_id: string;
           byte_seconds: string;
-          delivery_bytes: string;
           alerts: string | null;
         }[]
       >`
         select k.account_id,
                coalesce(sum(l.quantity_micro_units)
                  filter (where l.metric = 'storage_byte_seconds'), 0)::text as byte_seconds,
-               coalesce(sum(l.quantity_micro_units)
-                 filter (where l.metric = 'delivery_bytes'), 0)::text as delivery_bytes,
                (select string_agg(a.threshold_pct::text, ',' order by a.threshold_pct)
                 from public.billing_alerts a
                 where a.account_id = k.account_id and a.period_start = k.period_start) as alerts
@@ -709,41 +614,14 @@ export function createBillingStateRepository(sql: postgres.Sql): BillingStateRep
         return {
           accountId: r.account_id,
           plan: ratesFromColumns(r),
-          account: {
-            status: r.status,
-            pastDueSince: toDateOrNull(r.past_due_since),
-            restrictedSince: toDateOrNull(r.restricted_since),
-            canceledAt: toDateOrNull(r.canceled_at),
-          },
           spendCapMicroUsd: toIntOrNull(r.spend_cap_micro_usd, 'spend_cap_micro_usd'),
           warningThresholdsPct: r.warning_thresholds
             ? r.warning_thresholds.split(',').map((v) => toInt(v, 'warning_threshold'))
             : [],
-          deliveryPausedReason: r.delivery_paused_reason,
           period,
-          usage: {
-            storageByteSecondsToDate: BigInt(t?.byte_seconds ?? '0'),
-            // Compensating rows can be negative; a period total never counts below zero.
-            deliveryBytesToDate: Math.max(0, toInt(t?.delivery_bytes ?? '0', 'delivery_bytes')),
-          },
+          usage: { storageByteSecondsToDate: BigInt(t?.byte_seconds ?? '0') },
           alertsSent: t?.alerts ? t.alerts.split(',').map((v) => toInt(v, 'threshold_pct')) : [],
         };
-      });
-    },
-
-    setDeliveryPause(accountId, expected, next, options) {
-      return atomically(sql, async (tx) => {
-        const rows = await tx<{ user_id: string }[]>`
-          update public.billing_accounts
-          set delivery_paused_reason = ${next},
-              delivery_paused_at = case when ${next}::text is null then null else now() end
-          where user_id = ${accountId}::uuid
-            and delivery_paused_reason is not distinct from ${expected}::text
-          returning user_id`;
-        if (rows.length === 0) return false;
-        await tx`select public.enqueue_owner_access_sync(${accountId}::uuid, ${options.traceId})`;
-        if (options.notice) await enqueueNotice(tx, accountId, options.notice, options.traceId);
-        return true;
       });
     },
 
@@ -788,13 +666,12 @@ export function createBillingStateRepository(sql: postgres.Sql): BillingStateRep
           past_due_since: Date | string | null;
           restricted_since: Date | string | null;
           canceled_at: Date | string | null;
-          delivery_paused_reason: DeliveryPauseReason | null;
           active_galleries: number;
           stored_bytes: string;
         }[]
       >`
         select ba.user_id as account_id, ba.status, ba.past_due_since, ba.restricted_since,
-               ba.canceled_at, ba.delivery_paused_reason,
+               ba.canceled_at,
                (select count(*)::int from public.galleries g
                  where g.owner_id = ba.user_id and g.deleted_at is null) as active_galleries,
                (
@@ -813,8 +690,8 @@ export function createBillingStateRepository(sql: postgres.Sql): BillingStateRep
                )::text as stored_bytes
         from public.billing_accounts ba
         where (
-            ba.status in ('past_due', 'canceled') or ba.delivery_paused_reason is not null
-            -- Pro storage accrues hourly and can reach the spending cap without any delivery.
+            ba.status in ('past_due', 'canceled')
+            -- Pro storage accrues hourly and can cross spend-cap alert thresholds.
             or exists (select 1 from public.profiles p where p.user_id = ba.user_id and p.plan_id = 'pro')
           )
           and (${afterId}::uuid is null or ba.user_id > ${afterId}::uuid)
@@ -826,7 +703,6 @@ export function createBillingStateRepository(sql: postgres.Sql): BillingStateRep
         pastDueSince: toDateOrNull(r.past_due_since),
         restrictedSince: toDateOrNull(r.restricted_since),
         canceledAt: toDateOrNull(r.canceled_at),
-        deliveryPausedReason: r.delivery_paused_reason,
         activeGalleries: r.active_galleries,
         storedBytes: toInt(r.stored_bytes, 'stored_bytes'),
       }));
