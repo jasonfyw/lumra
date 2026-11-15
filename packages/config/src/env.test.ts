@@ -10,6 +10,19 @@ describe('parseEnv', () => {
     expect(env.R2_BUCKET_ORIGINALS).toBe('lumra-originals');
   });
 
+  it('accepts the production media domain and the transitional workers.dev gateway URL', () => {
+    for (const media of [
+      'https://media.lumra.photos',
+      'https://lumra-media-gateway-production.example.workers.dev',
+    ]) {
+      const env = parseEnv('web', webServerEnvSchema, {
+        NEXT_PUBLIC_APP_URL: 'https://www.lumra.photos',
+        NEXT_PUBLIC_MEDIA_URL: media,
+      });
+      expect(env.NEXT_PUBLIC_MEDIA_URL).toBe(media);
+    }
+  });
+
   it('reports every invalid key in a readable error', () => {
     expect(() =>
       parseEnv('web', webServerEnvSchema, {

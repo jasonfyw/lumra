@@ -9,7 +9,8 @@ import type { GalleryAccessState } from '@lumra/contracts';
 import { archivePartKey, derivativeKey, originalKey } from '@lumra/media';
 import { signMediaToken, type MediaTokenInput } from '@lumra/tokens';
 import worker, { sentryOptions, type Env } from './index';
-import { FakeExecutionContext, FakeKv, FakeR2Bucket } from './test-fakes';
+import { EDGE_CACHE_ORIGIN, EDGE_CACHE_TTL_SECONDS } from './edge-cache';
+import { FakeCache, FakeExecutionContext, FakeKv, FakeR2Bucket } from './test-fakes';
 
 const SECRET = 's'.repeat(48);
 const KEYRING = mediaTokenKeyringSchema.parse(`k1:${SECRET}`);
@@ -64,6 +65,7 @@ interface Harness {
   originals: FakeR2Bucket;
   derivatives: FakeR2Bucket;
   archives: FakeR2Bucket;
+  cache: FakeCache;
   logs: string[];
 }
 
@@ -94,19 +96,25 @@ beforeEach(() => {
     ARCHIVES: archives,
     ACCESS_STATE: kv,
   } as unknown as Env;
-  h = { env, kv, originals, derivatives, archives, logs };
+  const cache = new FakeCache();
+  vi.stubGlobal('caches', { default: cache });
+  h = { env, kv, originals, derivatives, archives, cache, logs };
   setState(baseState);
 });
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
-async function call(path: string, init: RequestInit = {}) {
+const WORKERS_DEV = 'https://lumra-media-gateway.example.workers.dev';
+const MEDIA_HOST = 'https://media.lumra.photos';
+
+async function call(path: string, init: RequestInit = {}, origin = WORKERS_DEV) {
   const ctx = new FakeExecutionContext();
   const res = await worker.fetch(
-    new Request(`https://lumra-media-gateway.example.workers.dev${path}`, init),
+    new Request(`${origin}${path}`, init),
     h.env,
     ctx as unknown as ExecutionContext,
   );
@@ -492,5 +500,190 @@ describe('observability (T04)', () => {
     expect(
       sentryOptions({ ...h.env, SENTRY_DSN: 'https://k@o1.ingest.sentry.io/1' } as Env),
     ).toMatchObject({ enabled: true, sendDefaultPii: false });
+  });
+});
+
+describe('edge cache (jasonfyw/lumra#83)', () => {
+  const PREVIEW_KEY = derivativeKey(GALLERY, MEDIA, 'w640v1');
+  const CACHE_KEY = `${EDGE_CACHE_ORIGIN}/v1/${PREVIEW_KEY}`;
+  const onMedia = (path: string, init: RequestInit = {}) => call(path, init, MEDIA_HOST);
+  const servedEvents = () =>
+    h.logs
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .filter((e) => e.msg === 'media served');
+
+  async function warm() {
+    const res = await onMedia(`/m/${await token()}`);
+    expect(res.headers.get('X-Lumra-Cache')).toBe('MISS');
+    await res.arrayBuffer();
+    expect(h.cache.entries.has(CACHE_KEY)).toBe(true);
+    h.cache.calls.length = 0;
+    h.derivatives.calls.length = 0;
+  }
+
+  it('miss reads R2 once and stores the derivative; the next viewer is a hit without R2', async () => {
+    const miss = await onMedia(`/m/${await token()}`, { headers: { Origin: APP } });
+    expect(miss.status).toBe(200);
+    expect(miss.headers.get('X-Lumra-Cache')).toBe('MISS');
+    expect(new Uint8Array(await miss.arrayBuffer())).toEqual(PREVIEW_BYTES);
+    expect(h.derivatives.calls).toEqual([`get:${PREVIEW_KEY}`]);
+    expect(h.cache.calls).toEqual([`match:${CACHE_KEY}`, `put:${CACHE_KEY}`]);
+
+    // A different viewer (different token, different origin header) shares the entry.
+    const hit = await onMedia(`/m/${await token()}`, { headers: { Origin: APP } });
+    expect(hit.status).toBe(200);
+    expect(hit.headers.get('X-Lumra-Cache')).toBe('HIT');
+    expect(new Uint8Array(await hit.arrayBuffer())).toEqual(PREVIEW_BYTES);
+    expect(h.derivatives.calls).toEqual([`get:${PREVIEW_KEY}`]);
+    for (const header of ['ETag', 'Last-Modified', 'Content-Type', 'Content-Length']) {
+      expect(hit.headers.get(header)).toBe(miss.headers.get(header));
+    }
+    // The client response stays private; CORS and security headers are rebuilt per request.
+    expect(hit.headers.get('Cache-Control')).toBe('private, max-age=300');
+    expect(hit.headers.get('Content-Disposition')).toBe('inline');
+    expect(hit.headers.get('Access-Control-Allow-Origin')).toBe(APP);
+    expect(hit.headers.get('Content-Security-Policy')).toBe("default-src 'none'; sandbox");
+    const evil = await onMedia(`/m/${await token()}`, {
+      headers: { Origin: 'https://evil.example' },
+    });
+    expect(evil.headers.get('X-Lumra-Cache')).toBe('HIT');
+    expect(evil.headers.get('Access-Control-Allow-Origin')).toBeNull();
+  });
+
+  it('stores a public s-maxage entry without client, CORS or token data', async () => {
+    const t = await token();
+    await (await onMedia(`/m/${t}`, { headers: { Origin: APP } })).arrayBuffer();
+    const entry = h.cache.entries.get(CACHE_KEY);
+    expect(entry).toBeDefined();
+    const headers = new Headers(entry?.headers);
+    expect(headers.get('Cache-Control')).toBe(
+      `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=${EDGE_CACHE_TTL_SECONDS}`,
+    );
+    expect(EDGE_CACHE_TTL_SECONDS).toBeLessThanOrEqual(3600);
+    expect(headers.get('Access-Control-Allow-Origin')).toBeNull();
+    expect(headers.get('Vary')).toBeNull();
+    const keys = [...h.cache.entries.keys(), ...h.cache.calls].join('\n');
+    for (const part of t.split('.')) expect(keys).not.toContain(part);
+    expect(keys).not.toContain('/m/');
+  });
+
+  it('answers If-None-Match from the cached ETag (304, no R2)', async () => {
+    await warm();
+    const etag = h.cache.entries.get(CACHE_KEY)?.headers.find(([k]) => k === 'etag')?.[1];
+    const res = await onMedia(`/m/${await token()}`, { headers: { 'If-None-Match': `${etag}` } });
+    expect(res.status).toBe(304);
+    expect(res.headers.get('X-Lumra-Cache')).toBe('HIT');
+    expect(res.headers.get('ETag')).toBe(etag);
+    const other = await onMedia(`/m/${await token()}`, { headers: { 'If-None-Match': '"x"' } });
+    expect(other.status).toBe(200);
+    expect(other.headers.get('X-Lumra-Cache')).toBe('HIT');
+    expect(h.derivatives.calls).toEqual([]);
+  });
+
+  it('bypasses the cache for originals, archives, Range and HEAD', async () => {
+    await warm();
+    for (const [claims, init] of [
+      [originalClaims, {}],
+      [originalClaims, { headers: { Range: 'bytes=0-9' } }],
+      [archiveClaims, {}],
+      [previewClaims, { headers: { Range: 'bytes=0-9' } }],
+      [previewClaims, { method: 'HEAD' }],
+    ] as const) {
+      const res = await onMedia(`/m/${await token(claims)}`, init);
+      expect(res.status).toBeLessThan(300);
+      expect(res.headers.get('X-Lumra-Cache')).toBe('BYPASS');
+    }
+    const range = await onMedia(`/m/${await token()}`, { headers: { Range: 'bytes=10-19' } });
+    expect(range.status).toBe(206);
+    expect(new Uint8Array(await range.arrayBuffer())).toEqual(PREVIEW_BYTES.slice(10, 20));
+    expect(h.cache.calls).toEqual([]);
+    expect([...h.cache.entries.keys()]).toEqual([CACHE_KEY]);
+  });
+
+  it('never consults the cache before authorization succeeds', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-05T12:00:00Z'));
+    await warm();
+    const valid = await token();
+    const expired = await token(previewClaims, new Date(Date.now() - 10 * 60 * 1000));
+    const forged = await signMediaToken(
+      previewClaims,
+      mediaTokenKeyringSchema.parse(`k1:${'x'.repeat(48)}`),
+    );
+    await expectGenericFailure(await onMedia(`/m/${expired}`), 401);
+    await expectGenericFailure(await onMedia(`/m/${forged}`), 401);
+
+    const denials: [GalleryAccessState | null, number][] = [
+      [{ ...baseState, accessVersion: 2 }, 403], // password change / revocation
+      [{ ...baseState, deleted: true }, 404], // gallery deleted (tombstone)
+      [{ ...baseState, expiresAt: '2026-11-05T11:00:00.000Z' }, 403], // expired
+      [{ ...baseState, deliverySuspended: true }, 403], // billing suspension
+      [null, 404], // unpublished / missing state
+    ];
+    for (const [state, status] of denials) {
+      setState(state);
+      vi.setSystemTime(Date.now() + 5_000); // past the access-state memo
+      await expectGenericFailure(await onMedia(`/m/${valid}`), status);
+    }
+    h.kv.fail = true;
+    vi.setSystemTime(Date.now() + 5_000);
+    await expectGenericFailure(await onMedia(`/m/${valid}`), 503);
+
+    expect(h.cache.calls).toEqual([]);
+    r2Untouched();
+  });
+
+  it('bounds deleted media: cached bytes need a live token and expire with the edge TTL', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-05T12:00:00Z'));
+    await warm();
+    h.derivatives.objects.delete(PREVIEW_KEY); // T13 purge removed the R2 object
+
+    // Within the TTL a token minted before the delete can still be served from this colo ...
+    vi.setSystemTime(Date.now() + 60_000);
+    expect((await onMedia(`/m/${await token()}`)).headers.get('X-Lumra-Cache')).toBe('HIT');
+    // ... never after the entry's s-maxage: the next request misses and R2 answers 404.
+    vi.setSystemTime(new Date('2026-11-05T12:00:00Z').getTime() + EDGE_CACHE_TTL_SECONDS * 1000);
+    await expectGenericFailure(await onMedia(`/m/${await token()}`), 404);
+    expect(h.cache.entries.has(CACHE_KEY)).toBe(false);
+  });
+
+  it('works where the Cache API is a no-op and when it fails', async () => {
+    h.cache.noop = true;
+    for (let i = 0; i < 2; i++) {
+      const res = await onMedia(`/m/${await token()}`);
+      expect(res.headers.get('X-Lumra-Cache')).toBe('MISS');
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(PREVIEW_BYTES);
+    }
+    h.cache.noop = false;
+    h.cache.failMatch = true;
+    const res = await onMedia(`/m/${await token()}`);
+    expect(res.status).toBe(200);
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(PREVIEW_BYTES);
+    expect(h.logs.join('\n')).toContain('edge cache match failed');
+  });
+
+  it('skips the cache on *.workers.dev and when no Cache API exists', async () => {
+    const res = await call(`/m/${await token()}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('X-Lumra-Cache')).toBe('BYPASS');
+    vi.unstubAllGlobals();
+    const local = await onMedia(`/m/${await token()}`);
+    expect(local.headers.get('X-Lumra-Cache')).toBe('BYPASS');
+    expect(new Uint8Array(await local.arrayBuffer())).toEqual(PREVIEW_BYTES);
+    expect(h.cache.calls).toEqual([]);
+  });
+
+  it('logs the cache status of every served response for the hit ratio', async () => {
+    await warm();
+    await onMedia(`/m/${await token()}`);
+    await onMedia(`/m/${await token(originalClaims)}`);
+    const events = servedEvents().slice(-3);
+    expect(events.map((e) => [e.action, e.status, e.cache])).toEqual([
+      ['preview', 200, 'MISS'],
+      ['preview', 200, 'HIT'],
+      ['original', 200, 'BYPASS'],
+    ]);
+    expect(h.logs.join('\n')).not.toContain(PREVIEW_KEY);
   });
 });

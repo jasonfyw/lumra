@@ -193,9 +193,12 @@ idempotent and safe to run concurrently). `purge skipped invalid object keys` me
 doesn't match the key scheme; those objects are left for the R2 orphan reconcile — inspect the row.
 
 **Gateway window**: the gateway does not check per-media deletion. A media token issued before the
-delete (≤ 5 min TTL) can fetch the object only until the purge removes it (normally within a minute
-of the delete; the gateway then answers 404 `object_missing`). Gallery deletion is enforced at once
-through the KV tombstone and the `access_version` bump.
+delete (≤ 5 min TTL + 30 s skew) can still fetch the preview — from R2 until the purge removes it, or
+from the gateway's edge cache — and no new tokens are minted for `deleting` media. Cached preview
+bytes are not evicted by the purge; each colo's copy expires **≤ 1 h** after it was cached
+(`EDGE_CACHE_TTL_SECONDS`), inside FR-G06's 24 h. See [Media edge cache](#media-edge-cache-83).
+Gallery deletion is enforced at once through the KV tombstone and the `access_version` bump (checked
+before the cache).
 
 ## Stripe webhooks and billing state (T29–T33)
 
@@ -263,7 +266,8 @@ select * from public.billing_meter_cursors where account_id = '…';
 ## Viral / scraped gallery serving cost (ADR-008)
 
 Lumra does not meter, cap or bill delivery, so nothing stops a hot gallery automatically. Every
-view and download costs one Worker request and an R2 Class B read (egress itself is free).
+view and download costs one Worker request; downloads and preview edge-cache misses also cost an R2
+Class B read (egress itself is free). Repeat preview views from the same colo are edge hits.
 
 **Symptoms**: R2 Class B operations or `lumra-media-gateway` requests far above baseline in the
 Cloudflare dashboard; one `galleryId` dominating gateway logs (`requestId`, never full IPs).
@@ -271,7 +275,48 @@ Cloudflare dashboard; one `galleryId` dominating gateway logs (`requestId`, neve
 **Mitigate**: rate-limit or challenge the hot path with a Cloudflare WAF rule on the gateway host;
 if abusive, the owner (or an operator, with notice) can set a password, an expiry or unpublish the
 gallery, which revokes tokens through the normal access-state sync. Never re-introduce a usage-based
-pause without a PRD change. **Follow-up**: edge caching of previews (jasonfyw/lumra#83).
+pause without a PRD change. A low hit ratio on a hot gallery (see below) usually means traffic is
+still on the `workers.dev` URL or spread across many colos.
+
+## Media edge cache (#83)
+
+**Behaviour** (ADR-001 "Edge cache"): on `media.lumra.photos`, full-body preview `GET`s are served
+from the Workers Cache API (`caches.default`, per colo) **after** token + access-state checks. Key
+`https://media-cache.lumra.internal/v1/{objectKey}` (never the token). Entry TTL 1 h
+(`s-maxage=3600`); the client still gets `private, max-age=300`. Originals, archives, `HEAD` and
+`Range` requests bypass it. On `*.workers.dev` the Cache API is a no-op and the gateway reports
+`BYPASS`.
+
+**Verify** (needs a fresh preview URL from a gallery page — tokens live ≤ 5 min; never paste one
+into a ticket or log):
+
+```sh
+curl -s -o /dev/null -D - "https://media.lumra.photos/m/<token>" | grep -i x-lumra-cache   # MISS
+curl -s -o /dev/null -D - "https://media.lumra.photos/m/<token>" | grep -i x-lumra-cache   # HIT
+```
+
+The second request from the same colo must say `HIT` (a different token for the same photo also
+hits). Originals/archives always say `BYPASS`.
+
+**Hit ratio:** Cloudflare → Workers & Pages → `lumra-media-gateway` → Logs, filter
+`msg = "media served"` and `action = "preview"`, group by `cache`; ratio = `HIT / (HIT + MISS)`.
+Mostly `BYPASS` previews means clients still use the `workers.dev` URL (check
+`NEXT_PUBLIC_MEDIA_URL`). R2 Class B operations on `lumra-derivatives` should drop accordingly.
+`edge cache put failed` / `edge cache match failed` warnings mean the Cache API is erroring; requests
+still serve from R2.
+
+**Purge / emergency removal:** the T13 purge does not evict cache entries; they age out within 1 h
+per colo. To remove cached media sooner (e.g. a legal takedown), Cloudflare → `lumra.photos` →
+Caching → Configuration → **Purge Everything** (custom-key Cache API entries can't be purged by URL),
+or bump `EDGE_CACHE_VERSION` in `apps/media-gateway/src/edge-cache.ts` and deploy. Revoking access
+(password change, unpublish, expiry, suspension, delete) needs no purge: it is checked before the
+cache on every request.
+
+**Cutover** (once the `lumra.photos` zone is active): `pnpm --filter @lumra/media-gateway exec
+wrangler deploy --env production` (creates the `media.lumra.photos` custom domain, DNS record and
+certificate), check `https://media.lumra.photos/health`, then set `NEXT_PUBLIC_MEDIA_URL=https://media.lumra.photos`
+in Vercel (Production) and redeploy the web app. Rollback: set `NEXT_PUBLIC_MEDIA_URL` back to the
+`workers.dev` URL and redeploy web; `workers_dev` stays enabled, so both hosts work throughout.
 
 ## Observability (T04)
 
