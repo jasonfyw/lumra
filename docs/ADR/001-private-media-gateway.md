@@ -1,6 +1,7 @@
 # 001. Private media gateway vs presigned GETs
 
-Status: Accepted · Date: 2026-11-05 · Task: T20 · Amended 2026-11-13 by ADR-008 (no delivery metering)
+Status: Accepted · Date: 2026-11-05 · Task: T20 · Amended 2026-11-13 by ADR-008 (no delivery metering) ·
+Amended 2026-11-15 by jasonfyw/lumra#83 (custom domain + edge cache)
 
 ## Context
 
@@ -12,19 +13,21 @@ FR-D04; ADR-008 removed delivery metering.)
 ## Decision
 
 **A Cloudflare Worker (`apps/media-gateway`) is the only read path into the private R2 buckets.** It is
-served on its `*.workers.dev` URL (no custom media domain yet; the app lives on `www.lumra.photos` with DNS on Vercel) and
-exposes `GET|HEAD /m/:token`. Per request it:
+served on the Workers custom domain `media.lumra.photos` (zone `lumra.photos` on Cloudflare; the app's
+apex/`www` records stay DNS-only to Vercel). Its `*.workers.dev` URL stays enabled during the
+transition, without edge caching. It exposes `GET|HEAD /m/:token`. Per request it:
 
 1. verifies the media token (signature, audience, expiry);
 2. loads the gallery's access state and requires `access_version` to match, not deleted, not expired, not
    delivery-suspended;
-3. rebuilds the object key from token claims with the `@lumra/media` key builders and streams from the R2
-   binding (Range → 206, `If-None-Match` → 304, `If-Range`).
+3. rebuilds the object key from token claims with the `@lumra/media` key builders;
+4. for full-body preview GETs only, looks the object up in the edge cache (see **Edge cache**);
+5. otherwise streams from the R2 binding (Range → 206, `If-None-Match` → 304, `If-Range`).
 
 It emits no usage events and has no queue binding (ADR-008; it used to send one `delivery.served` message
 per byte-bearing response). `deliverySuspended` means billing suspension only.
 
-Authorization always completes before any R2 read. Every denial is a generic `401` (token), `403`
+Authorization always completes before any edge-cache lookup or R2 read. Every denial is a generic `401` (token), `403`
 (revoked/expired/suspended), `404` (deleted/missing) or `503` (state unavailable) with
 `Cache-Control: no-store` and no detail in the body; reasons go to structured logs only, never tokens.
 
@@ -124,25 +127,73 @@ deliverySuspended, updatedAt}` stored as JSON in KV namespace `ACCESS_STATE`, ke
 - Originals and archives: `private, no-store`, `Content-Disposition: attachment; filename="…";
 filename*=UTF-8''…` from the sanitized `filename` claim (last path segment, no control/bidi/reserved
   characters, no leading dots, ≤ 150 code points; archives forced to `.zip`).
-- Never `public`: authorization decisions are not cached in shared caches. Edge caching of immutable
-  derivative bytes (Cache API keyed by object key, looked up only **after** authorization, PRD §12) is a
-  later optimization and must keep that ordering.
+- Never `public` to clients: authorization decisions are not cached in shared caches. Only the
+  gateway's own edge-cache entry (below) is `public`, and it is never returned as-is.
 - All responses: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
   `Content-Security-Policy: default-src 'none'; sandbox`, `Vary: Origin`. CORS is granted only to exact
   origins in `APP_ORIGIN` (comma-separated); preflight allows `GET, HEAD` and `Range`/`If-*` headers.
 
+### Edge cache (jasonfyw/lumra#83)
+
+- **What:** preview derivatives only, on full-body `GET`s (with or without `If-None-Match`). Originals
+  and archives (`no-store` downloads), `HEAD` and any request with a `Range` header bypass the cache and
+  read R2 exactly as before. Implementation: `apps/media-gateway/src/edge-cache.ts`.
+- **Ordering:** token verification, access state, `access_version`, deletion tombstone, expiry,
+  billing suspension and the owner-scope rules all run first, per request. The cache is consulted only
+  once they pass, so revocation, unpublish, expiry, suspension and gallery deletion deny cached media
+  exactly as fast as uncached media (≤ 5 s memo + KV propagation). Denials are never cached.
+- **Store:** the Workers Cache API (`caches.default`), per Cloudflare data center, not tiered. On a miss
+  the R2 body is tee'd: one branch to the client, one to `cache.put` under `ctx.waitUntil`. Workers
+  Caching (`"cache": { "enabled": true }`, which caches _in front of_ the Worker) must never be enabled:
+  it would skip authorization.
+- **Key:** `https://media-cache.lumra.internal/v1/{objectKey}` — derived only from the R2 object key that
+  the key builders rebuild from verified claims (`derivatives/{galleryId}/{mediaId}/{variantHash}`), so it
+  never contains the token or any request header, and every viewer shares one entry. `access_version`
+  and `content_version` are deliberately not part of the key: access is re-checked before every lookup,
+  and a changed derivative gets a new `variant_hash` (new key). `v1` is a code constant
+  (`EDGE_CACHE_VERSION`); bumping it and deploying makes every existing entry unreachable at once.
+- **Entry vs client headers:** the stored entry carries only bytes, `Content-Type`, `ETag`,
+  `Last-Modified`, size and `Cache-Control: public, max-age=3600, s-maxage=3600`. The client response is
+  rebuilt on every hit with the usual `private, max-age=300`, `inline`, `image/*`-only `Content-Type`,
+  CORS for the request's `Origin` and the security headers. `If-None-Match` against the cached `ETag`
+  answers `304` without touching R2.
+- **Deleted media bound:** the gateway has no per-media deletion check, and `caches.default.delete` is
+  per data center (and the purge runs in `apps/worker`, which isn't on the zone), so the T13 purge does
+  not evict cache entries. The guarantee rests on two bounds instead:
+  1. _Serving_: a cached preview of a deleted photo is served only to a token minted **before** the
+     delete (the web app stops minting for `deleting`/`deleted` media), i.e. for ≤ 5 min + 30 s skew —
+     the same window as before, when it ended with the R2 purge.
+  2. _Physical copy_: each colo's entry expires `EDGE_CACHE_TTL_SECONDS` = **1 h** after it was stored,
+     well inside FR-G06's < 24 h physical deletion SLO. Gallery deletion is enforced at once by the
+     tombstone and `access_version` bump; its cached bytes also age out within 1 h.
+     Emergency removal: Cloudflare dashboard → `lumra.photos` → Caching → Purge Everything (custom-key
+     Cache API entries cannot be purged by URL), or bump `EDGE_CACHE_VERSION` and deploy.
+- **Where it works:** only on the custom domain. On `*.workers.dev` the Cache API is a no-op, so the
+  gateway skips it there (no body tee) and reports `BYPASS`; if `caches` is missing or a lookup throws,
+  the request is served from R2 (fail open on cache, never on authorization).
+- **Observability:** every served response carries `X-Lumra-Cache: HIT | MISS | BYPASS` and logs
+  `media served` with `action`, `status` and `cache` (never object keys or tokens). Hit ratio =
+  `HIT / (HIT + MISS)` over `media served` events.
+- **Browser cache:** URLs still carry a fresh random `jti` per mint, so a reload re-requests (now an edge
+  hit). Stable per-time-bucket tokens (issue item 4) were not adopted: with a 300 s maximum TTL a
+  bucketed `iat` shortens each URL's remaining lifetime, which collides with the client's
+  "re-mint when < 45 s left" rule, for a small browser-cache gain.
+
 ### Usage metering
 
 Removed by ADR-008: delivery is not tracked. (Previously a `delivery.served` event per byte-bearing
-response fed the `lumra-usage-*` queues.) Serving cost is uncapped; edge caching is tracked in
-jasonfyw/lumra#83.
+response fed the `lumra-usage-*` queues.) Serving cost is uncapped; the edge cache (above) removes the R2 read
+for repeat preview views per colo.
 
 ## Consequences
 
 - **In-flight downloads:** revocation, expiry or deletion stops _new_ requests (including new byte ranges
   of a resumable download). A response already streaming when the state changes may finish; we don't track
   or kill open streams. This is the documented behaviour for PRD §11 "deleted during in-flight download".
-- One extra R2 `head` for conditional/range requests; unconditional GETs are a single R2 operation.
+- One extra R2 `head` for conditional/range requests; unconditional GETs are a single R2 operation, and
+  an edge-cache hit on a preview is none.
+- Cached preview bytes may outlive the R2 purge by up to 1 h per colo (but are only servable with a
+  ≤ 5 min token minted before the delete).
 - Gallery reads cost one KV read per gallery per isolate per 5 s.
 - The web app and gateway share `MEDIA_TOKEN_SECRET`; the gateway never needs DB credentials.
 - No usage queue: the `lumra-usage-*` queues are unbound since ADR-008 and can be deleted.
@@ -156,5 +207,10 @@ jasonfyw/lumra#83.
   HMAC is simpler and faster in WebCrypto; `kid` keeps a path to switch later.
 - **Durable Object for access state**: strongly consistent, but adds per-request latency to a single
   location and more moving parts; kept as the drop-in upgrade path behind `GalleryAccessStore`.
-- **Cookies on the media origin**: the gateway is on a different site (`workers.dev`) than the app, so
-  third-party cookie restrictions would break it; path tokens work everywhere and are scoped per item.
+- **Cookies on the media origin**: the gateway started on a different site (`workers.dev`) than the app,
+  so third-party cookie restrictions would have broken it; `media.lumra.photos` is same-site now, but
+  path tokens work everywhere, are scoped per item and keep the cache key independent of the viewer.
+- **Per-media deleted marker in KV, checked before the cache**: a hard deletion guarantee for cached
+  bytes, but one more KV write per photo delete and one more KV read per request; the token TTL already
+  bounds who can be served.
+- **Workers Caching in front of the Worker / zone Cache Rules**: would cache before authorization.

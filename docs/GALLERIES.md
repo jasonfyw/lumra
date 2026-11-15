@@ -58,7 +58,8 @@ intents take the same lock) and deletes on one gallery serialise.
   reservation is released if one exists. The cover override is cleared if it pointed at this item.
   `content_version` is bumped, and a deduped `media.delete` outbox row (`media.delete:{mediaId}`)
   tells the worker to purge the original and derivatives and mark the row `deleted` (T13; see
-  [RUNBOOKS.md](RUNBOOKS.md#physical-deletion-purge-t13)). Plan admission still counts the bytes of
+  [RUNBOOKS.md](RUNBOOKS.md#physical-deletion-purge-t13)). Edge-cached previews of the photo age out
+  within 1 h and are servable only to tokens minted before the delete (ADR-001 "Edge cache"). Plan admission still counts the bytes of
   completed objects until the worker removes them.
 - **Delete gallery (FR-G06).** In one transaction: `status = 'deleted'`, `deleted_at`, `access_version + 1`,
   a `gallery.access_changed` row, and a deduped `gallery.delete` row (`gallery.delete:{galleryId}`) for
