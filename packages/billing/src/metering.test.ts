@@ -1,4 +1,4 @@
-import { BYTES_PER_GB, RATE_CARD_V1 } from '@lumra/config';
+import { BYTES_PER_GB, RATE_CARD, RATE_CARD_V1 } from '@lumra/config';
 import { describe, expect, it } from 'vitest';
 import { USAGE_METRICS, sumLedger } from './ledger';
 import { METERED_ACTIONS, billingPeriodAt, planStorageAccrual } from './metering';
@@ -209,5 +209,45 @@ describe('ledger coverage', () => {
     expect(invoice.totalCents).toBe(300);
     // Row-level estimates add up to the same overage (no hidden rounding drift).
     expect(rows.reduce((s, r) => s + r.estimatedCostMicroUsd, 0)).toBe(1_000_000);
+  });
+
+  it('pins each row to the plan version in force when it accrues (rate v1 → v2 mid-period)', () => {
+    // 30 GB for the whole month; the price changes after day 25 (overage starts on day 20). v1 rows keep
+    // rating_version 1 ($0.10); later rows carry 2 ($0.05). The period is rated as one total at the
+    // newest version (what Stripe bills after the item moves to the v2 price): $2.00 + 10 × $0.05.
+    const hours = 30 * 24;
+    const start = new Date('2026-11-01T00:00:00Z');
+    let cursor = { accruedThrough: start, storedBytes: 30 * GB };
+    const rows = [];
+    let toDate = 0n;
+    for (let h = 1; h <= hours; h++) {
+      const plan = h <= 25 * 24 ? RATE_CARD_V1.pro : RATE_CARD.pro;
+      const result = planStorageAccrual({
+        accountId: acct,
+        account: null,
+        plan,
+        cursor,
+        storedBytesNow: 30 * GB,
+        windowEnd: new Date(start.getTime() + h * HOUR),
+        byteSecondsToDate: toDate,
+      })!;
+      rows.push(...result.entries);
+      toDate += result.entries.reduce((s, e) => s + e.quantity, 0n);
+      cursor = result.nextCursor;
+    }
+    expect(new Set(rows.map((r) => r.rateVersion))).toEqual(new Set([1, 2]));
+    expect(rows[0]!.rateVersion).toBe(1);
+    expect(rows.at(-1)!.rateVersion).toBe(2);
+    const newest = Math.max(...rows.map((r) => r.rateVersion));
+    const totals = sumLedger(rows);
+    const invoice = rateInvoice({
+      plan: RATE_CARD.pro,
+      rateVersion: newest,
+      storageGbMonthMicro: storageGbMonthMicroUnits(totals.storage_byte_seconds),
+    });
+    expect(invoice.totalMicroUsd).toBe(2_500_000);
+    // Historical per-row estimates stay as written (v1 rows at $0.10): not used for billing.
+    // 5 GB-month at $0.10 (days 20–25) + 5 GB-month at $0.05 (days 25–30).
+    expect(rows.reduce((s, r) => s + r.estimatedCostMicroUsd, 0)).toBe(750_000);
   });
 });

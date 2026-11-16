@@ -118,7 +118,7 @@ export const webServerEnvSchema = z
     NEXT_PUBLIC_TURNSTILE_SITE_KEY: z.string().min(1).optional(),
     // Stripe (T29, docs/BILLING.md). Server-only. Both unset ⇒ billing degrades gracefully:
     // upgrade/portal buttons are disabled and the webhook answers 503 (Stripe retries).
-    // Prices are found by lookup key (STRIPE_CATALOG_V1), never by id, so test and live work alike.
+    // Prices are found by lookup key (STRIPE_CATALOG), never by id, so test and live work alike.
     STRIPE_SECRET_KEY: unsetIfEmpty(stripeSecretKey),
     STRIPE_WEBHOOK_SECRET: unsetIfEmpty(stripeWebhookSecret),
     SENTRY_DSN: url.optional(), // server/edge; absent ⇒ Sentry disabled (T04)

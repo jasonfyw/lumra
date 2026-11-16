@@ -19,15 +19,15 @@ the PRD"), so the PRD is amended together with this ADR.
 
 Pricing becomes:
 
-|                                       | Free                     | Pro                                       |
-| ------------------------------------- | ------------------------ | ----------------------------------------- |
-| Base                                  | $0                       | $2.00/month                               |
-| Galleries                             | 2 active                 | unlimited (fair use)                      |
-| Storage                               | 1 GB hard cap            | 20 GB-month included, then $0.10/GB-month |
-| Spending cap                          | n/a                      | $10 default, **storage overage only**     |
-| Delivery (views, downloads, archives) | not metered, not charged | not metered, not charged                  |
+|                                       | Free                     | Pro                                                                         |
+| ------------------------------------- | ------------------------ | --------------------------------------------------------------------------- |
+| Base                                  | $0                       | $2.00/month                                                                 |
+| Galleries                             | 2 active                 | unlimited (fair use)                                                        |
+| Storage                               | 1 GB hard cap            | 20 GB-month included, then $0.10/GB-month (lowered to $0.05 in v2, ADR-009) |
+| Spending cap                          | n/a                      | $10 default, **storage overage only**                                       |
+| Delivery (views, downloads, archives) | not metered, not charged | not metered, not charged                                                    |
 
-PRD §9.3 worked example: `$2.00 + (30 − 20) × $0.10 = $3.00`.
+PRD §9.3 worked example: `$2.00 + (30 − 20) × $0.10 = $3.00` (ADR-009 later: $0.05, $2.50).
 
 Removed everywhere: the `delivery.served` contract, the gateway's `USAGE` producer, the worker's
 `lumra-usage*` consumer and delivery ingestion (`rateDeliveryEvents`), `delivery_bytes` ledger rows and

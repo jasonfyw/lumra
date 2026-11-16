@@ -45,7 +45,7 @@ worst error is 0.5 micro-unit per line (≤ $0.0000005), far below a cent.
 **Stripe mapping.** Two Billing Meters, with integer values in micro-units:
 
 - `lumra_storage_gb_month_micro`: micro GB-months. The price is graduated: the first 2 × 10⁶ units free,
-  then $0.10 / 10⁶ per unit.
+  then $0.10 / 10⁶ per unit (rate v1; $0.05 from v2, see the 2026-11-16 amendment).
 - `lumra_delivery_gb_micro`: micro GB (decimal kB). The price has the first 5 × 10⁶ units free, then
   $0.03 / 10⁶ per unit.
 
@@ -141,6 +141,13 @@ and removed from code and schema. Storage (`storage_byte_seconds`) is the only m
 `lumra_storage_overage` meter the only meter; the spending cap covers storage overage only and is
 enforced at upload admission. The rounding, cumulative export and ledger rules are unchanged. See
 ADR-008 for the migration and risk.
+
+## Amendment 2026-11-16 (ADR-009): Pro storage overage $0.05
+
+Rate card v2 lowers the storage overage to $0.05/GB-month. The Stripe price is now
+`lumra_pro_storage_overage_v2` (0.005 ¢ per MB-month, same meter); `lumra_pro_storage_overage_v1` is
+archived and subscriptions are moved by `scripts/stripe-setup.mjs --migrate-subscriptions`. Existing ledger rows
+keep `rating_version = 1`; a period holding both versions is rated at the newest one.
 
 ## Consequences
 

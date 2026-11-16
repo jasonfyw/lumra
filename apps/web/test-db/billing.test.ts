@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import Stripe from 'stripe';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { STRIPE_CATALOG_V1 } from '@lumra/config';
+import { STRIPE_CATALOG } from '@lumra/config';
 import { POST as checkout } from '../src/app/api/v1/billing/checkout/route';
 import { POST as portal } from '../src/app/api/v1/billing/portal/route';
 import { POST as webhook } from '../src/app/api/v1/billing/webhook/route';
@@ -234,9 +234,9 @@ describe('POST /api/v1/billing/checkout', () => {
       client_reference_id: user,
       subscription_data: { metadata: { lumra_user_id: user } },
       line_items: [
-        { price: `price_${STRIPE_CATALOG_V1.prices.base}`, quantity: 1 },
+        { price: `price_${STRIPE_CATALOG.prices.base}`, quantity: 1 },
         // Storage overage only: no delivery price (ADR-008).
-        { price: `price_${STRIPE_CATALOG_V1.prices.storageOverage}` },
+        { price: `price_${STRIPE_CATALOG.prices.storageOverage}` },
       ],
     });
     expect(session?.success_url).toBe('https://lumra.test/account?checkout=success');

@@ -6,7 +6,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
-import { RATE_CARD_V1, type PlanRates } from '@lumra/config';
+import { RATE_CARD, RATE_CARD_V1, RATE_CARD_V2, type PlanRates } from '@lumra/config';
 import { DB_ENUMS } from './enums';
 import * as schema from './schema';
 
@@ -114,9 +114,16 @@ describe('rate card seed (T27, ADR-008)', () => {
     'brandingVisible',
   ];
 
-  function seededRows(table: string): Record<string, unknown>[] {
-    const m = new RegExp(`insert into public\\.${table} \\([^)]*\\) values([\\s\\S]*?);`).exec(sql);
-    expect(m, `${table} seed`).not.toBeNull();
+  // The v2 insert (20261116 migration) was written after the delivery columns were dropped.
+  const columnsV2 = columns.filter((c) => !(deliveryColumns as readonly string[]).includes(c));
+
+  function seededRows(table: string, nth = 0, cols = columns): Record<string, unknown>[] {
+    const m = [
+      ...sql.matchAll(
+        new RegExp(`insert into public\\.${table} \\([^)]*\\) values([\\s\\S]*?);`, 'g'),
+      ),
+    ][nth];
+    expect(m, `${table} seed #${nth}`).toBeDefined();
     // Each row's rate columns are on its first line: `('pro', 1, 2000000, ...`.
     return [...m![1]!.matchAll(/\('(free|pro)',([^\n]*)/g)].map((row) => {
       const values = [row[1]!, ...row[2]!.split(',').map((v) => v.replace(/\)$/, '').trim())];
@@ -132,7 +139,7 @@ describe('rate card seed (T27, ADR-008)', () => {
                 : v,
       );
       return Object.fromEntries(
-        columns
+        cols
           .map((c, i) => [c, parsed[i]] as const)
           .filter(([c]) => !(deliveryColumns as readonly string[]).includes(c)),
       );
@@ -142,6 +149,22 @@ describe('rate card seed (T27, ADR-008)', () => {
   it('plan_rate_versions v1 equals RATE_CARD_V1 exactly (PRD §9.2 proposed defaults)', () => {
     const rows = seededRows('plan_rate_versions');
     expect(rows).toEqual([RATE_CARD_V1.free, RATE_CARD_V1.pro]);
+  });
+
+  it('plan_rate_versions v2 equals RATE_CARD_V2: only the Pro storage overage changed (50 000 = $0.05)', () => {
+    const rows = seededRows('plan_rate_versions', 1, columnsV2);
+    expect(rows).toEqual([RATE_CARD_V2.free, RATE_CARD_V2.pro]);
+    expect(RATE_CARD_V2.free).toEqual({ ...RATE_CARD_V1.free, rateVersion: 2 });
+    expect(RATE_CARD_V2.pro).toEqual({
+      ...RATE_CARD_V1.pro,
+      rateVersion: 2,
+      storageOverageMicroUsdPerGbMonth: 50_000,
+    });
+  });
+
+  it('plans are repointed to the current rate card version', () => {
+    expect(RATE_CARD).toBe(RATE_CARD_V2);
+    expect(sql).toMatch(/update public\.plans set rate_version = 2 where id in \('free', 'pro'\);/);
   });
 
   it('drops every delivery column and the delivery usage metric (ADR-008)', () => {

@@ -148,14 +148,14 @@ describe('spend-cap alert runner (T32, ADR-008)', () => {
       const repo = repoFor(tx);
       const now = new Date();
       const period = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-      // 20 GB-month included + 60 GB-month × $0.10 = $6.00 of the $10 default cap → 50 %.
-      await storageRow(tx, user, 80n * GB_MONTH, period);
+      // 20 GB-month included + 120 GB-month × $0.05 (rate v2) = $6.00 of the $10 default cap → 60 %.
+      await storageRow(tx, user, 140n * GB_MONTH, period);
 
       const [ctx] = await repo.safeguardContexts([user], now);
       expect(ctx).toMatchObject({
         accountId: user,
         plan: { id: 'pro' },
-        usage: { storageByteSecondsToDate: 80n * GB_MONTH },
+        usage: { storageByteSecondsToDate: 140n * GB_MONTH },
         alertsSent: [],
       });
       expect(ctx).not.toHaveProperty('deliveryPausedReason');

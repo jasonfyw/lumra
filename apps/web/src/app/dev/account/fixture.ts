@@ -1,4 +1,4 @@
-import { BILLING_POLICY_V1, BYTES_PER_GB, RATE_CARD_V1 } from '@lumra/config';
+import { BILLING_POLICY_V1, BYTES_PER_GB, RATE_CARD } from '@lumra/config';
 import { accountUsageSummarySchema, type AccountUsageSummary } from '@lumra/contracts';
 
 /** `/account` billing states for the dev fixture page, screenshots and component tests. */
@@ -23,7 +23,7 @@ export function makeAccountFixture(
   state: AccountFixtureState,
   now = new Date('2026-11-13T12:00:00Z'),
 ): { summary: AccountUsageSummary; checkout: 'success' | null } {
-  const { free, pro } = RATE_CARD_V1;
+  const { free, pro } = RATE_CARD;
   const isPro = [
     'pro',
     'pro_canceling',

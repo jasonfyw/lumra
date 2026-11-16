@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { eq } from 'drizzle-orm';
-import { RATE_CARD_V1, type PlanRates } from '@lumra/config';
+import { RATE_CARD, type PlanRates } from '@lumra/config';
 import { planRatesFromRow, plans, profiles } from '@lumra/db';
 import { getAuthenticatedUser } from '@/lib/actor';
 import { getDb } from '@/lib/db';
@@ -24,12 +24,12 @@ async function currentRates(): Promise<{ free: PlanRates; pro: PlanRates }> {
     const rows = await getDb().select().from(plans);
     const byId = new Map(rows.map((r) => [r.id, planRatesFromRow(r)]));
     return {
-      free: byId.get('free') ?? RATE_CARD_V1.free,
-      pro: byId.get('pro') ?? RATE_CARD_V1.pro,
+      free: byId.get('free') ?? RATE_CARD.free,
+      pro: byId.get('pro') ?? RATE_CARD.pro,
     };
   } catch (error) {
     logger.warn('pricing: falling back to the seeded rate card', { err: error });
-    return RATE_CARD_V1;
+    return RATE_CARD;
   }
 }
 

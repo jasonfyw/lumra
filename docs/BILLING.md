@@ -6,7 +6,8 @@ Authoritative pricing logic lives in `packages/billing` and the versioned rate c
 - Money is integer **micro-USD** internally; Stripe amounts in cents. No floating-point money.
 - Units are decimal: 1 GB = 10⁹ bytes. GB-month = byte-seconds / (10⁹ × 30 × 86,400).
 - Free: 2 active galleries, 1 GB stored — hard caps, never billed.
-- Pro: $2/month (confirmed); 20 GB-month included (confirmed); $0.10/GB-month storage overage (Proposed);
+- Pro: $2/month (confirmed); 20 GB-month included (confirmed); $0.05/GB-month storage overage (confirmed,
+  rate card v2, 2026-11-16, ADR-009; v1 was $0.10);
   default $10 cap on storage overage with 50/80/100% alerts (Proposed).
 - **Delivery is not tracked, capped or charged on any plan** (ADR-008): views, downloads and archives
   are free to recipients and owners. Risk: serving cost (R2 reads + Worker requests) is uncapped;
@@ -15,11 +16,11 @@ Authoritative pricing logic lives in `packages/billing` and the versioned rate c
   receives **overage only** (MB-months above the allowance), exported daily with idempotency keys and
   reconciled (ADR-004 + 2026-11-13 amendment, T31).
 
-Worked example (PRD §9.3): 30 GB-month stored on Pro → $2.00 + (30 − 20) × $0.10 = **$3.00**.
+Worked example (PRD §9.3): 30 GB-month stored on Pro → $2.00 + (30 − 20) × $0.05 = **$2.50**.
 
 ## Formulas (`@lumra/billing`, ADR-004)
 
-All values come from the rate card (`RATE_CARD_V1`, `BILLING_POLICY_V1` in `@lumra/config`); none are hard-coded
+All values come from the rate card (`RATE_CARD` = v2, `BILLING_POLICY_V1` in `@lumra/config`); none are hard-coded
 in logic. Money is a safe-integer `number` of micro-USD; byte-seconds and micro-unit quantities are `bigint`.
 Every rounding step is **half up** and applied once.
 
@@ -40,7 +41,8 @@ stop immediately, public delivery is suspended after 7 days, and media is retain
 ## Rate card storage (T27)
 
 - `plan_rate_versions` holds one **immutable** row per (plan, `rate_version`). v1 is the PRD §9.2 launch rate card
-  (equal to `RATE_CARD_V1`; a unit test checks the seed). Its delivery columns were dropped by the
+  (equal to `RATE_CARD_V1`; a unit test checks the seed). v2 (migration
+  `20261116000100`) differs only by Pro storage overage $0.05/GB-month (`RATE_CARD_V2` = `RATE_CARD`; also seed-checked). Its delivery columns were dropped by the
   ADR-008 migration without a version bump (no storage or base rate changed and delivery was never
   billed). Rates can never be updated or deleted (trigger,
   SQLSTATE 23001); the only allowed change is `decision` `proposed → confirmed` once the owner signs off.
@@ -49,6 +51,24 @@ stop immediately, public delivery is suspended after 7 days, and media is retain
 - Price change = insert `rate_version = N + 1` rows, then `update plans set rate_version = N + 1` (one migration).
   Ledger rows record the version they were rated under; `PlanStore.getRates(plan, version)` reads any version.
 - `BILLING_POLICY_V1` (30-day month, grace, tolerance) stays in `@lumra/config`, keyed by `rateVersion`.
+
+### Rate card changes (v1 → v2, 2026-11-16: Pro storage overage $0.10 → $0.05)
+
+- **Which version rates what.** The accrual job stamps each new `usage_ledger` row with `plans.rate_version`
+  (the current version) and an estimate at that version's rate. Existing rows keep `rating_version = 1`
+  (append-only). `getRates(plan, version)` reads any version.
+- **Mid-period change.** A period that straddles the change holds v1 and v2 rows. Quantity (byte-seconds) is
+  version-independent, so the period is rated as one total at the **newest** version in it
+  (`max(rating_version)`: the meter export and the invoice reconciliation both do this). That equals what
+  Stripe bills once the subscription item is on the v2 price (it prices the period's meter total at the price on
+  the item when the invoice is created; `--migrate-subscriptions` uses `proration_behavior: none`). So the whole
+  in-flight period is billed at $0.05: a price cut applies to the full period, never a blend. The per-row
+  estimates of v1 rows stay at $0.10 (history, not used for billing); `/account` and the spend-cap estimate
+  re-rate the period total at the current plan, so they show the v2 figure at once.
+- **Periods that closed under v1** (all rows v1) reconcile at v1. Keep the gap between the migration,
+  the code deploy and `--migrate-subscriptions` short (same maintenance window) so a period closing
+  in between does not bill Stripe at one rate and reconcile at another (drift alert, see RUNBOOKS).
+- **Spend cap.** The cap is in dollars and unchanged ($10); at half the price an account reaches it at twice the overage.
 
 ## Metering (T27)
 
@@ -117,7 +137,7 @@ the recipient page renders "This gallery is temporarily unavailable" (`gallery_u
   and a subscription-mode Checkout Session with **two line items**: the $2 base price (quantity 1)
   and the metered storage overage price (no quantity). No delivery price (ADR-008). Prices are
   found by lookup key
-  (`STRIPE_CATALOG_V1`, cached 10 min). 409 when a live subscription exists.
+  (`STRIPE_CATALOG`, cached 10 min). 409 when a live subscription exists.
 - **Portal** (`POST /api/v1/billing/portal`): Billing Portal session for the owner's own customer,
   using the configuration tagged `metadata.lumra_config=lumra_portal_v1` (fallback: account default).
   409 without a customer.
@@ -185,13 +205,19 @@ STRIPE_SECRET_KEY=sk_test_… node scripts/stripe-setup.mjs --archive-legacy  # 
 
 It ensures the "Lumra Pro" product, the base price `lumra_pro_monthly_v1` ($2/month), the meter
 `lumra_storage_overage` (sum, `stripe_customer_id` → customer, `value`), the metered price
-`lumra_pro_storage_overage_v1` (0.01¢ per MB-month = $0.10/GB-month), and the Billing Portal configuration
+`lumra_pro_storage_overage_v2` (0.005¢ per MB-month = $0.05/GB-month), and the Billing Portal configuration
 (payment method, invoices, cancel at period end, email/address). It also retires the removed delivery
-charge (ADR-008, idempotent): archives the price `lumra_pro_delivery_overage_v1`, deactivates the meter
-`lumra_delivery_overage`, and lists (never modifies) subscriptions that still carry that price — their
-delivery line stays $0 because nothing reports to the meter. Existing objects are reused; a price
-with different terms is an error (ship `_v2` lookup keys with a new rate version). A unit test checks
-the script against `STRIPE_CATALOG_V1` and `RATE_CARD_V1`.
+charge (ADR-008) and the superseded $0.10 storage price (idempotent): archives the prices
+`lumra_pro_delivery_overage_v1` and `lumra_pro_storage_overage_v1`, deactivates the meter
+`lumra_delivery_overage`, and lists (never modifies) subscriptions that still carry a retired price.
+Existing objects are reused; a price with different terms is an error (ship `_vN` lookup keys with
+a new rate version). A unit test checks the script against `STRIPE_CATALOG` and `RATE_CARD`.
+
+`--migrate-subscriptions` (own step; supports `--dry-run`) moves every active/trialing/past_due
+subscription whose storage item is on the v1 price to `lumra_pro_storage_overage_v2` with
+`proration_behavior: none` (metered items). Idempotent, prints subscription ids only. Run per mode
+(test, then live) after the setup run created the v2 price. Canceled subscriptions keep the archived
+v1 price (nothing more to bill).
 
 ## Usage export to Stripe (T31)
 

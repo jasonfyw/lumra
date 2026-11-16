@@ -219,14 +219,14 @@ Indexes: `(galleries.owner_id, updated_at DESC)`, `(media.gallery_id, sort_key)`
 - Full Stripe paid subscriptions and simplified metering live in v1; video-processing meter launches only with v1.1.
 - No auto-billing free users. Upgrade through hosted Stripe Checkout; manage payment method/invoices via Stripe Billing Portal.
 
-### 9.2 Proposed **launch rate card** — requires operator margin validation before going live
+### 9.2 **Launch rate card** (v2) — Free limits and the $10 default cap are still Proposed; margin validation before going live
 
 | Metric | Free | Pro (USD) |
 |---|---|---|
 | Base subscription | $0 | **$2.00/month**, confirmed |
 | Active galleries | **2** max | Unlimited subject to fair use |
-| Included stored content | **1 GB total hard cap** | **20 GB-month per billing period** |
-| Storage above included | Not permitted | **$0.10 per GB-month** (Proposed) |
+| Included stored content | **1 GB total hard cap** | **20 GB-month per billing period**, confirmed |
+| Storage above included | Not permitted | **$0.05 per GB-month**, confirmed (owner decision 16 November 2026, ADR-009; was $0.10 in rate card v1) |
 | Default spending cap | n/a (never billed) | **$10/month of storage overage** (Proposed) |
 | Media delivery (views, downloads, archives) | Not metered, not charged | Not metered, not charged |
 | Photo processing | Included, fair use | Included, fair use |
@@ -239,7 +239,7 @@ Indexes: `(galleries.owner_id, updated_at DESC)`, `(media.gallery_id, sort_key)`
 
 ### 9.3 Provisional monthly bill example
 
-Pro creator uses average 30 GB-month stored (any amount of data delivered): `$2.00 + (30 − 20)×$0.10 = $3.00` before applicable tax. Values illustrative, price settings live in versioned database/config and surfaced before upgrade. No hidden minimum beyond subscription.
+Pro creator uses average 30 GB-month stored (any amount of data delivered): `$2.00 + (30 − 20)×$0.05 = $2.50` before applicable tax. Values illustrative, price settings live in versioned database/config and surfaced before upgrade. No hidden minimum beyond subscription.
 
 ### 9.4 Spending safeguards and overdue policy
 
@@ -458,7 +458,9 @@ Every task must include: functional implementation; typed interface and input va
 | Public link abuse | Viral/scraped galleries cost R2 reads + Worker requests with no per-account cap (delivery is not billed, ADR-008). | Rate limits, view throttles; edge caching tracked in jasonfyw/lumra#83. |
 | Privacy/rights | Photos may contain sensitive personal data. | Clear consent/terms, deletion, retention, minimal telemetry. |
 
-**Commercial settings tagged Proposed:** free active galleries=2; storage overage=$0.10/GB-month; Pro default overage cap=$10 (storage overage only); no delivery allowance, cap or charge (decided, ADR-008); cap grace/tolerance policy; past-due grace=7 days, retention=30 days; archive partitions 500 items/2 GB; measured performance thresholds. These are defaults to validate with unit-economics and usability tests, not a claim of user approval.
+**Confirmed by the owner:** Pro base $2/month; 20 GB-month included; storage overage $0.05/GB-month (rate card v2, 16 November 2026, ADR-009).
+
+**Commercial settings tagged Proposed:** free active galleries=2 and 1 GB storage; Pro default overage cap=$10 (storage overage only); no delivery allowance, cap or charge (decided, ADR-008); cap grace/tolerance policy; past-due grace=7 days, retention=30 days; archive partitions 500 items/2 GB; measured performance thresholds. These are defaults to validate with unit-economics and usability tests, not a claim of user approval.
 
 **Architecture decision records required:** ADR-001 private media gateway vs presigned URLs; ADR-002 image processor/container/queue; ADR-003 ZIP implementation and partition sizes; ADR-004 billing rating/Stripe meter mapping; ADR-005 RLS and guest claim security; ADR-006 video provider decision before v1.1; ADR-008 removal of delivery from pricing. None should trigger a new product interview unless contradicting confirmed user choices.
 

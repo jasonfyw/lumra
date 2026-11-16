@@ -4,24 +4,31 @@
  *
  *   STRIPE_SECRET_KEY=sk_test_… node scripts/stripe-setup.mjs [--dry-run] [--app-url https://www.lumra.photos]
  *   STRIPE_SECRET_KEY=sk_test_… node scripts/stripe-setup.mjs --archive-legacy [--dry-run]
+ *   STRIPE_SECRET_KEY=sk_test_… node scripts/stripe-setup.mjs --migrate-subscriptions [--dry-run]
  *
  * Runs against whichever mode the key belongs to (test or live) and ensures:
  *   - the "Lumra Pro" product and its $2/month base price (lookup key lumra_pro_monthly_v1);
  *   - the Billing Meter `lumra_storage_overage` (MB-months above the included allowance), sum
  *     aggregation, by customer id;
- *   - a flat per-unit metered price on it (lookup key lumra_pro_storage_overage_v1): the rate per
- *     GB-month ÷ 1000, in fractional cents;
+ *   - a flat per-unit metered price on it (lookup key lumra_pro_storage_overage_v2): the rate per
+ *     GB-month ÷ 1000, in fractional cents (rate card v2: $0.05/GB-month = 0.005¢ per MB-month);
  *   - the Billing Portal configuration (metadata lumra_config=lumra_portal_v1);
- *   - the retired delivery charge (ADR-008) is switched off: the `lumra_pro_delivery_overage_v1`
- *     price is archived and the `lumra_delivery_overage` meter deactivated, if present.
- *     `--archive-legacy` runs only this step. Subscriptions that already carry the delivery price
- *     are listed, never modified (their meter receives no events, so the line stays $0).
+ *   - retired objects are switched off: the delivery price `lumra_pro_delivery_overage_v1`
+ *     (ADR-008) and the superseded $0.10 storage price `lumra_pro_storage_overage_v1` (ADR-009)
+ *     are archived and the `lumra_delivery_overage` meter deactivated, if present.
+ *     `--archive-legacy` runs only this step. Subscriptions that still carry a retired price
+ *     are listed, never modified here.
+ *   - `--migrate-subscriptions` (own step, never part of the default run): for every
+ *     active/trialing/past_due subscription whose storage item is on the v1 price, switches that
+ *     item to the v2 price with proration_behavior=none (metered items). Idempotent (a migrated
+ *     subscription no longer carries v1); prints subscription ids only. Run the setup first so
+ *     the v2 price exists. With `--dry-run` it only lists what it would change.
  * Existing objects are found by lookup key / event name / metadata and reused; an existing price
  * whose amount or meter differs is reported as an error (prices are immutable: ship `_v2` keys).
  * Every step is idempotent. Prints object ids only — never the key. Zero dependencies (Node ≥ 22
  * `fetch`).
  *
- * Values mirror STRIPE_CATALOG_V1 + RATE_CARD_V1 in @lumra/config; a unit test in
+ * Values mirror STRIPE_CATALOG + RATE_CARD_V1 in @lumra/config; a unit test in
  * packages/billing (stripe-setup.test.ts) fails if they drift.
  */
 import { pathToFileURL } from 'node:url';
@@ -39,19 +46,25 @@ export const CATALOG = {
   // Rates in micro-USD per GB(-month) from RATE_CARD_V1.pro; meter units are MB (10^6 bytes).
   meterUnitBytes: 1_000_000,
   storage: {
-    lookupKey: 'lumra_pro_storage_overage_v1',
+    lookupKey: 'lumra_pro_storage_overage_v2',
     eventName: 'lumra_storage_overage',
     displayName: 'Lumra storage overage (MB-month)',
-    microUsdPerGb: 100_000,
+    microUsdPerGb: 50_000, // rate card v2: $0.05/GB-month (v1 was 100_000)
   },
   portalKey: 'lumra_portal_v1',
 };
 
-/** Stripe objects of the removed delivery charge (ADR-008); mirrors RETIRED_STRIPE_OBJECTS. */
+/** Retired Stripe objects (delivery, ADR-008; $0.10 storage price, ADR-009); mirrors RETIRED_STRIPE_OBJECTS. */
 export const RETIRED = {
-  prices: ['lumra_pro_delivery_overage_v1'],
+  prices: ['lumra_pro_delivery_overage_v1', 'lumra_pro_storage_overage_v1'],
   meters: ['lumra_delivery_overage'],
 };
+
+/** The storage price that `--migrate-subscriptions` moves subscriptions away from (rate card v1). */
+export const SUPERSEDED_STORAGE_PRICE = 'lumra_pro_storage_overage_v1';
+
+/** Subscription states that are migrated; canceled/incomplete ones keep their old items. */
+export const MIGRATE_STATUSES = ['active', 'trialing', 'past_due'];
 
 /**
  * Exact decimal string for `numerator / 10^exponent` (no floating point): 100000 / 10^7 → "0.01".
@@ -289,7 +302,9 @@ export async function retireLegacy(call, dryRun, log) {
     log(
       `  subscriptions on it`,
       live.map((s) => `${s.id}:${s.status}`).join(', ') || null,
-      `${live.length} not canceled${subs.has_more ? ', more not listed' : ''}; left unchanged`,
+      `${live.length} not canceled${subs.has_more ? ', more not listed' : ''}; left unchanged${
+        lookupKey === SUPERSEDED_STORAGE_PRICE ? ' (use --migrate-subscriptions)' : ''
+      }`,
     );
   }
   const meters = await call('GET', '/v1/billing/meters', { limit: 100 });
@@ -306,6 +321,92 @@ export async function retireLegacy(call, dryRun, log) {
     }
     log(`retired meter ${eventName}`, meter.id, action);
   }
+}
+
+/** All subscriptions carrying `priceId` (cursor-paginated, every status). */
+async function subscriptionsOnPrice(call, priceId) {
+  const out = [];
+  let startingAfter;
+  for (;;) {
+    const page = await call('GET', '/v1/subscriptions', {
+      price: priceId,
+      status: 'all',
+      limit: 100,
+      starting_after: startingAfter,
+    });
+    out.push(...page.data);
+    if (!page.has_more || page.data.length === 0) return out;
+    startingAfter = page.data[page.data.length - 1].id;
+  }
+}
+
+/**
+ * Moves the storage item of every active/trialing/past_due subscription from the superseded v1
+ * price to the current (v2) price. `proration_behavior: none`: metered items have nothing to
+ * prorate, and the whole current period's meter total is billed at the price on the item when the
+ * invoice is created (so an in-flight period is rated at the new, lower price — rate card v2).
+ * Idempotent: a migrated subscription no longer lists the v1 price. Logs subscription ids only.
+ */
+export async function migrateSubscriptions(call, dryRun, log) {
+  const keys = [SUPERSEDED_STORAGE_PRICE, CATALOG.storage.lookupKey];
+  const list = await call('GET', '/v1/prices', { lookup_keys: keys, limit: 10 });
+  const byKey = new Map(list.data.map((p) => [p.lookup_key, p]));
+  const from = byKey.get(SUPERSEDED_STORAGE_PRICE);
+  const to = byKey.get(CATALOG.storage.lookupKey);
+  const wanted = centsPerUnit(CATALOG.storage.microUsdPerGb);
+  if (!to) {
+    // A dry run is still useful before the setup has created the target price.
+    if (!dryRun)
+      throw new Error(`price ${CATALOG.storage.lookupKey} not found; run the setup first`);
+    log(`price ${CATALOG.storage.lookupKey}`, null, 'not created yet; the setup run creates it');
+  } else {
+    if (
+      !to.active ||
+      to.recurring?.usage_type !== 'metered' ||
+      normalizeDecimal(to.unit_amount_decimal) !== normalizeDecimal(wanted)
+    ) {
+      throw new Error(`price ${CATALOG.storage.lookupKey} is inactive or has unexpected terms`);
+    }
+    log(`price ${CATALOG.storage.lookupKey}`, to.id, `target (${wanted}¢ per unit)`);
+  }
+  if (!from) {
+    log(`price ${SUPERSEDED_STORAGE_PRICE}`, null, 'not found; nothing to migrate');
+    return { migrated: 0 };
+  }
+  log(`price ${SUPERSEDED_STORAGE_PRICE}`, from.id, from.active ? 'active' : 'archived');
+
+  let migrated = 0;
+  let skipped = 0;
+  for (const sub of await subscriptionsOnPrice(call, from.id)) {
+    if (!MIGRATE_STATUSES.includes(sub.status)) {
+      skipped++;
+      continue;
+    }
+    const item = sub.items?.data?.find((i) => i.price?.id === from.id);
+    if (!item) {
+      skipped++;
+      continue;
+    }
+    if (!dryRun) {
+      await call(
+        'POST',
+        `/v1/subscriptions/${sub.id}`,
+        {
+          items: [{ id: item.id, price: to.id }],
+          proration_behavior: 'none',
+        },
+        `lumra-migrate-${sub.id}-${to.id}`,
+      );
+    }
+    migrated++;
+    log(`  subscription`, sub.id, `${sub.status}; ${dryRun ? 'would migrate' : 'migrated'}`);
+  }
+  log(
+    '  summary',
+    null,
+    `${migrated} ${dryRun ? 'would be migrated' : 'migrated'}, ${skipped} skipped (canceled/other)`,
+  );
+  return { migrated };
 }
 
 async function ensurePortal(call, appUrl, dryRun) {
@@ -349,6 +450,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   }
   const dryRun = argv.includes('--dry-run');
   const legacyOnly = argv.includes('--archive-legacy');
+  const migrateOnly = argv.includes('--migrate-subscriptions');
   const appUrlIndex = argv.indexOf('--app-url');
   const appUrl = appUrlIndex >= 0 ? argv[appUrlIndex + 1] : env.NEXT_PUBLIC_APP_URL;
   const mode = key.includes('_live_') ? 'LIVE' : 'test';
@@ -356,6 +458,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const log = (label, id, action) => console.log(`${label.padEnd(26)} ${id ?? '-'}  (${action})`);
 
   console.log(`Stripe mode: ${mode}${dryRun ? ' — dry run, nothing will be written' : ''}`);
+  if (migrateOnly) {
+    await migrateSubscriptions(call, dryRun, log);
+    console.log('Done.');
+    return 0;
+  }
   if (legacyOnly) {
     await retireLegacy(call, dryRun, log);
     console.log('Done.');

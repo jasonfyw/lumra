@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { RATE_CARD_V1 } from '@lumra/config';
+import { RATE_CARD } from '@lumra/config';
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 import { ACCOUNT_FIXTURE_STATES, makeAccountFixture } from '@/app/dev/account/fixture';
@@ -11,25 +11,21 @@ import { billingBanners } from './billing-banners';
 import { PricingView, workedExample } from './pricing-view';
 
 describe('pricing (PRD §9.3)', () => {
-  it('rates the worked example with @lumra/billing: $2.00 + (30 − 20) × $0.10 = $3.00', () => {
-    const { invoice } = workedExample(RATE_CARD_V1.pro);
-    expect(invoice.totalMicroUsd).toBe(3_000_000);
-    expect(formatUsd(invoice.totalMicroUsd)).toBe('$3.00');
+  it('rates the worked example with @lumra/billing: $2.00 + (30 − 20) × $0.05 = $2.50', () => {
+    const { invoice } = workedExample(RATE_CARD.pro);
+    expect(invoice.totalMicroUsd).toBe(2_500_000);
+    expect(formatUsd(invoice.totalMicroUsd)).toBe('$2.50');
     expect(invoice.lines.map((l) => l.kind)).toEqual(['base_fee', 'storage_overage']);
   });
 
   it('renders every number from the rate card it is given', () => {
     render(
-      <PricingView
-        free={RATE_CARD_V1.free}
-        pro={RATE_CARD_V1.pro}
-        viewer={{ kind: 'anonymous' }}
-      />,
+      <PricingView free={RATE_CARD.free} pro={RATE_CARD.pro} viewer={{ kind: 'anonymous' }} />,
     );
-    expect(screen.getByText('$3.00')).toBeInTheDocument();
+    expect(screen.getByText('$2.50')).toBeInTheDocument();
     expect(screen.getByText(/2 active galleries/)).toBeInTheDocument();
     expect(screen.getByText(/20 GB-month of storage included/)).toBeInTheDocument();
-    expect(screen.getByText(/Then \$0\.10 per GB-month/)).toBeInTheDocument();
+    expect(screen.getByText(/Then \$0\.05 per GB-month/)).toBeInTheDocument();
     // Delivery is neither metered nor charged (ADR-008).
     expect(screen.queryByText(/per GB delivered|of delivery a month|bandwidth/i)).toBeNull();
     expect(screen.getAllByText(/Views and downloads included, not metered/)).toHaveLength(2);
@@ -42,8 +38,8 @@ describe('pricing (PRD §9.3)', () => {
   it('disables upgrade with a reason when payments are not configured', () => {
     render(
       <PricingView
-        free={RATE_CARD_V1.free}
-        pro={RATE_CARD_V1.pro}
+        free={RATE_CARD.free}
+        pro={RATE_CARD.pro}
         viewer={{ kind: 'free', paymentsEnabled: false }}
       />,
     );
@@ -56,6 +52,7 @@ describe('pricing (PRD §9.3)', () => {
     expect(formatUsd(4_205_000)).toBe('$4.21');
     expect(formatUsd(4_204_999)).toBe('$4.20');
     expect(formatUsdRate(100_000)).toBe('$0.10');
+    expect(formatUsdRate(50_000)).toBe('$0.05');
     expect(formatUsdRate(30_000)).toBe('$0.03');
   });
 });

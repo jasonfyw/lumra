@@ -1,7 +1,7 @@
 import {
   BILLING_POLICY_V1,
   BYTES_PER_GB,
-  STRIPE_CATALOG_V1,
+  STRIPE_CATALOG,
   type PlanRates,
   type StripeCatalog,
 } from '@lumra/config';
@@ -11,7 +11,7 @@ import { BillingArithmeticError, divRoundHalfUp, maxBig, toNonNegativeBigInt } f
 /**
  * Stripe Billing Meter export (ADR-004 + 2026-11-13 amendment, T31). Meters carry **overage
  * only** as integers: storage in MB-months above the included GB-months
- * (`STRIPE_CATALOG_V1.meterUnitBytes` = 10⁶). The Stripe price is flat per unit. Storage is the
+ * (`STRIPE_CATALOG.meterUnitBytes` = 10⁶). The Stripe price is flat per unit. Storage is the
  * only metered quantity; delivery is not tracked or billed (ADR-008).
  *
  * Export is **cumulative**: each run converts the period-to-date ledger total to overage units
@@ -19,7 +19,7 @@ import { BillingArithmeticError, divRoundHalfUp, maxBig, toNonNegativeBigInt } f
  * rounding never accumulates across runs: the sum of all deltas equals the rounded period total.
  */
 export const METER_EVENT_NAMES: Readonly<Record<UsageMetric, string>> = {
-  storage_byte_seconds: STRIPE_CATALOG_V1.meters.storageOverage,
+  storage_byte_seconds: STRIPE_CATALOG.meters.storageOverage,
 };
 
 /** Body of `POST /v1/billing/meter_events`. `identifier` doubles as the request Idempotency-Key. */
@@ -78,7 +78,7 @@ export function toMeterUnits(
   quantity: bigint,
   plan: PlanRates,
   secondsPerBillingMonth: number = BILLING_POLICY_V1.secondsPerBillingMonth,
-  unitBytes: number = STRIPE_CATALOG_V1.meterUnitBytes,
+  unitBytes: number = STRIPE_CATALOG.meterUnitBytes,
 ): bigint {
   const q = toNonNegativeBigInt(quantity, 'quantity');
   const unit = toNonNegativeBigInt(unitBytes, 'unitBytes');
@@ -110,7 +110,7 @@ export function buildMeterEvents(input: MeterExportInput): MeterExportResult {
   const windowEndMs = input.windowEnd.getTime();
   if (!Number.isSafeInteger(windowEndMs)) throw new MeterExportError('invalid windowEnd');
   const windowEndSec = Math.floor(windowEndMs / 1000);
-  const catalog = input.catalog ?? STRIPE_CATALOG_V1;
+  const catalog = input.catalog ?? STRIPE_CATALOG;
   const eventName: Record<UsageMetric, string> = {
     storage_byte_seconds: catalog.meters.storageOverage,
   };

@@ -14,6 +14,7 @@ Required before the listed task starts (PRD §17, `docs/PLAN.md` §2):
 | 006                                              | Video provider (v1.1)                   | V01      |
 | [007](./007-database-access-layer.md)            | Database access layer                   | T02      |
 | [008](./008-remove-delivery-billing.md)          | Remove delivery from pricing            | T27–T33  |
+| [009](./009-storage-overage-rate-v2.md)          | Pro storage overage $0.05 (rate v2)     | T27–T31  |
 
 Template:
 
