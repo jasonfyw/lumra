@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import type postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { RATE_CARD_V1 } from '@lumra/config';
+import { RATE_CARD, RATE_CARD_V1, RATE_CARD_V2 } from '@lumra/config';
 import { buildLedgerEntry, planStorageAccrual } from '@lumra/billing';
 import { createBillingRepository } from '../src';
 import {
@@ -42,16 +42,24 @@ describe('plan_rate_versions', () => {
       const repo = repoFor(tx);
       expect(await repo.plans.getRates('free', 1)).toEqual(RATE_CARD_V1.free);
       expect(await repo.plans.getRates('pro', 1)).toEqual(RATE_CARD_V1.pro);
-      expect(await repo.plans.getCurrent('pro')).toEqual(RATE_CARD_V1.pro);
+      expect(await repo.plans.getRates('free', 2)).toEqual(RATE_CARD_V2.free);
+      expect(await repo.plans.getRates('pro', 2)).toEqual(RATE_CARD_V2.pro);
+      // `plans` points at v2: $0.05/GB-month; v1 ($0.10) stays readable for old ledger rows.
+      expect(await repo.plans.getCurrent('pro')).toEqual(RATE_CARD.pro);
+      expect(RATE_CARD.pro.storageOverageMicroUsdPerGbMonth).toBe(50_000);
+      expect(RATE_CARD_V1.pro.storageOverageMicroUsdPerGbMonth).toBe(100_000);
       await expect(repo.plans.getRates('pro', 99)).rejects.toThrow(/No rate card/);
 
       for (const role of ['anon', 'authenticated'] as const) {
         await actAs(tx, role);
-        const rows = await tx<{ plan_id: string; decision: string }[]>`
-          select plan_id, decision from public.plan_rate_versions order by plan_id`;
+        const rows = await tx<{ plan_id: string; rate_version: number; decision: string }[]>`
+          select plan_id, rate_version, decision from public.plan_rate_versions
+          order by plan_id, rate_version`;
         expect(rows).toEqual([
-          { plan_id: 'free', decision: 'proposed' },
-          { plan_id: 'pro', decision: 'proposed' },
+          { plan_id: 'free', rate_version: 1, decision: 'proposed' },
+          { plan_id: 'free', rate_version: 2, decision: 'proposed' },
+          { plan_id: 'pro', rate_version: 1, decision: 'proposed' },
+          { plan_id: 'pro', rate_version: 2, decision: 'confirmed' },
         ]);
         await expectSqlError(
           tx,
@@ -93,19 +101,20 @@ describe('plan_rate_versions', () => {
         insert into public.plan_rate_versions (
           plan_id, rate_version, monthly_fee_micro_usd, included_storage_gb_month,
           storage_overage_micro_usd_per_gb_month, default_overage_cap_micro_usd, branding_visible
-        ) values ('pro', 2, 2000000, 30, 80000, 15000000, false)`;
+        ) values ('pro', 3, 2000000, 30, 80000, 15000000, false)`;
       // Direct writes to the projected columns are overwritten from the version row.
-      await tx`update public.plans set rate_version = 2, monthly_fee_micro_usd = 1 where id = 'pro'`;
+      await tx`update public.plans set rate_version = 3, monthly_fee_micro_usd = 1 where id = 'pro'`;
       const repo = repoFor(tx);
       const current = await repo.plans.getCurrent('pro');
-      expect(current).toMatchObject({ rateVersion: 2, includedStorageGbMonth: 30 });
+      expect(current).toMatchObject({ rateVersion: 3, includedStorageGbMonth: 30 });
       const [plan] = await tx<
         { monthly_fee_micro_usd: string; included_storage_gb_month: number }[]
       >`
         select monthly_fee_micro_usd::text, included_storage_gb_month from public.plans where id = 'pro'`;
       expect(plan).toEqual({ monthly_fee_micro_usd: '2000000', included_storage_gb_month: 30 });
-      // v1 stays available for rating periods recorded under it.
+      // Earlier versions stay available for rating periods recorded under them.
       expect(await repo.plans.getRates('pro', 1)).toEqual(RATE_CARD_V1.pro);
+      expect(await repo.plans.getRates('pro', 2)).toEqual(RATE_CARD_V2.pro);
       await expectSqlError(
         tx,
         FK_VIOLATION,
@@ -166,7 +175,7 @@ describe('billing account + reservations adapters', () => {
         accountId,
         status: 'free',
         planId: 'free',
-        rateVersion: 1,
+        rateVersion: RATE_CARD.free.rateVersion,
         warningThresholdsPct: [50, 80, 100],
         billingPeriodStart: null,
       });

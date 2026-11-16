@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { RATE_CARD_V1 } from '@lumra/config';
+import { RATE_CARD } from '@lumra/config';
 import { AccountView } from '@/components/billing/account-view';
 import { AppHeader } from '@/components/ui';
 import { ACCOUNT_FIXTURE_STATES, makeAccountFixture } from './fixture';
@@ -33,7 +33,7 @@ export default async function DevAccountPage({
       <AccountView
         summary={summary}
         checkout={checkout}
-        proMonthlyFeeMicroUsd={RATE_CARD_V1.pro.monthlyFeeMicroUsd}
+        proMonthlyFeeMicroUsd={RATE_CARD.pro.monthlyFeeMicroUsd}
       />
     </div>
   );

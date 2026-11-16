@@ -216,6 +216,15 @@ before the cache).
    `STRIPE_WEBHOOK_SECRET`. Redeploy. Locally: `stripe listen --forward-to
 localhost:3000/api/v1/billing/webhook` prints a `whsec_…` for `.env.local`.
 
+**Price change (rate v1 → v2, $0.10 → $0.05/GB-month)**, order per Stripe mode (test first):
+(1) apply migration `20261116000100`; (2) `node scripts/stripe-setup.mjs --dry-run`, then without
+`--dry-run` (creates `lumra_pro_storage_overage_v2`, archives `…_v1`); (3) deploy web + worker immediately
+(Checkout resolves `…_v2` by lookup key; the old build needs the v1 price active); (4)
+`node scripts/stripe-setup.mjs --migrate-subscriptions --dry-run`, then for real. Verify with
+`select plan_id, rate_version, decision from public.plan_rate_versions` and a test-mode Checkout. A
+`billing reconciliation mismatch` for an invoice finalised between steps 3 and 4 is expected: compare
+the Stripe invoice lines with the rate of the period's highest `rating_version`.
+
 **Symptoms**: Stripe shows failing deliveries; a customer paid but `/account` still says Free;
 `stripe webhook signature rejected` in logs (wrong secret / wrong mode); 503s on the webhook
 (env not set — Stripe keeps retrying for 3 days, so setting the env recovers everything).

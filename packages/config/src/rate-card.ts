@@ -2,12 +2,14 @@ import { BYTES_PER_GB } from './limits';
 
 /**
  * Launch rate card (PRD §9.2). Money is integer micro-USD (1 USD = 1_000_000).
- * Only `monthlyFeeMicroUsd` for Pro is a confirmed decision; the rest are Proposed
- * and must be validated against unit economics before live billing (PRD §17).
+ * Confirmed by the owner: Pro `monthlyFeeMicroUsd` ($2), 20 GB-month included and (v2, 2026-11-16)
+ * the $0.05/GB-month storage overage. Still Proposed and to be validated against unit economics
+ * before live billing (PRD §17): the Free gallery count / 1 GB cap and the $10 default spending cap.
  * Lumra bills storage only: delivery (served bytes) is not tracked, capped or charged on any
  * plan (ADR-008). The authoritative, versioned copy lives in the `plan_rate_versions` table (T27; `plans` points
- * at the current version). This constant is the v1 seed and the default for pure tests;
- * `packages/db/src/schema.test.ts` checks the migration seed matches it exactly.
+ * at the current version). `RATE_CARD_V1` / `RATE_CARD_V2` mirror the migration seeds exactly
+ * (`packages/db/src/schema.test.ts` checks both); `RATE_CARD` is the current version and the
+ * default/fallback for pure tests and when the database is unreachable.
  */
 export const MICRO_USD_PER_USD = 1_000_000;
 
@@ -45,11 +47,28 @@ export const RATE_CARD_V1: Record<PlanId, PlanRates> = {
     maxActiveGalleries: null,
     maxStorageBytes: null,
     includedStorageGbMonth: 20, // confirmed by owner 2026-11-09
-    storageOverageMicroUsdPerGbMonth: 100_000, // $0.10
+    storageOverageMicroUsdPerGbMonth: 100_000, // $0.10 (v1; superseded by v2)
     defaultOverageCapMicroUsd: 10 * MICRO_USD_PER_USD,
     brandingVisible: false,
   },
 };
+
+/**
+ * Rate card v2 (owner decision 2026-11-16): Pro storage overage $0.10 → $0.05 per GB-month.
+ * Every other value equals v1. v1 stays defined: ledger rows already rated under it remain
+ * reproducible (`plan_rate_versions` rows are immutable).
+ */
+export const RATE_CARD_V2: Record<PlanId, PlanRates> = {
+  free: { ...RATE_CARD_V1.free, rateVersion: 2 },
+  pro: {
+    ...RATE_CARD_V1.pro,
+    rateVersion: 2,
+    storageOverageMicroUsdPerGbMonth: 50_000, // $0.05 (confirmed by owner 2026-11-16)
+  },
+};
+
+/** The current rate card (what `plans.rate_version` points at). */
+export const RATE_CARD: Record<PlanId, PlanRates> = RATE_CARD_V2;
 
 /**
  * Rate-card-versioned billing conventions and spending-safeguard policy (PRD §9.2, §9.4, ADR-004).

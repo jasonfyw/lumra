@@ -5,7 +5,7 @@ import {
   type StripeMeterEvent,
   type UsageMetric,
 } from '@lumra/billing';
-import { STRIPE_API_VERSION, STRIPE_CATALOG_V1 } from '@lumra/config';
+import { STRIPE_API_VERSION, STRIPE_CATALOG } from '@lumra/config';
 import type { MeterExportRepository } from '@lumra/db';
 import type { Logger } from '../log';
 
@@ -141,7 +141,7 @@ export async function runMeterExport(deps: MeterExportDeps): Promise<MeterExport
         entries,
         exported: previous,
         periodEndFor: (start) => ends.get(start.getTime()) ?? null,
-        catalog: STRIPE_CATALOG_V1,
+        catalog: STRIPE_CATALOG,
       });
       if (built.events.length === 0) continue;
       const ok = await deps.repo.recordExport(

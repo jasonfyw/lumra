@@ -80,7 +80,7 @@ export async function ensureStripeCustomer(
 
 /**
  * Checkout Session for Pro: the $2 base price plus both metered overage prices on one
- * subscription (prices found by lookup key, `STRIPE_CATALOG_V1`). `client_reference_id` and the
+ * subscription (prices found by lookup key, `STRIPE_CATALOG`). `client_reference_id` and the
  * subscription metadata carry the user id so the webhook can map the subscription back.
  */
 export async function createCheckoutSession(

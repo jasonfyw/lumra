@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { RATE_CARD_V1, type PlanId } from '@lumra/config';
+import { RATE_CARD, type PlanId } from '@lumra/config';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   CHECK_VIOLATION,
@@ -216,12 +216,12 @@ describe('uniqueness and integrity constraints', () => {
 });
 
 describe('plans seed', () => {
-  it('matches RATE_CARD_V1 from @lumra/config', async () => {
+  it('matches the current RATE_CARD (v2) from @lumra/config', async () => {
     const rows = await sql`select * from public.plans order by id`;
     expect(rows.map((r) => r.id)).toEqual(['free', 'pro']);
     const num = (v: unknown) => (v === null ? null : Number(v));
     for (const row of rows) {
-      const rc = RATE_CARD_V1[row.id as PlanId];
+      const rc = RATE_CARD[row.id as PlanId];
       expect({
         id: row.id,
         rateVersion: row.rate_version,

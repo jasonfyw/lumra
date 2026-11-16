@@ -1,4 +1,4 @@
-import { BYTES_PER_GB, RATE_CARD_V1 } from '@lumra/config';
+import { BYTES_PER_GB, RATE_CARD, RATE_CARD_V1 } from '@lumra/config';
 import { describe, expect, it } from 'vitest';
 import {
   evaluateBillingSafeguards,
@@ -94,7 +94,7 @@ describe('reconcileInvoice (T31)', () => {
   const rec = (stripeSubtotalCents: number, capMicroUsd: number | null, firstInvoice = false) =>
     reconcileInvoice({ plan: pro, usage, stripeSubtotalCents, firstInvoice, capMicroUsd });
 
-  it('matches the PRD example ($3.00) and tolerates a cent of rounding', () => {
+  it('matches the PRD example ($3.00 under v1) and tolerates a cent of rounding', () => {
     expect(rec(300, 10_000_000)).toMatchObject({
       expectedCents: 300,
       driftBps: 0,
@@ -102,6 +102,18 @@ describe('reconcileInvoice (T31)', () => {
       overageMicroUsd: 1_000_000,
     });
     expect(rec(301, null).flagged).toBe(false);
+  });
+
+  it('matches the PRD example under the current rate card v2 ($2.50)', () => {
+    const v2 = reconcileInvoice({
+      plan: RATE_CARD.pro,
+      usage,
+      stripeSubtotalCents: 250,
+      firstInvoice: false,
+      capMicroUsd: 10_000_000,
+    });
+    expect(v2).toMatchObject({ expectedCents: 250, driftBps: 0, flagged: false });
+    expect(v2.overageMicroUsd).toBe(500_000);
   });
 
   it('flags drift above 10 % and overage beyond cap + tolerance', () => {

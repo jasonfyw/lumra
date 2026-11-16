@@ -5,10 +5,10 @@
 export const STRIPE_API_VERSION = '2026-10-28.endive' as const;
 
 /**
- * Stripe catalog for rate card v1 (T29/T31, ADR-004 amendment 2026-11-13, ADR-008). Code finds prices by
+ * Stripe catalog for the current rate card (v2; v1 until 2026-11-16) (T29/T31, ADR-004 amendment 2026-11-13, ADR-008). Code finds prices by
  * **lookup key**, never by id, so the same build works against test and live mode. The objects
  * are created idempotently by `scripts/stripe-setup.mjs`, which mirrors these values (a unit
- * test in `@lumra/billing` checks the script against this constant and `RATE_CARD_V1`).
+ * test in `@lumra/billing` checks the script against this constant and `RATE_CARD`).
  *
  * The meter carries **storage overage only** (Lumra subtracts the included allowance itself) as
  * an integer: MB-months above the included GB-months (1 MB-month = 10⁶ byte × 30-day month).
@@ -35,13 +35,13 @@ export interface StripeCatalog {
   portalConfigurationKey: string;
 }
 
-export const STRIPE_CATALOG_V1: StripeCatalog = {
-  rateVersion: 1,
+export const STRIPE_CATALOG: StripeCatalog = {
+  rateVersion: 2,
   productName: 'Lumra Pro',
   productKey: 'lumra_pro',
   prices: {
     base: 'lumra_pro_monthly_v1',
-    storageOverage: 'lumra_pro_storage_overage_v1',
+    storageOverage: 'lumra_pro_storage_overage_v2',
   },
   meters: {
     storageOverage: 'lumra_storage_overage',
@@ -51,7 +51,7 @@ export const STRIPE_CATALOG_V1: StripeCatalog = {
 };
 
 /** Every lookup key Checkout puts on a Pro subscription: base fee + the storage metered price. */
-export function catalogLookupKeys(catalog: StripeCatalog = STRIPE_CATALOG_V1): string[] {
+export function catalogLookupKeys(catalog: StripeCatalog = STRIPE_CATALOG): string[] {
   return [catalog.prices.base, catalog.prices.storageOverage];
 }
 
@@ -61,6 +61,13 @@ export function catalogLookupKeys(catalog: StripeCatalog = STRIPE_CATALOG_V1): s
  * still carry the price keep it until the owner migrates them (its meter receives no events).
  */
 export const RETIRED_STRIPE_OBJECTS = {
-  prices: ['lumra_pro_delivery_overage_v1'],
+  // Delivery price (ADR-008) and the superseded $0.10 storage price (rate v2, ADR-009).
+  prices: ['lumra_pro_delivery_overage_v1', 'lumra_pro_storage_overage_v1'],
   meters: ['lumra_delivery_overage'],
 } as const;
+
+/**
+ * Storage overage price superseded by `STRIPE_CATALOG.prices.storageOverage` (rate v2).
+ * `scripts/stripe-setup.mjs --migrate-subscriptions` moves subscriptions from it to the current one.
+ */
+export const SUPERSEDED_STORAGE_PRICE = 'lumra_pro_storage_overage_v1';

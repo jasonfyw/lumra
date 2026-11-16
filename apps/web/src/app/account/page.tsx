@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { eq } from 'drizzle-orm';
-import { RATE_CARD_V1 } from '@lumra/config';
+import { RATE_CARD } from '@lumra/config';
 import { plans } from '@lumra/db';
 import { getAuthenticatedUser } from '@/lib/actor';
 import { getDb } from '@/lib/db';
@@ -57,7 +57,7 @@ export default async function AccountPage({
       <AccountView
         summary={summary}
         checkout={params.checkout === 'success' ? 'success' : null}
-        proMonthlyFeeMicroUsd={pro?.fee ?? RATE_CARD_V1.pro.monthlyFeeMicroUsd}
+        proMonthlyFeeMicroUsd={pro?.fee ?? RATE_CARD.pro.monthlyFeeMicroUsd}
       />
     </div>
   );

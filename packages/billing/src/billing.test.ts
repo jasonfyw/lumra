@@ -1,4 +1,4 @@
-import { BILLING_POLICY_V1, BYTES_PER_GB, RATE_CARD_V1 } from '@lumra/config';
+import { BILLING_POLICY_V1, BYTES_PER_GB, RATE_CARD, RATE_CARD_V1 } from '@lumra/config';
 import { InvalidTransitionError } from '@lumra/domain';
 import { describe, expect, it } from 'vitest';
 import {
@@ -106,11 +106,27 @@ describe('integrateStorage', () => {
 });
 
 describe('rateInvoice', () => {
-  it('reproduces the PRD §9.3 example: Pro, 30 GB-month ⇒ $2.00 + (30 − 20)×$0.10 = $3.00', () => {
+  it('reproduces the PRD §9.3 example: Pro, 30 GB-month ⇒ $2.00 + (30 − 20)×$0.05 = $2.50', () => {
     const invoice = rateInvoice({
-      plan: pro,
+      plan: RATE_CARD.pro,
       storageGbMonthMicro: storageGbMonthMicroUnits(30n * BigInt(GB) * BigInt(MONTH_S)),
-      rateVersion: pro.rateVersion,
+      rateVersion: 2,
+    });
+    expect(RATE_CARD.pro.rateVersion).toBe(2);
+    expect(invoice.totalMicroUsd).toBe(2_500_000);
+    expect(invoice.totalCents).toBe(250);
+    expect(invoice.lines.map((l) => [l.kind, l.amountMicroUsd, l.amountCents])).toEqual([
+      ['base_fee', 2_000_000, 200],
+      ['storage_overage', 500_000, 50],
+    ]);
+    expect(invoice.lines[1]?.quantity).toBe(10_000_000n);
+  });
+
+  it('rate v1 stays reproducible after the v2 price cut: same usage ⇒ $3.00 under v1', () => {
+    const invoice = rateInvoice({
+      plan: pro, // RATE_CARD_V1.pro ($0.10/GB-month)
+      storageGbMonthMicro: storageGbMonthMicroUnits(30n * BigInt(GB) * BigInt(MONTH_S)),
+      rateVersion: 1,
     });
     expect(invoice.totalMicroUsd).toBe(3_000_000);
     expect(invoice.totalCents).toBe(300);

@@ -1,7 +1,7 @@
 import 'server-only';
 import { and, count, eq, isNull, sql } from 'drizzle-orm';
 import { checkGalleryCreation } from '@lumra/billing';
-import { GALLERY_LIMITS, RATE_CARD_V1, type PlanRates } from '@lumra/config';
+import { GALLERY_LIMITS, RATE_CARD, type PlanRates } from '@lumra/config';
 import {
   encodeKeysetCursor,
   type GalleryListItem,
@@ -160,7 +160,7 @@ async function lockPlanRates(tx: Tx, userId: string): Promise<PlanRates> {
     .innerJoin(plans, eq(plans.id, profiles.planId))
     .where(eq(profiles.userId, userId))
     .for('update', { of: profiles });
-  if (!row) return RATE_CARD_V1.free; // handle_new_user always creates one; be conservative.
+  if (!row) return RATE_CARD.free; // handle_new_user always creates one; be conservative.
   const p = row.plan;
   return {
     id: p.id,

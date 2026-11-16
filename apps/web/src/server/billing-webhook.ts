@@ -9,7 +9,7 @@ import {
   type EntitlementState,
   type SubscriptionSnapshot,
 } from '@lumra/billing';
-import { RATE_CARD_V1, type PlanId } from '@lumra/config';
+import { RATE_CARD, type PlanId } from '@lumra/config';
 import {
   billingAccounts,
   billingInvoices,
@@ -194,7 +194,7 @@ async function linkCheckoutCustomer(tx: Tx, session: Stripe.Checkout.Session): P
 
 async function freePlanCaps(tx: Tx) {
   const [row] = await tx.select().from(plans).where(eq(plans.id, 'free'));
-  return row ? planRatesFromRow(row) : RATE_CARD_V1.free;
+  return row ? planRatesFromRow(row) : RATE_CARD.free;
 }
 
 /**
@@ -408,7 +408,7 @@ async function reconcile(
     version: number | null;
   }[];
   const [current] = await tx.select().from(plans).where(eq(plans.id, 'pro'));
-  let plan = current ? planRatesFromRow(current) : RATE_CARD_V1.pro;
+  let plan = current ? planRatesFromRow(current) : RATE_CARD.pro;
   if (usage?.version && usage.version !== plan.rateVersion) {
     const [versioned] = await tx
       .select()

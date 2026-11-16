@@ -2,7 +2,7 @@ import 'server-only';
 import Stripe from 'stripe';
 import {
   STRIPE_API_VERSION,
-  STRIPE_CATALOG_V1,
+  STRIPE_CATALOG,
   catalogLookupKeys,
   type StripeCatalog,
 } from '@lumra/config';
@@ -66,7 +66,7 @@ let portalCache: { at: number; id: string | null } | null = null;
  */
 export async function resolveCatalogPrices(
   stripe: Stripe,
-  catalog: StripeCatalog = STRIPE_CATALOG_V1,
+  catalog: StripeCatalog = STRIPE_CATALOG,
   nowMs = Date.now(),
 ): Promise<CatalogPrices> {
   if (priceCache && nowMs - priceCache.at < CACHE_MS) return priceCache.prices;
@@ -89,7 +89,7 @@ export async function resolveCatalogPrices(
  */
 export async function resolvePortalConfiguration(
   stripe: Stripe,
-  catalog: StripeCatalog = STRIPE_CATALOG_V1,
+  catalog: StripeCatalog = STRIPE_CATALOG,
   nowMs = Date.now(),
 ): Promise<string | null> {
   if (portalCache && nowMs - portalCache.at < CACHE_MS) return portalCache.id;
