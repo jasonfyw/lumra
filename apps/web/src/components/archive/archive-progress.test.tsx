@@ -57,7 +57,7 @@ describe('ArchiveProgress', () => {
 
     // The next part to fetch becomes the primary action once one is started.
     fireEvent.click(links[0]!);
-    expect(screen.getByText('Started')).toBeInTheDocument();
+    expect(screen.getByText('Downloaded')).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: /^Download Part/ })[1]).toHaveClass(
       'lm-btn-primary',
     );

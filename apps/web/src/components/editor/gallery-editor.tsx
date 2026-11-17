@@ -286,7 +286,7 @@ export function GalleryEditor({
         </span>
       </AppHeader>
       <div className="grid w-full flex-1 lg:grid-cols-[minmax(0,1fr)_var(--panel-width)]">
-        <main className="flex min-w-0 flex-col gap-6 px-4 py-6 sm:px-8 sm:py-8">
+        <main className="order-2 flex min-w-0 flex-col gap-6 px-4 py-6 sm:px-8 sm:py-8 lg:order-none">
           <header className="flex flex-col gap-2">
             {editingTitle ? (
               <form
@@ -296,8 +296,8 @@ export function GalleryEditor({
                   void saveTitle();
                 }}
               >
-                <label className="lm-field lm-field-label min-w-0 flex-1 basis-72">
-                  Gallery title
+                <label className="min-w-0 flex-1 basis-72">
+                  <span className="sr-only">Gallery title</span>
                   <input
                     autoFocus
                     value={titleDraft}
@@ -309,6 +309,7 @@ export function GalleryEditor({
                         setEditingTitle(false);
                       }
                     }}
+                    placeholder="Gallery title"
                     className="lm-titleinput"
                   />
                 </label>
@@ -329,17 +330,21 @@ export function GalleryEditor({
                 </div>
               </form>
             ) : (
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                <h1 className="lm-title-1 min-w-0 break-words">{gallery.title}</h1>
+              <div className="flex items-center gap-x-1">
+                <h1 className="lm-title-1 lm-title-editable min-w-0 break-words">
+                  {gallery.title}
+                </h1>
                 <button
                   type="button"
-                  className={buttonClass('ghost', 'sm', 'min-h-11')}
+                  className={buttonClass('ghost', 'sm', 'min-h-11 min-w-11 shrink-0 px-0')}
+                  aria-label="Rename gallery"
+                  title="Rename gallery"
                   onClick={() => {
                     setTitleDraft(gallery.title);
                     setEditingTitle(true);
                   }}
                 >
-                  Rename
+                  <Icon name="pencil" size={18} />
                 </button>
               </div>
             )}
@@ -395,7 +400,7 @@ export function GalleryEditor({
 
         <aside
           aria-label="Gallery settings"
-          className="flex flex-col gap-5 border-t border-[var(--color-hairline)] bg-[var(--color-surface)] px-4 py-6 sm:px-8 lg:border-t-0 lg:border-l lg:px-6 lg:py-8"
+          className="order-1 flex flex-col gap-5 border-b border-[var(--color-hairline)] bg-[var(--color-surface)] px-4 py-6 sm:px-8 lg:order-none lg:border-b-0 lg:border-l lg:px-6 lg:py-8"
         >
           {gallery.shareUrl && (
             <div className={card}>

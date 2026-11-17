@@ -205,7 +205,7 @@ export function ArchiveProgress({ initial, live = true }: ArchiveProgressProps) 
                 </div>
                 {done ? (
                   <Tag tone="ready" icon="check">
-                    Started
+                    Downloaded
                   </Tag>
                 ) : (
                   <span />

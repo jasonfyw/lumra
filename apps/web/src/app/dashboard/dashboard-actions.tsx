@@ -2,22 +2,28 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useRef, useState } from 'react';
+import { useRef, useState, useTransition } from 'react';
 import type { ApiResponse, CreateGalleryResponse } from '@lumra/contracts';
 import { Icon, buttonClass } from '@/components/ui';
+import { FeedbackButton, useTransientFlag } from '@/components/ui/feedback-button';
 
 const primary = buttonClass('primary', 'md', 'min-h-11');
 
 /** Creates a gallery (POST /api/v1/galleries) and opens the editor. */
 export function NewGalleryButton() {
   const router = useRouter();
-  const [busy, setBusy] = useState(false);
+  const [creating, setCreating] = useState(false);
+  // Stays true from the click until the editor route has rendered, so the button keeps showing
+  // progress while the server renders the next page (no dead time after the POST returns).
+  const [navigating, startNavigation] = useTransition();
+  const busy = creating || navigating;
   const [error, setError] = useState<string | null>(null);
   // One key per user intent: retries after a network error replay instead of duplicating.
   const keyRef = useRef<string | null>(null);
 
   async function create() {
-    setBusy(true);
+    if (busy) return;
+    setCreating(true);
     setError(null);
     keyRef.current ??= crypto.randomUUID();
     try {
@@ -33,18 +39,25 @@ export function NewGalleryButton() {
         return;
       }
       keyRef.current = null;
-      router.push(`/dashboard/galleries/${body.data.id}`);
+      startNavigation(() => router.push(`/dashboard/galleries/${body.data.id}`));
     } catch {
       setError('Network error. Check your connection and try again.');
     } finally {
-      setBusy(false);
+      setCreating(false);
     }
   }
 
   return (
     <div className="flex flex-col items-end gap-2">
-      <button type="button" onClick={create} disabled={busy} className={primary}>
-        <Icon name="plus" size={18} />
+      <button
+        type="button"
+        onClick={create}
+        // aria-disabled (not `disabled`) keeps focus on the button while it works.
+        aria-disabled={busy || undefined}
+        aria-busy={busy || undefined}
+        className={`${primary} aria-disabled:cursor-progress aria-disabled:opacity-80`}
+      >
+        {busy ? <span className="lm-spinner" aria-hidden="true" /> : <Icon name="plus" size={18} />}
         {busy ? 'Creating…' : 'New gallery'}
       </button>
       {error && (
@@ -59,34 +72,37 @@ export function NewGalleryButton() {
   );
 }
 
-/** Copies a share URL; falls back to selecting the text when the Clipboard API is unavailable. */
+/** Copies a share URL; falls back to showing the URL when the Clipboard API is unavailable. */
 export function CopyLinkButton({ url, label }: { url: string; label: string }) {
-  const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [copied, flashCopied] = useTransientFlag();
+  const [failed, flashFailed] = useTransientFlag();
 
   async function copy() {
     try {
       await navigator.clipboard.writeText(url);
-      setStatus('copied');
+      flashCopied();
     } catch {
-      setStatus('failed');
+      flashFailed();
     }
-    setTimeout(() => setStatus('idle'), 2000);
   }
 
   return (
     <span className="inline-flex items-center justify-end gap-2">
-      <span aria-live="polite" className="text-[13px] text-[var(--color-ink-muted)]">
-        {status === 'copied' ? 'Copied' : status === 'failed' ? url : ''}
-      </span>
-      <button
-        type="button"
+      {failed && (
+        <span role="status" className="text-[13px] text-[var(--color-ink-muted)]">
+          {url}
+        </span>
+      )}
+      <FeedbackButton
         onClick={copy}
-        aria-label={`Copy link to ${label}`}
+        aria-label={copied ? `Link to ${label} copied` : `Copy link to ${label}`}
         className={buttonClass('ghost', 'sm', 'min-h-11')}
-      >
-        <Icon name={status === 'copied' ? 'check' : 'link'} size={16} />
-        Copy link
-      </button>
+        icon="link"
+        label="Copy link"
+        doneLabel="Copied"
+        announcement={`Link to ${label} copied.`}
+        done={copied}
+      />
     </span>
   );
 }

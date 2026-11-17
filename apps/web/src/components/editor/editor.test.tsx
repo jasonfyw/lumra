@@ -346,7 +346,7 @@ describe('GalleryEditor', () => {
   it('renames inline', async () => {
     mockFetch((call) => detail({ title: (call.body as { title: string }).title }));
     render(<GalleryEditor initial={detail()} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Rename gallery' }));
     const input = screen.getByLabelText('Gallery title');
     await userEvent.clear(input);
     await userEvent.type(input, 'Wedding{Enter}');
@@ -406,7 +406,8 @@ describe('ShareSheet', () => {
     render(<ShareSheet url={url} title="Trip" />);
     await userEvent.click(screen.getByRole('button', { name: 'Copy link' }));
     expect(writeText).toHaveBeenCalledWith(url);
-    expect(screen.getByRole('status')).toHaveTextContent('Link copied.');
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument();
+    expect(screen.getByText('Link copied.')).toBeInTheDocument();
   });
 
   it('falls back to selecting the link when the clipboard is unavailable', async () => {
@@ -417,7 +418,7 @@ describe('ShareSheet', () => {
     document.execCommand = vi.fn(() => false);
     render(<ShareSheet url={url} title="Trip" />);
     await userEvent.click(screen.getByRole('button', { name: 'Copy link' }));
-    expect(screen.getByRole('status')).toHaveTextContent('Link selected');
+    expect(screen.getByText(/Link selected/)).toBeInTheDocument();
     expect(screen.getByLabelText('Share link')).toHaveFocus();
   });
 
