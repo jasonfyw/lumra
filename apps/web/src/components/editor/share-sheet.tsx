@@ -3,6 +3,7 @@
 import { create as createQr } from 'qrcode';
 import { useMemo, useRef, useState } from 'react';
 import { Icon, buttonClass } from '@/components/ui';
+import { FeedbackButton, useTransientFlag } from '@/components/ui/feedback-button';
 
 /** Module matrix for `text` (pure; no canvas needed, so it renders in SSR and tests too). */
 export function qrMatrix(text: string): boolean[][] {
@@ -41,7 +42,10 @@ const primary = buttonClass('primary', 'sm', 'min-h-11');
  * the Web Share API when the browser has it, falling back to copying. No email invites in v1.
  */
 export function ShareSheet({ url, title }: { url: string; title: string }) {
+  // Failures only: a successful copy/download is confirmed on the button itself.
   const [status, setStatus] = useState('');
+  const [copied, flashCopied] = useTransientFlag();
+  const [downloaded, flashDownloaded] = useTransientFlag();
   const inputRef = useRef<HTMLInputElement>(null);
   const matrix = useMemo(() => qrMatrix(url), [url]);
   const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
@@ -49,7 +53,8 @@ export function ShareSheet({ url, title }: { url: string; title: string }) {
   async function copy() {
     try {
       await navigator.clipboard.writeText(url);
-      setStatus('Link copied.');
+      setStatus('');
+      flashCopied();
       return;
     } catch {
       // Clipboard API missing or denied (e.g. insecure context): select the text instead.
@@ -57,13 +62,18 @@ export function ShareSheet({ url, title }: { url: string; title: string }) {
     const input = inputRef.current;
     input?.focus();
     input?.select();
-    let copied: boolean;
+    let copiedByCommand: boolean;
     try {
-      copied = document.execCommand?.('copy') ?? false;
+      copiedByCommand = document.execCommand?.('copy') ?? false;
     } catch {
-      copied = false;
+      copiedByCommand = false;
     }
-    setStatus(copied ? 'Link copied.' : 'Link selected — press Ctrl+C or ⌘C to copy.');
+    if (copiedByCommand) {
+      setStatus('');
+      flashCopied();
+    } else {
+      setStatus('Link selected — press Ctrl+C or ⌘C to copy.');
+    }
   }
 
   async function share() {
@@ -90,7 +100,8 @@ export function ShareSheet({ url, title }: { url: string; title: string }) {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(href), 1000);
-    setStatus('QR code downloaded.');
+    setStatus('');
+    flashDownloaded();
   }
 
   const n = matrix.length + QUIET_ZONE * 2;
@@ -123,10 +134,15 @@ export function ShareSheet({ url, title }: { url: string; title: string }) {
         </span>
       </label>
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={copy} className={primary}>
-          <Icon name="copy" size={16} />
-          Copy link
-        </button>
+        <FeedbackButton
+          onClick={copy}
+          className={primary}
+          icon="copy"
+          label="Copy link"
+          doneLabel="Copied"
+          announcement="Link copied."
+          done={copied}
+        />
         {canShare && (
           <button type="button" onClick={share} className={button}>
             <Icon name="share" size={16} />
@@ -148,10 +164,15 @@ export function ShareSheet({ url, title }: { url: string; title: string }) {
         </svg>
         <div className="flex min-w-0 flex-col items-start gap-1">
           <p className="font-semibold">QR code</p>
-          <button type="button" onClick={downloadQr} className={`${button} mt-1`}>
-            <Icon name="download" size={16} />
-            Download QR code
-          </button>
+          <FeedbackButton
+            onClick={downloadQr}
+            className={`${button} mt-1`}
+            icon="download"
+            label="Download QR code"
+            doneLabel="Downloaded"
+            announcement="QR code downloaded."
+            done={downloaded}
+          />
         </div>
       </div>
       <p aria-live="polite" role="status" className="lm-field-hint empty:hidden">

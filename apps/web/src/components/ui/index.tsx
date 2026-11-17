@@ -29,11 +29,13 @@ export function Icon({
   size = 20,
   label,
   className,
+  ...data
 }: {
   name: IconName;
   size?: number;
   label?: string;
   className?: string;
+  'data-swap'?: 'in' | 'out';
 }) {
   return (
     <svg
@@ -49,6 +51,7 @@ export function Icon({
       aria-hidden={label ? undefined : true}
       role={label ? 'img' : undefined}
       aria-label={label}
+      {...data}
     >
       <path d={ICON_PATHS[name]} />
     </svg>

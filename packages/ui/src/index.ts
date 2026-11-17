@@ -60,6 +60,7 @@ export const ICON_PATHS = {
   calendar: 'M4 6h16v14H4zM4 10h16M8 3v4M16 3v4',
   star: 'M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.8L12 16.8l-5.2 2.8 1-5.8-4.3-4.1 5.9-.8z',
   select: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8 12.5l2.8 2.8L16 10',
+  pencil: 'M4 20h4L19 9l-4-4L4 16zM13 7l4 4',
   mail: 'M3.5 6h17v12h-17zM4 7l8 6 8-7',
 } as const;
 

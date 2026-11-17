@@ -14,7 +14,7 @@ import {
 } from '@/lib/upload';
 import { PHOTO_ACCEPT, UploadZone } from './upload-zone';
 import { UploadBridgeContext } from './upload-bridge';
-import { UploadList } from './upload-list';
+import { UploadToast } from './upload-list';
 
 function connection(): ConnectionInfo | undefined {
   return (globalThis.navigator as { connection?: ConnectionInfo } | undefined)?.connection;
@@ -197,7 +197,7 @@ export function GalleryUploader({
 
       <UploadZone onFiles={(files) => engine.addFiles(files)} />
 
-      <UploadList
+      <UploadToast
         snapshot={snapshot}
         onRetry={(id) => engine.retry(id)}
         onCancel={(id) => engine.cancel(id)}

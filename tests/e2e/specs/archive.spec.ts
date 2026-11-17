@@ -72,7 +72,9 @@ test.describe('archive progress page (fixture)', () => {
 
   test('failed offers Try again; expired offers a new download', async ({ page }) => {
     await open(page, 'failed');
-    await expect(page.getByRole('alert')).toContainText('We couldn’t finish this download');
+    await expect(
+      page.getByRole('alert').filter({ hasText: 'We couldn’t finish this download' }),
+    ).toBeVisible();
     await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
     expect(await seriousViolations(page)).toEqual([]);
     await shoot(page, 'failed');
@@ -95,7 +97,8 @@ test.describe('archive progress page (fixture)', () => {
     const transition = await page
       .locator('.lm-progress > span')
       .evaluate((el) => getComputedStyle(el).transitionDuration);
-    expect(transition).toBe('0s');
+    // Global reduced-motion rule clamps to ~0 (0.01ms), not exactly 0s.
+    expect(parseFloat(transition)).toBeLessThan(0.001);
     await shoot(page, 'processing-reduced-motion');
   });
 });
