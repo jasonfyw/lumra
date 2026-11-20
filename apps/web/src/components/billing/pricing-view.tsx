@@ -207,7 +207,7 @@ export function PricingView({
             />
             <div>
               <dt className="text-[var(--color-ink-muted)]">
-                {overGb} GB-month extra × {rate}
+                {overGb} GB-month extra × {rate}/GB-month
               </dt>
               <dd className="font-semibold">{overText}</dd>
             </div>
