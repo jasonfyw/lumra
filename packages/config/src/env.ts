@@ -178,6 +178,13 @@ export const workerEnvSchema = z.object({
   WORKER_KICK_SECRET: secret.optional(),
   /** Billing Meter export (T31). Unset ⇒ the daily export is skipped (logged). */
   STRIPE_SECRET_KEY: unsetIfEmpty(stripeSecretKey),
+  /** Resend API key for `email.send`. Unset => notices are logged and acked, not sent. */
+  RESEND_API_KEY: unsetIfEmpty(z.string().min(8)),
+  /** Sender; any RFC 5322 mailbox on the verified domain. Default `Lumra <hello@lumra.photos>`. */
+  EMAIL_FROM: unsetIfEmpty(z.string().min(3).max(200)),
+  EMAIL_REPLY_TO: unsetIfEmpty(z.string().min(3).max(200)),
+  /** Public app origin used for links in emails. Default `https://www.lumra.photos`. */
+  APP_URL: unsetIfEmpty(url),
   ...workerObservability,
 });
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;

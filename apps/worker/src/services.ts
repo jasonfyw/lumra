@@ -1,5 +1,6 @@
 import {
   createAccessStateRepository,
+  createAccountContactRepository,
   createArchiveRepository,
   createBillingRepository,
   createBillingStateRepository,
@@ -9,6 +10,7 @@ import {
   createOutboxRepository,
   createSqlClient,
   type AccessStateRepository,
+  type AccountContactRepository,
   type ArchiveRepository,
   type BillingRepository,
   type BillingStateRepository,
@@ -29,6 +31,8 @@ export interface Services {
   mediaRepo(): MediaPipelineRepository;
   outboxRepo(): OutboxRepository;
   accessStateRepo(): AccessStateRepository;
+  /** Recipient lookup for `email.send` (address read at send time, never queued). */
+  accountContactRepo(): AccountContactRepository;
   /** Archive jobs/parts for `archive.build` and the archive sweep (T24/T25). */
   archiveRepo(): ArchiveRepository;
   /** Rate card, usage ledger and metering reads/writes (T27). */
@@ -111,6 +115,7 @@ export function createServices(env: Env): Services {
     mediaRepo: () => createMediaPipelineRepository(db()),
     outboxRepo: () => createOutboxRepository(db()),
     accessStateRepo: () => createAccessStateRepository(db()),
+    accountContactRepo: () => createAccountContactRepository(db()),
     archiveRepo: () => createArchiveRepository(db()),
     billingRepo: () => createBillingRepository(db()),
     billingStateRepo: () => createBillingStateRepository(db()),

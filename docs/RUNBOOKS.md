@@ -20,10 +20,33 @@ See [AUTH.md](AUTH.md) for the flow, the hosted Supabase email-template and redi
 the manual QA script.
 
 - Users report "no code in the email" or "link only works on one device": the hosted project is
-  still using Supabase's default templates. Paste `infra/supabase/templates/magic_link.html` (AUTH.md).
+  still using Supabase's default templates. Run `node scripts/supabase-apply-email-templates.mjs` (AUTH.md).
+- Sign-in emails not arriving or rate-limited: check Supabase Auth → SMTP (Resend, `smtp.resend.com`:465,
+  user `resend`, sender `hello@lumra.photos`) and the Resend dashboard → Logs. The SMTP key is a
+  separate Resend API key from the Worker's `RESEND_API_KEY`.
 - Claims refused: grep logs for `guest claim refused` and its `reason`
   (`no_capability` = a different browser, `session_expired`, `capability_mismatch`). The client
   always sees a 404.
+
+## Application email (Resend, `email.send`)
+
+Billing notices and spend-cap alerts go out from the worker through Resend (BILLING.md
+"Notifications"). Sender `Lumra <hello@lumra.photos>` on the verified `lumra.photos` domain.
+
+- **Set up / rotate the key:** create a Resend API key with sending access restricted to
+  `lumra.photos`, then `wrangler secret put RESEND_API_KEY --env production` (run from
+  `apps/worker`; no redeploy needed for a secret change). Optional vars `EMAIL_FROM`,
+  `EMAIL_REPLY_TO`, `APP_URL` go in the worker's `vars` or `--var`.
+- **Nothing is sent:** grep worker logs for `email not sent: RESEND_API_KEY not set` (secret
+  missing), `email not sent: account has no address` (empty `profiles.email`), `email rejected by
+provider` (4xx: `status`/`reason` say why, e.g. `validation_error`, `invalid_from_address`, 401/403
+  bad key or unverified domain) and `email delivery will be retried` (429/5xx; the queue retries,
+  then the DLQ). Confirm in Resend dashboard → Logs / Emails by the idempotency key
+  (`email:<template>:<account>:<instant>`).
+- **Replay:** emails sent before the key existed were acked and not queued again. Re-enqueue by
+  resetting the `job_outbox` row (same dedupe key) only if the notice is still relevant; the
+  `Idempotency-Key` prevents double sends within 24 h.
+- **Never** log or paste recipient addresses or the key into tickets; use the account id.
 
 ## Gallery access state (KV sync, T20)
 

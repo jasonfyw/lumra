@@ -104,6 +104,9 @@ function fakeServices(claimBatches: number) {
     accessStateRepo: () => {
       throw new Error('unused');
     },
+    accountContactRepo: () => {
+      throw new Error('unused');
+    },
     archiveRepo: () => {
       throw new Error('unused');
     },

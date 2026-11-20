@@ -186,12 +186,36 @@ retention end is shown on `/account`, and deletion requires an explicit policy +
 ## Notifications (`email.send`)
 
 Transition notices (and T32 alerts) are `email.send` outbox events (`public.enqueue_account_email`,
-once-only by dedupe key) carrying the account id and a template name — no address or personal data.
-**No application email provider is configured yet**: the worker acknowledges the message and logs
-`email not sent: no email provider configured` (template + account id). In-app banners on `/account`
-and the dashboard show the same states. To send mail: add a provider (e.g. Resend: `RESEND_API_KEY`
-worker secret + a verified sending domain with SPF/DKIM/DMARC, PLAN §5 #3), look up
-`profiles.email` by `accountId` in `handleEmailSend` and render the template.
+once-only by dedupe key) carrying the account id, a template name and small non-personal `data` (no
+address). The worker (`apps/worker/src/handlers/email.ts`) renders the template, reads
+`profiles.email` by `accountId` at send time and posts to Resend
+(`POST https://api.resend.com/emails`) with the outbox `dedupeKey` as `Idempotency-Key`, so a
+redelivery never sends twice (Resend keeps keys for 24 h).
+
+| Template             | Subject                                      | When                                |
+| -------------------- | -------------------------------------------- | ----------------------------------- |
+| `pro_activated`      | Welcome to Lumra Pro                         | Pro entitlement starts              |
+| `payment_failed`     | Action needed: your Lumra payment failed     | `past_due`                          |
+| `payment_recovered`  | Your Lumra payment went through              | back to `active`                    |
+| `delivery_suspended` | Your Lumra galleries are paused              | sweep: `past_due` to `restricted`   |
+| `subscription_ended` | Your Lumra Pro plan has ended                | `canceled` to `free`                |
+| `spend_cap_alert`    | Lumra usage alert: 50% / 80% / reached (100) | storage overage hits cap thresholds |
+
+Templates are plain TS strings (`apps/worker/src/email/layout.ts`, `templates.ts`): one shared
+branded layout (table, inline styles, no remote assets), an HTML and a plain-text part. Same visual
+style as the Supabase auth emails.
+
+- **Config (worker):** secret `RESEND_API_KEY` (`wrangler secret put RESEND_API_KEY --env
+production`), optional vars `EMAIL_FROM` (default `Lumra <hello@lumra.photos>`), `EMAIL_REPLY_TO`
+  (default none) and `APP_URL` (default `https://www.lumra.photos`, used for links).
+- **Unset `RESEND_API_KEY`:** the message is logged (`email not sent: RESEND_API_KEY not set`) and
+  acked; nothing crashes. In-app banners on `/account` and the dashboard show the same states.
+- **Failures:** 429, 5xx, network errors and a concurrent idempotent request (409) throw, so the
+  queue retries with back-off (`retryDelaySeconds`, `max_retries` then the DLQ). Other 4xx
+  (validation, revoked key, unverified domain) are logged as `email rejected by provider; not
+retrying` and acked. An account with no address is logged and acked.
+- **Privacy:** logs hold the template, account id and Resend status only: never the address, the
+  API key or the body.
 
 ## Stripe setup (`scripts/stripe-setup.mjs`)
 
@@ -269,11 +293,13 @@ above 10 % (and more than 2 ¢) or overage above cap + tolerance logs `billing r
 
 ## Environment and webhook endpoint
 
-| Variable                | Where           | Notes                                                                      |
-| ----------------------- | --------------- | -------------------------------------------------------------------------- |
-| `STRIPE_SECRET_KEY`     | Vercel (server) | `sk_…`/`rk_…`; unset ⇒ billing disabled gracefully. Test key outside prod. |
-| `STRIPE_WEBHOOK_SECRET` | Vercel (server) | Endpoint signing secret `whsec_…` for `/api/v1/billing/webhook`.           |
-| `STRIPE_SECRET_KEY`     | Worker (secret) | Same key; daily meter export. Unset ⇒ export skipped (logged).             |
+| Variable                                  | Where           | Notes                                                                              |
+| ----------------------------------------- | --------------- | ---------------------------------------------------------------------------------- |
+| `STRIPE_SECRET_KEY`                       | Vercel (server) | `sk_…`/`rk_…`; unset ⇒ billing disabled gracefully. Test key outside prod.         |
+| `STRIPE_WEBHOOK_SECRET`                   | Vercel (server) | Endpoint signing secret `whsec_…` for `/api/v1/billing/webhook`.                   |
+| `STRIPE_SECRET_KEY`                       | Worker (secret) | Same key; daily meter export. Unset ⇒ export skipped (logged).                     |
+| `RESEND_API_KEY`                          | Worker (secret) | Resend key (sending access). Unset ⇒ app email logged and acked, not sent.         |
+| `EMAIL_FROM`, `EMAIL_REPLY_TO`, `APP_URL` | Worker (vars)   | Optional; defaults `Lumra <hello@lumra.photos>`, none, `https://www.lumra.photos`. |
 
 Webhook endpoint: `https://www.lumra.photos/api/v1/billing/webhook` (the PRD's `/api/v1/webhooks/stripe`
 path sits with the other billing routes instead; ADR-004 amendment). Subscribe it to
