@@ -3,7 +3,8 @@ import { redirect } from 'next/navigation';
 import { decodeKeysetCursor, type GalleryListStatus } from '@lumra/contracts';
 import { getAuthenticatedUser } from '@/lib/actor';
 import { serverEnv } from '@/lib/env';
-import { formatBytes, formatDate } from '@/lib/format';
+import { LocalTime } from '@/components/local-time';
+import { formatBytes } from '@/lib/format';
 import { listGalleriesForOwner } from '@/lib/galleries';
 import { getDb } from '@/lib/db';
 import { getAccountUsageSummary } from '@/server/account';
@@ -139,10 +140,10 @@ export default async function DashboardPage({
                     <td className={`${td} text-right`}>{g.itemCount}</td>
                     <td className={`${td} text-right`}>{formatBytes(g.storedBytes)}</td>
                     <td className={`${td} text-[var(--color-ink-muted)]`}>
-                      {formatDate(g.createdAt)}
+                      <LocalTime value={g.createdAt} />
                     </td>
                     <td className={`${td} text-[var(--color-ink-muted)]`}>
-                      {formatDate(g.updatedAt)}
+                      <LocalTime value={g.updatedAt} />
                     </td>
                     <td className={`${td} text-right`}>
                       {g.status === 'draft' ? (

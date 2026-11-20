@@ -15,16 +15,50 @@ export function formatBytes(bytes: number): string {
   return `${digits > 0 ? text.replace(/\.?0+$/, '') : text} ${UNITS[unit]}`;
 }
 
-const dateFormat = new Intl.DateTimeFormat('en-US', {
-  year: 'numeric',
-  month: 'short',
-  day: 'numeric',
-  timeZone: 'UTC',
-});
+function dateFormatter(timeZone?: string) {
+  return new Intl.DateTimeFormat(timeZone ? 'en-US' : undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    timeZone,
+  });
+}
 
-/** Server-rendered dates are shown in UTC to avoid hydration drift (labelled in the UI). */
+function dateTimeFormatter(timeZone?: string, withZone = false) {
+  return new Intl.DateTimeFormat(timeZone ? 'en-US' : undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    ...(withZone ? { timeZoneName: 'short' as const } : {}),
+    timeZone,
+  });
+}
+
+/** UTC date ("Nov 4, 2026"); used for server renders and billing periods, which are defined in UTC. */
+export function formatDateUtc(iso: string): string {
+  return dateFormatter('UTC').format(new Date(iso));
+}
+
+/** UTC date and time without a zone label (callers append "UTC"). */
+export function formatDateTimeUtc(iso: string): string {
+  return dateTimeFormatter('UTC').format(new Date(iso));
+}
+
+/** Date in the runtime's (browser's) time zone and locale. Client-only: servers run in UTC. */
+export function formatDateLocal(iso: string): string {
+  return dateFormatter().format(new Date(iso));
+}
+
+/** Date and time in the runtime's time zone; `withZone` appends the zone abbreviation. */
+export function formatDateTimeLocal(iso: string, withZone = false): string {
+  return dateTimeFormatter(undefined, withZone).format(new Date(iso));
+}
+
+/** UTC date, labelled "(UTC)" where shown; owner pages use `<LocalTime>` instead. */
 export function formatDate(iso: string): string {
-  return dateFormat.format(new Date(iso));
+  return formatDateUtc(iso);
 }
 
 const gbFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
