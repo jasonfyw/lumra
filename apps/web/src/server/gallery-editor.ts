@@ -1,6 +1,7 @@
 import 'server-only';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type {
+  BulkDeleteMediaResponse,
   DeleteGalleryResponse,
   DeleteMediaResponse,
   EditorMediaItem,
@@ -506,11 +507,52 @@ export async function reorderMedia(
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Removes one item: media → `deleting` (with `deleted_at`, so it leaves the gallery, its count
- * and stored-bytes totals at once), any still-pending upload reservation is released (session
- * aborted; guest quota compensated), the cover override is cleared if it pointed here,
- * `content_version` is bumped and a deduped `media.delete` outbox row asks the worker to purge
- * the original and derivatives.
+ * Marks one live item of a locked gallery `deleting` (with `deleted_at`, so it leaves the
+ * gallery, its count and stored-bytes totals at once), releases any still-pending upload
+ * reservation (session aborted; guest quota compensated) and enqueues a deduped `media.delete`
+ * outbox row so the worker purges the original and derivatives. Shared by single and bulk
+ * delete so storage/ledger accounting cannot diverge. The caller bumps `content_version` and
+ * clears the cover override.
+ */
+async function removeMediaItem(
+  tx: Tx,
+  deps: EditorDeps,
+  galleryId: string,
+  mediaId: string,
+  now: Date,
+): Promise<void> {
+  const [item] = await tx
+    .select()
+    .from(media)
+    .where(and(eq(media.id, mediaId), eq(media.galleryId, galleryId), isNull(media.deletedAt)))
+    .for('update');
+  if (!item || !canTransition(MEDIA_TRANSITIONS, item.status, 'deleting')) {
+    throw notFoundError('Photo not found.');
+  }
+
+  await tx.update(media).set({ status: 'deleting', deletedAt: now }).where(eq(media.id, mediaId));
+
+  if (item.uploadSessionId) {
+    const [session] = await tx
+      .update(uploadSessions)
+      .set({ status: 'aborted' })
+      .where(and(eq(uploadSessions.id, item.uploadSessionId), eq(uploadSessions.status, 'pending')))
+      .returning({
+        guestSessionId: uploadSessions.guestSessionId,
+        reservedBytes: uploadSessions.reservedBytes,
+      });
+    if (session?.guestSessionId) {
+      await tx.execute(
+        sql`select public.release_guest_upload(${session.guestSessionId}::uuid, ${session.reservedBytes}::bigint)`,
+      );
+    }
+  }
+  await enqueueOutbox(tx, 'media.delete', mediaId, deps.requestId);
+}
+
+/**
+ * Removes one item (see `removeMediaItem`), clears the cover override if it pointed here and
+ * bumps `content_version`.
  */
 export async function deleteMedia(
   deps: EditorDeps,
@@ -522,35 +564,7 @@ export async function deleteMedia(
   if (!UUID.test(mediaId)) throw notFoundError('Photo not found.');
   return deps.db.transaction(async (tx) => {
     const g = await lockOwnedGallery(tx, userId, galleryId);
-    const [item] = await tx
-      .select()
-      .from(media)
-      .where(and(eq(media.id, mediaId), eq(media.galleryId, galleryId), isNull(media.deletedAt)))
-      .for('update');
-    if (!item || !canTransition(MEDIA_TRANSITIONS, item.status, 'deleting')) {
-      throw notFoundError('Photo not found.');
-    }
-
-    await tx.update(media).set({ status: 'deleting', deletedAt: now }).where(eq(media.id, mediaId));
-
-    if (item.uploadSessionId) {
-      const [session] = await tx
-        .update(uploadSessions)
-        .set({ status: 'aborted' })
-        .where(
-          and(eq(uploadSessions.id, item.uploadSessionId), eq(uploadSessions.status, 'pending')),
-        )
-        .returning({
-          guestSessionId: uploadSessions.guestSessionId,
-          reservedBytes: uploadSessions.reservedBytes,
-        });
-      if (session?.guestSessionId) {
-        await tx.execute(
-          sql`select public.release_guest_upload(${session.guestSessionId}::uuid, ${session.reservedBytes}::bigint)`,
-        );
-      }
-    }
-
+    await removeMediaItem(tx, deps, galleryId, mediaId, now);
     const clearCover = g.coverMediaId === mediaId;
     const [row] = await tx
       .update(galleries)
@@ -563,11 +577,47 @@ export async function deleteMedia(
         contentVersion: galleries.contentVersion,
         coverMediaId: galleries.coverMediaId,
       });
-    await enqueueOutbox(tx, 'media.delete', mediaId, deps.requestId);
     deps.log.info('media deleted', { galleryId, mediaId, clearedCover: clearCover });
     return {
       mediaId,
       status: 'deleting',
+      contentVersion: row!.contentVersion,
+      coverMediaId: row!.coverMediaId,
+    };
+  });
+}
+
+/**
+ * Removes several items atomically (all or none; one `content_version` bump). Any id that isn't
+ * a live item of this gallery fails the whole request with a 404 and nothing changes.
+ */
+export async function bulkDeleteMedia(
+  deps: EditorDeps,
+  userId: string,
+  galleryId: string,
+  mediaIds: readonly string[],
+  now = new Date(),
+): Promise<BulkDeleteMediaResponse> {
+  if (mediaIds.some((id) => !UUID.test(id))) throw notFoundError('Photo not found.');
+  const ids = [...new Set(mediaIds)];
+  return deps.db.transaction(async (tx) => {
+    const g = await lockOwnedGallery(tx, userId, galleryId);
+    for (const mediaId of ids) await removeMediaItem(tx, deps, galleryId, mediaId, now);
+    const clearCover = g.coverMediaId !== null && ids.includes(g.coverMediaId);
+    const [row] = await tx
+      .update(galleries)
+      .set({
+        contentVersion: sql`${galleries.contentVersion} + 1`,
+        ...(clearCover ? { coverMediaId: null } : {}),
+      })
+      .where(eq(galleries.id, galleryId))
+      .returning({
+        contentVersion: galleries.contentVersion,
+        coverMediaId: galleries.coverMediaId,
+      });
+    deps.log.info('media bulk deleted', { galleryId, count: ids.length, clearedCover: clearCover });
+    return {
+      mediaIds: ids,
       contentVersion: row!.contentVersion,
       coverMediaId: row!.coverMediaId,
     };

@@ -127,3 +127,24 @@ export const deleteGalleryResponseSchema = z.object({
   deletedAt: z.iso.datetime(),
 });
 export type DeleteGalleryResponse = z.infer<typeof deleteGalleryResponseSchema>;
+
+/** `POST /api/v1/galleries/{id}/media/bulk-delete`: remove several photos in one transaction. */
+export const bulkDeleteMediaRequestSchema = z
+  .object({
+    mediaIds: z
+      .array(z.uuid())
+      .min(1)
+      .max(GALLERY_LIMITS.maxItemsPerGallery)
+      .refine((ids) => new Set(ids).size === ids.length, { message: 'Ids must be unique.' }),
+  })
+  .strict();
+export type BulkDeleteMediaRequest = z.infer<typeof bulkDeleteMediaRequestSchema>;
+
+export const bulkDeleteMediaResponseSchema = z.object({
+  /** Items now `deleting`, in request order. */
+  mediaIds: z.array(z.uuid()),
+  contentVersion: z.number().int().positive(),
+  /** Cover override after the delete (cleared when the cover was among the deleted items). */
+  coverMediaId: z.uuid().nullable(),
+});
+export type BulkDeleteMediaResponse = z.infer<typeof bulkDeleteMediaResponseSchema>;
