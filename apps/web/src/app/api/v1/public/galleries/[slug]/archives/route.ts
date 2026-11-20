@@ -1,10 +1,12 @@
 import { createArchiveRequestSchema, type CreateArchiveResponse } from '@lumra/contracts';
+import { getAuthenticatedUser } from '@/lib/actor';
 import { ok, parseJsonBody } from '@/lib/api';
 import { archiveSessionSetCookies, hashGallerySessionToken } from '@/lib/gallery-session';
 import { assertSameOrigin } from '@/lib/origin';
 import { hashClientIp } from '@/lib/rate-limit';
 import { withRoute } from '@/lib/route';
 import { createArchive } from '@/server/archives';
+import { trackGalleryEvent, visitorFromHeaders } from '@/server/gallery-analytics';
 import {
   PRIVATE_NO_STORE,
   gallerySessionToken,
@@ -43,6 +45,14 @@ export const POST = withRoute<Context>(
       requestId: scope.requestId,
       log: scope.log,
     });
+    // One "Download all" request is one archive download action (FR-D04), new job or reused.
+    trackGalleryEvent(
+      db,
+      slug,
+      { type: 'archive_download' },
+      visitorFromHeaders(request.headers, getAuthenticatedUser()),
+      { log: scope.log },
+    );
     if (!response.reused) scheduleRelayKick(scope.log, scope.requestId);
 
     const res = ok<CreateArchiveResponse>(response, scope.requestId, {
