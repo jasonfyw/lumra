@@ -8,11 +8,13 @@ Required before the listed task starts (PRD §17, `docs/PLAN.md` §2):
 | [000](./000-monorepo-tooling.md)                 | Monorepo tooling                        | T01      |
 | [001](./001-private-media-gateway.md)            | Private media gateway vs presigned URLs | T20      |
 | [002](./002-image-processor.md)                  | Image processor / container / queue     | T12      |
-| 003                                              | ZIP implementation and partition sizes  | T24      |
+| [003](./003-zip-archives.md)                     | ZIP implementation and partition sizes  | T24      |
 | [004](./004-billing-rating-and-stripe-meters.md) | Billing rating / Stripe meter mapping   | T27      |
 | [005](./005-rls-and-guest-claim.md)              | RLS and guest claim security            | T02, T07 |
 | 006                                              | Video provider (v1.1)                   | V01      |
 | [007](./007-database-access-layer.md)            | Database access layer                   | T02      |
+| [008](./008-remove-delivery-billing.md)          | Remove delivery from pricing            | T27–T33  |
+| [009](./009-storage-overage-rate-v2.md)          | Pro storage overage $0.05 (rate v2)     | T27–T31  |
 
 Template:
 

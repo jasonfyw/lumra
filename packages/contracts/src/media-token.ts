@@ -29,7 +29,7 @@ const common = {
   /** Issued-at / expiry, epoch seconds. `exp - iat` ≤ MEDIA_TOKEN.maxTtlSeconds. */
   iat: z.number().int().nonnegative(),
   exp: z.number().int().positive(),
-  /** Unique token id; also the usage-event dedupe key prefix. */
+  /** Unique token id. */
   jti: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
 };
 
@@ -42,6 +42,13 @@ export const previewTokenClaimsSchema = z.object({
   variant: z.enum(PREVIEW_VARIANTS),
   /** Derivative key segment: `derivatives/{gallery}/{media}/{variant_hash}.webp`. */
   variant_hash: z.string().regex(/^[a-z0-9]{4,64}$/),
+  /**
+   * `owner`: minted only for the authenticated gallery owner's editor thumbnails, after an
+   * ownership check in Postgres. The gateway then also serves drafts (no KV document yet) and
+   * expired galleries; deletion, `access_version` and delivery suspension still apply
+   * (ADR-001 "Owner previews"). Absent for recipient tokens.
+   */
+  scope: z.literal('owner').optional(),
 });
 
 export const originalTokenClaimsSchema = z.object({
@@ -58,7 +65,7 @@ export const originalTokenClaimsSchema = z.object({
 export const archiveTokenClaimsSchema = z.object({
   ...common,
   action: z.literal('archive'),
-  /** `archive_parts.id`, used for usage accounting. */
+  /** `archive_parts.id` of the part this token grants. */
   archive_part_id: z.uuid(),
   /** Key segments of `archives/{gallery}/{job}/{part_no}.zip`. */
   archive_job_id: z.uuid(),

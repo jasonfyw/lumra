@@ -13,6 +13,8 @@ import type {
   ReorderMediaResponse,
   SetGalleryPasswordResponse,
 } from '@lumra/contracts';
+import { mediaTokenKeyringSchema } from '@lumra/config';
+import { verifyMediaToken } from '@lumra/tokens';
 import { verifyGalleryPassword } from '@/lib/password';
 import {
   DELETE as deleteGalleryRoute,
@@ -236,6 +238,90 @@ describe('GET /api/v1/galleries/{id}', () => {
       itemCount: 3,
       effectiveCoverMediaId: a,
     });
+  });
+});
+
+describe('editor thumbnails (owner-scoped media URLs)', () => {
+  const keyring = mediaTokenKeyringSchema.parse(process.env.MEDIA_TOKEN_SECRET);
+  const MEDIA_BASE = 'https://media.lumra.test/m/';
+
+  async function addVariants(galleryId: string, mediaId: string, widths: number[]) {
+    for (const w of widths) {
+      await sql`
+        insert into public.media_variants (media_id, variant, object_key, mime, width, height, byte_size)
+        values (${mediaId}, ${`w${w}`}, ${`derivatives/${galleryId}/${mediaId}/w${w}abc1234.webp`},
+                'image/webp', ${w}, ${Math.round((w * 3) / 4)}, 100)`;
+    }
+  }
+
+  async function claimsOf(url: string | null) {
+    expect(url?.startsWith(MEDIA_BASE)).toBe(true);
+    const verified = await verifyMediaToken(url!.slice(MEDIA_BASE.length), keyring);
+    expect(verified.status).toBe('ok');
+    return verified.status === 'ok' ? verified.claims : null;
+  }
+
+  it('owner gets a w640 owner-scoped preview URL per ready item, even for a draft', async () => {
+    const { gallery } = await ownedWithUser();
+    const ready = await addMedia(gallery, 'a0');
+    await addVariants(gallery, ready, [320, 640, 1280]);
+    const small = await addMedia(gallery, 'a1');
+    await addVariants(gallery, small, [320]);
+    const noDerivative = await addMedia(gallery, 'a2');
+    const processing = await addMedia(gallery, 'a3', 'processing');
+    const failed = await addMedia(gallery, 'a4', 'failed');
+
+    const { data } = await readJson<GalleryDetail>(await api.get(gallery));
+    expect(data!.status).toBe('draft');
+    const byId = new Map(data!.items.map((i) => [i.id, i.thumbnailUrl]));
+    expect(await claimsOf(byId.get(ready)!)).toMatchObject({
+      action: 'preview',
+      scope: 'owner',
+      gallery_id: gallery,
+      media_id: ready,
+      variant: 'w640',
+      variant_hash: 'w640abc1234',
+      access_version: (await galleryRow(gallery)).access_version,
+    });
+    expect(await claimsOf(byId.get(small)!)).toMatchObject({ variant: 'w320', media_id: small });
+    expect(byId.get(noDerivative)).toBeNull();
+    expect(byId.get(processing)).toBeNull();
+    expect(byId.get(failed)).toBeNull();
+  });
+
+  it('PATCH responses carry fresh thumbnails too', async () => {
+    const { gallery } = await ownedWithUser();
+    const ready = await addMedia(gallery, 'a0');
+    await addVariants(gallery, ready, [640]);
+    const { data } = await readJson<GalleryDetail>(await api.patch(gallery, { title: 'Renamed' }));
+    expect(await claimsOf(data!.items[0]!.thumbnailUrl)).toMatchObject({
+      action: 'preview',
+      scope: 'owner',
+    });
+  });
+
+  it('non-owners, guests and anonymous callers never receive media URLs', async () => {
+    const owner = await createUser();
+    const gallery = await createOwnedGallery(owner);
+    const ready = await addMedia(gallery, 'a0');
+    await addVariants(gallery, ready, [320, 640]);
+
+    const anonymous = await api.get(gallery);
+    expect(anonymous.status).toBe(401);
+    expect(await anonymous.text()).not.toContain('media.lumra.test');
+
+    signInAs(await createUser());
+    for (const res of [await api.get(gallery), await api.patch(gallery, { title: 'x' })]) {
+      expect(res.status).toBe(404);
+      expect(await res.text()).not.toContain('media.lumra.test');
+    }
+
+    const draft = await createGuestDraft();
+    resetContext();
+    useGuestCookie(draft);
+    const guest = await api.get(draft.galleryId);
+    expect(guest.status).toBe(401);
+    expect(await guest.text()).not.toContain('media.lumra.test');
   });
 });
 

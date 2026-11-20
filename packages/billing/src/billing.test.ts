@@ -1,4 +1,4 @@
-import { BILLING_POLICY_V1, BYTES_PER_GB, RATE_CARD_V1 } from '@lumra/config';
+import { BILLING_POLICY_V1, BYTES_PER_GB, RATE_CARD, RATE_CARD_V1 } from '@lumra/config';
 import { InvalidTransitionError } from '@lumra/domain';
 import { describe, expect, it } from 'vitest';
 import {
@@ -12,7 +12,6 @@ import {
   buildMeterEvents,
   bytesToGbMicroUnits,
   checkAdmission,
-  checkDeliveryAllowance,
   checkGalleryCreation,
   deriveBillingRestrictions,
   divRoundHalfUp,
@@ -107,29 +106,41 @@ describe('integrateStorage', () => {
 });
 
 describe('rateInvoice', () => {
-  it('reproduces the PRD §9.3 example: Pro, 12 GB-month, 45 GB ⇒ $4.20', () => {
+  it('reproduces the PRD §9.3 example: Pro, 30 GB-month ⇒ $2.00 + (30 − 20)×$0.05 = $2.50', () => {
     const invoice = rateInvoice({
-      plan: pro,
-      storageGbMonthMicro: storageGbMonthMicroUnits(12n * BigInt(GB) * BigInt(MONTH_S)),
-      deliveryBytes: 45 * GB,
-      rateVersion: pro.rateVersion,
+      plan: RATE_CARD.pro,
+      storageGbMonthMicro: storageGbMonthMicroUnits(30n * BigInt(GB) * BigInt(MONTH_S)),
+      rateVersion: 2,
     });
-    expect(invoice.totalMicroUsd).toBe(4_200_000);
-    expect(invoice.totalCents).toBe(420);
+    expect(RATE_CARD.pro.rateVersion).toBe(2);
+    expect(invoice.totalMicroUsd).toBe(2_500_000);
+    expect(invoice.totalCents).toBe(250);
+    expect(invoice.lines.map((l) => [l.kind, l.amountMicroUsd, l.amountCents])).toEqual([
+      ['base_fee', 2_000_000, 200],
+      ['storage_overage', 500_000, 50],
+    ]);
+    expect(invoice.lines[1]?.quantity).toBe(10_000_000n);
+  });
+
+  it('rate v1 stays reproducible after the v2 price cut: same usage ⇒ $3.00 under v1', () => {
+    const invoice = rateInvoice({
+      plan: pro, // RATE_CARD_V1.pro ($0.10/GB-month)
+      storageGbMonthMicro: storageGbMonthMicroUnits(30n * BigInt(GB) * BigInt(MONTH_S)),
+      rateVersion: 1,
+    });
+    expect(invoice.totalMicroUsd).toBe(3_000_000);
+    expect(invoice.totalCents).toBe(300);
     expect(invoice.lines.map((l) => [l.kind, l.amountMicroUsd, l.amountCents])).toEqual([
       ['base_fee', 2_000_000, 200],
       ['storage_overage', 1_000_000, 100],
-      ['delivery_overage', 1_200_000, 120],
     ]);
     expect(invoice.lines[1]?.quantity).toBe(10_000_000n);
-    expect(invoice.lines[2]?.quantity).toBe(40n * BigInt(GB));
   });
 
   it('charges only the base fee inside the allowance', () => {
     const invoice = rateInvoice({
       plan: pro,
-      storageGbMonthMicro: 2_000_000,
-      deliveryBytes: 5 * GB,
+      storageGbMonthMicro: 20_000_000,
       rateVersion: 1,
     });
     expect(invoice.totalMicroUsd).toBe(pro.monthlyFeeMicroUsd);
@@ -139,7 +150,6 @@ describe('rateInvoice', () => {
     const invoice = rateInvoice({
       plan: free,
       storageGbMonthMicro: 999_000_000,
-      deliveryBytes: 999 * GB,
       rateVersion: 1,
     });
     expect(invoice.lines.map((l) => l.kind)).toEqual(['base_fee']);
@@ -147,20 +157,28 @@ describe('rateInvoice', () => {
   });
 
   it('rejects usage rated under a different rate version', () => {
-    expect(() =>
-      rateInvoice({ plan: pro, storageGbMonthMicro: 0, deliveryBytes: 0, rateVersion: 2 }),
-    ).toThrow(RateVersionMismatchError);
+    expect(() => rateInvoice({ plan: pro, storageGbMonthMicro: 0, rateVersion: 2 })).toThrow(
+      RateVersionMismatchError,
+    );
   });
 
-  it('rounds sub-micro-dollar delivery half up', () => {
-    // 1 byte over: 30 000 µ$/GB × 1e-9 GB = 0.00003 µ$ → 0
-    expect(
-      estimateOverageMicroUsd({ storageByteSeconds: 0n, deliveryBytes: 5 * GB + 1 }, pro),
-    ).toBe(0);
-    // 16 667 bytes over → 0.50001 µ$ → 1
-    expect(
-      estimateOverageMicroUsd({ storageByteSeconds: 0n, deliveryBytes: 5 * GB + 16_667 }, pro),
-    ).toBe(1);
+  it('rounds sub-micro-dollar storage half up', () => {
+    const included = 20n * BigInt(GB) * BigInt(MONTH_S);
+    const microGbMonth = (BigInt(GB) * BigInt(MONTH_S)) / 1_000_000n;
+    // 4 micro GB-month over: 100 000 µ$/GB-month × 4e-6 = 0.4 µ$ → 0
+    expect(estimateOverageMicroUsd({ storageByteSeconds: included + 4n * microGbMonth }, pro)).toBe(
+      0,
+    );
+    // 5 micro GB-month over → 0.5 µ$ → 1
+    expect(estimateOverageMicroUsd({ storageByteSeconds: included + 5n * microGbMonth }, pro)).toBe(
+      1,
+    );
+  });
+
+  it('has no delivery line or delivery rate (ADR-008)', () => {
+    expect(Object.keys(pro).filter((k) => /deliver/i.test(k))).toEqual([]);
+    const invoice = rateInvoice({ plan: pro, storageGbMonthMicro: 0, rateVersion: 1 });
+    expect(invoice.lines.map((l) => l.kind)).toEqual(['base_fee', 'storage_overage']);
   });
 });
 
@@ -169,7 +187,7 @@ const baseAdmission = (overrides: Partial<AdmissionInput> = {}): AdmissionInput 
   account: { status: 'active' },
   now: at(15),
   period: { start: periodStart, end: periodEnd },
-  currentUsage: { storedBytes: 0, storageByteSecondsToDate: 0n, deliveryBytesToDate: 0 },
+  currentUsage: { storedBytes: 0, storageByteSecondsToDate: 0n },
   reservations: [],
   requested: { kind: 'upload', bytes: 50_000_000 },
   capMicroUsd: null,
@@ -181,11 +199,7 @@ describe('checkAdmission', () => {
     const input = baseAdmission({
       plan: free,
       account: { status: 'free' },
-      currentUsage: {
-        storedBytes: 900_000_000,
-        storageByteSecondsToDate: 0n,
-        deliveryBytesToDate: 0,
-      },
+      currentUsage: { storedBytes: 900_000_000, storageByteSecondsToDate: 0n },
       reservations: [{ kind: 'upload', bytes: 50_000_000 }],
     });
     expect(checkAdmission(input).allowed).toBe(true); // exactly 1 GB
@@ -194,17 +208,25 @@ describe('checkAdmission', () => {
     ).toMatchObject({ allowed: false, reason: 'free_storage_cap' });
   });
 
-  it('enforces the Free 3 GB/month delivery cap for archives', () => {
+  it('never caps archives by size: delivery is not metered (ADR-008)', () => {
     const input = baseAdmission({
       plan: free,
       account: { status: 'free' },
-      currentUsage: { storedBytes: 0, storageByteSecondsToDate: 0n, deliveryBytesToDate: 2 * GB },
-      requested: { kind: 'archive', bytes: GB },
+      currentUsage: { storedBytes: GB, storageByteSecondsToDate: 0n },
+      requested: { kind: 'archive', bytes: 500 * GB },
+      reservations: [{ kind: 'archive', bytes: 500 * GB }],
     });
     expect(checkAdmission(input).allowed).toBe(true);
+    // Pro already over its cap from storage: archives add no cost and are still admitted.
     expect(
-      checkAdmission({ ...input, reservations: [{ kind: 'archive', bytes: 1 }] }),
-    ).toMatchObject({ allowed: false, reason: 'free_delivery_cap' });
+      checkAdmission(
+        baseAdmission({
+          capMicroUsd: 0,
+          currentUsage: { storedBytes: 100 * GB, storageByteSecondsToDate: 0n },
+          requested: { kind: 'archive', bytes: 500 * GB },
+        }),
+      ).allowed,
+    ).toBe(true);
   });
 
   it('honours an explicit freeLimits override', () => {
@@ -213,7 +235,7 @@ describe('checkAdmission', () => {
         baseAdmission({
           plan: free,
           account: { status: 'free' },
-          freeLimits: { maxStorageBytes: 10, maxDeliveryBytesPerMonth: 10 },
+          freeLimits: { maxStorageBytes: 10 },
           requested: { kind: 'upload', bytes: 11 },
         }),
       ),
@@ -221,7 +243,7 @@ describe('checkAdmission', () => {
   });
 
   it('denies Pro uploads whose conservative projection exceeds the spend cap', () => {
-    // Half the period left: 1 TB held for 15 days = 500 GB-month → 498 × $0.10 = $49.80 overage
+    // Half the period left: 1 TB held for 15 days = 500 GB-month → 480 × $0.10 = $48.00 overage
     const input = baseAdmission({ requested: { kind: 'upload', bytes: 1_000 * GB } });
     const decision = checkAdmission(input);
     expect(decision).toMatchObject({
@@ -229,15 +251,16 @@ describe('checkAdmission', () => {
       reason: 'spend_cap',
       remainingCapMicroUsd: 0,
     });
-    expect(decision.projectedOverageMicroUsd).toBe(49_800_000);
+    expect(decision.projectedOverageMicroUsd).toBe(48_000_000);
     expect(checkAdmission({ ...input, capMicroUsd: 50 * 1_000_000 }).allowed).toBe(true);
   });
 
   it('treats a $0 cap as no overage at all', () => {
-    const input = baseAdmission({ capMicroUsd: 0, requested: { kind: 'archive', bytes: 5 * GB } });
-    expect(checkAdmission(input).allowed).toBe(true); // exactly the allowance
+    // Half the period left: 40 GB held for 15 days = exactly the 20 GB-month allowance.
+    const input = baseAdmission({ capMicroUsd: 0, requested: { kind: 'upload', bytes: 40 * GB } });
+    expect(checkAdmission(input).allowed).toBe(true);
     expect(
-      checkAdmission({ ...input, requested: { kind: 'archive', bytes: 5 * GB + 20_000 } }),
+      checkAdmission({ ...input, requested: { kind: 'upload', bytes: 40 * GB + 1_000_000 } }),
     ).toMatchObject({ allowed: false, reason: 'spend_cap' });
   });
 
@@ -262,55 +285,6 @@ describe('checkGalleryCreation', () => {
     });
     expect(checkGalleryCreation({ plan: pro, activeGalleryCount: 10_000 })).toEqual({
       allowed: true,
-    });
-  });
-});
-
-describe('checkDeliveryAllowance', () => {
-  const usage = (deliveryBytesToDate: number) => ({
-    storageByteSecondsToDate: 0n,
-    deliveryBytesToDate,
-  });
-
-  it('pauses Free delivery at 3 GB and Pro delivery at the cap', () => {
-    const freeInput = {
-      plan: free,
-      account: { status: 'free' as const },
-      now: at(1),
-      capMicroUsd: null,
-    };
-    expect(checkDeliveryAllowance({ ...freeInput, usage: usage(3 * GB - 1) }).allowed).toBe(true);
-    expect(checkDeliveryAllowance({ ...freeInput, usage: usage(3 * GB) })).toEqual({
-      allowed: false,
-      reason: 'free_delivery_cap',
-    });
-    // $10 cap = 333.33 GB over the 5 GB allowance at $0.03/GB
-    const proInput = {
-      plan: pro,
-      account: { status: 'active' as const },
-      now: at(1),
-      capMicroUsd: null,
-    };
-    expect(checkDeliveryAllowance({ ...proInput, usage: usage(338 * GB) }).allowed).toBe(true);
-    expect(checkDeliveryAllowance({ ...proInput, usage: usage(339 * GB) })).toEqual({
-      allowed: false,
-      reason: 'spend_cap',
-    });
-  });
-
-  it('suspends public delivery only after the past-due grace', () => {
-    const input = {
-      plan: pro,
-      account: { status: 'past_due' as const, pastDueSince: at(0) },
-      usage: usage(0),
-      capMicroUsd: null,
-    };
-    expect(checkDeliveryAllowance({ ...input, now: new Date(at(7).getTime() - 1) }).allowed).toBe(
-      true,
-    );
-    expect(checkDeliveryAllowance({ ...input, now: at(7) })).toEqual({
-      allowed: false,
-      reason: 'past_due',
     });
   });
 });
@@ -375,17 +349,17 @@ describe('ledger entries', () => {
   it('builds deterministic rows keyed by (metric, sourceId)', () => {
     const input = {
       accountId: 'acct_1',
-      metric: 'delivery_bytes' as const,
+      metric: 'storage_byte_seconds' as const,
       quantity: 1_234,
-      unit: 'byte' as const,
-      sourceId: 'gw_evt_1',
+      unit: 'byte_second' as const,
+      sourceId: 'win_1',
       eventTime: at(2),
       period,
       rateVersion: 1,
     };
     const entry = buildLedgerEntry(input);
     expect(entry).toEqual(buildLedgerEntry(input));
-    expect(entry.idempotencyKey).toBe('delivery_bytes:gw_evt_1');
+    expect(entry.idempotencyKey).toBe('storage_byte_seconds:win_1');
     expect(entry.quantity).toBe(1_234n);
     expect(entry.periodStart).toEqual(periodStart);
   });
@@ -402,7 +376,8 @@ describe('ledger entries', () => {
       rateVersion: 1,
     };
     expect(() => buildLedgerEntry(base)).not.toThrow();
-    expect(() => buildLedgerEntry({ ...base, unit: 'byte' })).toThrow(LedgerEntryError);
+    // @ts-expect-error -- delivery is not a usage metric any more (ADR-008)
+    expect(() => buildLedgerEntry({ ...base, metric: 'delivery_bytes' })).toThrow(LedgerEntryError);
     expect(() => buildLedgerEntry({ ...base, quantity: -1n })).toThrow(LedgerEntryError);
     expect(() => buildLedgerEntry({ ...base, quantity: 0.5 })).toThrow(LedgerEntryError);
     expect(() => buildLedgerEntry({ ...base, eventTime: at(31) })).toThrow(LedgerEntryError);
@@ -411,31 +386,41 @@ describe('ledger entries', () => {
 
 describe('buildMeterEvents', () => {
   const period = { start: periodStart, end: periodEnd };
-  const delivery = (sourceId: string, quantity: number, day: number) =>
+  const month = BigInt(BILLING_POLICY_V1.secondsPerBillingMonth);
+  const gbMonth = BigInt(BYTES_PER_GB) * month;
+  /** Byte-seconds for `tenths` tenths of an MB-month. */
+  const mbMonthTenths = (tenths: number): bigint => BigInt(tenths) * 100_000n * month;
+  const storage = (sourceId: string, quantity: bigint, day: number) =>
     buildLedgerEntry({
       accountId: 'acct_1',
-      metric: 'delivery_bytes',
+      metric: 'storage_byte_seconds',
       quantity,
-      unit: 'byte',
+      unit: 'byte_second',
       sourceId,
       eventTime: at(day),
       period,
       rateVersion: 1,
     });
 
-  it('exports cumulative deltas with stable identifiers', () => {
-    const entries = [delivery('e1', 1_400, 1), delivery('e2', 1_400, 2)];
+  it('exports cumulative overage deltas in MB-months with stable identifiers', () => {
+    const included = BigInt(RATE_CARD_V1.pro.includedStorageGbMonth) * gbMonth;
+    // Day 1: allowance + 1.4 MB-month; day 2: another 1.4 MB-month.
+    const entries = [
+      storage('e1', included + mbMonthTenths(14), 1),
+      storage('e2', mbMonthTenths(14), 2),
+    ];
     const day1 = buildMeterEvents({
       stripeCustomerId: 'cus_1',
       accountId: 'acct_1',
+      plan: RATE_CARD_V1.pro,
       windowEnd: at(1),
       entries,
       exported: {},
     });
     expect(day1.events).toEqual([
       {
-        event_name: 'lumra_delivery_gb_micro',
-        identifier: `acct_1:delivery_bytes:${periodStart.getTime() / 1000}:${at(1).getTime() / 1000}`,
+        event_name: 'lumra_storage_overage',
+        identifier: `acct_1:storage_byte_seconds:${periodStart.getTime() / 1000}:${at(1).getTime() / 1000}`,
         timestamp: at(1).getTime() / 1000,
         payload: { stripe_customer_id: 'cus_1', value: '1' },
       },
@@ -443,20 +428,73 @@ describe('buildMeterEvents', () => {
     const day2 = buildMeterEvents({
       stripeCustomerId: 'cus_1',
       accountId: 'acct_1',
+      plan: RATE_CARD_V1.pro,
       windowEnd: at(2),
       entries,
       exported: day1.cursors,
     });
-    // 2 800 bytes → 3 micro GB in total; per-day rounding would have exported 1 + 1 = 2.
+    // 2.8 MB-month → 3 in total; per-day rounding would have exported 1 + 1 = 2.
     expect(day2.events.map((e) => e.payload.value)).toEqual(['2']);
-    expect(day2.cursors[meterCursorKey('delivery_bytes', periodStart)]).toBe(3n);
+    expect(day2.cursors[meterCursorKey('storage_byte_seconds', periodStart)]).toBe(3n);
+  });
+
+  it('exports storage as MB-months above the included GB-months', () => {
+    const storage = buildLedgerEntry({
+      accountId: 'acct_1',
+      metric: 'storage_byte_seconds',
+      // 30 GB-month: 10 GB-month = 10 000 MB-month over the 20 included.
+      quantity: 30n * gbMonth,
+      unit: 'byte_second',
+      sourceId: 's1',
+      eventTime: at(3),
+      period,
+      rateVersion: 1,
+    });
+    const result = buildMeterEvents({
+      stripeCustomerId: 'cus_1',
+      accountId: 'acct_1',
+      plan: RATE_CARD_V1.pro,
+      windowEnd: at(3),
+      entries: [storage],
+      exported: {},
+    });
+    expect(result.events.map((e) => [e.event_name, e.payload.value])).toEqual([
+      ['lumra_storage_overage', '10000'],
+    ]);
+  });
+
+  it('timestamps usage exported after the period closed inside that period', () => {
+    const late = buildMeterEvents({
+      stripeCustomerId: 'cus_1',
+      accountId: 'acct_1',
+      plan: RATE_CARD_V1.pro,
+      windowEnd: at(31),
+      entries: [storage('e1', 21n * gbMonth, 29)],
+      exported: {},
+      periodEndFor: () => periodEnd,
+    });
+    expect(late.events[0]?.timestamp).toBe(periodEnd.getTime() / 1000 - 1);
+    expect(late.events[0]?.identifier.endsWith(`:${at(31).getTime() / 1000}`)).toBe(true);
+  });
+
+  it('never exports anything for Free', () => {
+    const free = buildMeterEvents({
+      stripeCustomerId: 'c',
+      accountId: 'acct_1',
+      plan: RATE_CARD_V1.free,
+      windowEnd: at(2),
+      entries: [storage('e1', 50n * gbMonth, 1)],
+      exported: {},
+    });
+    expect(free.events).toEqual([]);
   });
 
   it('emits nothing when nothing new is billable and rejects foreign or conflicting rows', () => {
-    const entries = [delivery('e1', 10, 1)];
+    const entries = [storage('e1', 10n, 1)];
     const first = buildMeterEvents({
       stripeCustomerId: 'c',
       accountId: 'acct_1',
+      plan: RATE_CARD_V1.pro,
       windowEnd: at(1),
       entries,
       exported: {},
@@ -466,6 +504,7 @@ describe('buildMeterEvents', () => {
       buildMeterEvents({
         stripeCustomerId: 'c',
         accountId: 'other',
+        plan: RATE_CARD_V1.pro,
         windowEnd: at(1),
         entries,
         exported: {},
@@ -475,8 +514,9 @@ describe('buildMeterEvents', () => {
       buildMeterEvents({
         stripeCustomerId: 'c',
         accountId: 'acct_1',
+        plan: RATE_CARD_V1.pro,
         windowEnd: at(2),
-        entries: [delivery('e1', 10, 1), delivery('e1', 11, 1)],
+        entries: [storage('e1', 10n, 1), storage('e1', 11n, 1)],
         exported: {},
       }),
     ).toThrow(MeterExportError);

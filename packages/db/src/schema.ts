@@ -33,6 +33,7 @@ import {
   type UsageUnit,
 } from './enums';
 import type { PlanId } from '@lumra/config';
+import type { ArchivePartEntry } from '@lumra/contracts';
 
 // ---------------------------------------------------------------------------------------------
 // helpers
@@ -80,16 +81,43 @@ export const plans = pgTable('plans', {
   monthlyFeeMicroUsd: int8('monthly_fee_micro_usd').notNull(),
   maxActiveGalleries: integer('max_active_galleries'),
   maxStorageBytes: int8('max_storage_bytes'),
-  maxDeliveryBytesPerMonth: int8('max_delivery_bytes_per_month'),
   includedStorageGbMonth: integer('included_storage_gb_month').notNull(),
-  includedDeliveryGb: integer('included_delivery_gb').notNull(),
   storageOverageMicroUsdPerGbMonth: int8('storage_overage_micro_usd_per_gb_month'),
-  deliveryOverageMicroUsdPerGb: int8('delivery_overage_micro_usd_per_gb'),
   defaultOverageCapMicroUsd: int8('default_overage_cap_micro_usd'),
   brandingVisible: boolean('branding_visible').notNull(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
+
+/**
+ * Immutable, versioned rate card (T27). `plans` points at the current version and its rate
+ * columns are a trigger-maintained projection of that row. Only `decision`/`notes` may change.
+ */
+export const RATE_VERSION_DECISIONS = ['proposed', 'confirmed'] as const;
+export type RateVersionDecision = (typeof RATE_VERSION_DECISIONS)[number];
+
+export const planRateVersions = pgTable(
+  'plan_rate_versions',
+  {
+    planId: text('plan_id')
+      .$type<PlanId>()
+      .notNull()
+      .references(() => plans.id, { onDelete: 'restrict' }),
+    rateVersion: integer('rate_version').notNull(),
+    monthlyFeeMicroUsd: int8('monthly_fee_micro_usd').notNull(),
+    maxActiveGalleries: integer('max_active_galleries'),
+    maxStorageBytes: int8('max_storage_bytes'),
+    includedStorageGbMonth: integer('included_storage_gb_month').notNull(),
+    storageOverageMicroUsdPerGbMonth: int8('storage_overage_micro_usd_per_gb_month'),
+    defaultOverageCapMicroUsd: int8('default_overage_cap_micro_usd'),
+    brandingVisible: boolean('branding_visible').notNull(),
+    decision: text('decision').$type<RateVersionDecision>().notNull().default('proposed'),
+    notes: text('notes'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ name: 'plan_rate_versions_pkey', columns: [t.planId, t.rateVersion] })],
+);
 
 export const profiles = pgTable('profiles', {
   userId: uuid('user_id')
@@ -122,6 +150,10 @@ export const billingAccounts = pgTable('billing_accounts', {
   canceledAt: tstz('canceled_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+  // T29/T30: raw Stripe status, cancel flag and the event-ordering guard.
+  stripeSubscriptionStatus: text('stripe_subscription_status'),
+  cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
+  subscriptionEventAt: tstz('subscription_event_at'),
 });
 
 export const guestSessions = pgTable('guest_sessions', {
@@ -246,6 +278,15 @@ export const archiveJobs = pgTable('archive_jobs', {
   progressPct: smallint('progress_pct').notNull().default(0),
   expiresAt: tstz('expires_at'),
   failureCode: text('failure_code'),
+  /** Gallery `access_version` at request time; a password change orphans the job (T24). */
+  accessVersion: integer('access_version').notNull().default(1),
+  /** SHA-256 over the ordered (media id, entry name) list; part of the reuse key. */
+  sourceFingerprint: text('source_fingerprint'),
+  itemCount: integer('item_count').notNull().default(0),
+  totalBytes: int8('total_bytes').notNull().default(0),
+  leaseUntil: tstz('lease_until'),
+  startedAt: tstz('started_at'),
+  completedAt: tstz('completed_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -261,6 +302,12 @@ export const archiveParts = pgTable(
     objectKey: text('object_key').notNull().unique(),
     byteSize: int8('byte_size'),
     checksumSha256: text('checksum_sha256'),
+    /** Ordered `ArchiveEntry[]` fixed at request time (`@lumra/domain` partitionArchive). */
+    entries: jsonb('entries').$type<ArchivePartEntry[]>().notNull().default([]),
+    itemCount: integer('item_count').notNull().default(0),
+    sourceBytes: int8('source_bytes').notNull().default(0),
+    uploadId: text('upload_id'),
+    completedAt: tstz('completed_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -316,6 +363,17 @@ export const usageLedger = pgTable(
   (t) => [unique('usage_ledger_metric_source_key').on(t.metric, t.sourceId)],
 );
 
+/** Storage accrual job cursor per account (T27): accrued up to `accruedThrough`. */
+export const storageAccrualCursors = pgTable('storage_accrual_cursors', {
+  accountId: uuid('account_id')
+    .primaryKey()
+    .references(() => billingAccounts.userId, { onDelete: 'cascade' }),
+  accruedThrough: tstz('accrued_through').notNull(),
+  storedBytes: int8('stored_bytes').notNull(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
 export const billingExports = pgTable('billing_exports', {
   id: id(),
   billingAccountId: uuid('billing_account_id')
@@ -328,7 +386,112 @@ export const billingExports = pgTable('billing_exports', {
   attemptCount: integer('attempt_count').notNull().default(0),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+  // T31: the stored meter event (resent as is on retry).
+  eventName: text('event_name'),
+  metric: usageMetric('metric'),
+  periodStart: tstz('period_start'),
+  windowEnd: tstz('window_end'),
+  meterValue: int8('meter_value'),
+  payload: jsonb('payload').$type<Record<string, unknown>>(),
+  sentAt: tstz('sent_at'),
+  lastError: text('last_error'),
 });
+
+/** Paid subscription periods (T31): the only periods whose usage is exported to Stripe. */
+export const billingPeriods = pgTable(
+  'billing_periods',
+  {
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => billingAccounts.userId, { onDelete: 'restrict' }),
+    periodStart: tstz('period_start').notNull(),
+    periodEnd: tstz('period_end').notNull(),
+    stripeSubscriptionId: text('stripe_subscription_id').notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ name: 'billing_periods_pkey', columns: [t.accountId, t.periodStart] })],
+);
+
+/** Cumulative overage meter units recorded for export per (account, metric, period) (T31). */
+export const billingMeterCursors = pgTable(
+  'billing_meter_cursors',
+  {
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => billingAccounts.userId, { onDelete: 'restrict' }),
+    metric: usageMetric('metric').notNull(),
+    periodStart: tstz('period_start').notNull(),
+    exportedUnits: int8('exported_units').notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    primaryKey({
+      name: 'billing_meter_cursors_pkey',
+      columns: [t.accountId, t.metric, t.periodStart],
+    }),
+  ],
+);
+
+/** Stripe invoices from invoice.* webhooks (T31), listed on /account. */
+export const billingInvoices = pgTable('billing_invoices', {
+  id: id(),
+  accountId: uuid('account_id')
+    .notNull()
+    .references(() => billingAccounts.userId, { onDelete: 'cascade' }),
+  stripeInvoiceId: text('stripe_invoice_id').notNull().unique(),
+  number: text('number'),
+  status: text('status').$type<'draft' | 'open' | 'paid' | 'uncollectible' | 'void'>().notNull(),
+  billingReason: text('billing_reason'),
+  currency: text('currency').notNull(),
+  subtotalCents: int8('subtotal_cents').notNull(),
+  totalCents: int8('total_cents').notNull(),
+  amountDueCents: int8('amount_due_cents').notNull(),
+  amountPaidCents: int8('amount_paid_cents').notNull(),
+  periodStart: tstz('period_start'),
+  periodEnd: tstz('period_end'),
+  hostedInvoiceUrl: text('hosted_invoice_url'),
+  invoicePdf: text('invoice_pdf'),
+  stripeCreatedAt: tstz('stripe_created_at').notNull(),
+  stripeEventAt: tstz('stripe_event_at').notNull(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+/** Internal vs Stripe invoice comparison (T31 reconciliation report). */
+export const billingReconciliations = pgTable('billing_reconciliations', {
+  id: id(),
+  accountId: uuid('account_id')
+    .notNull()
+    .references(() => billingAccounts.userId, { onDelete: 'cascade' }),
+  stripeInvoiceId: text('stripe_invoice_id').notNull().unique(),
+  usagePeriodStart: tstz('usage_period_start'),
+  expectedCents: int8('expected_cents').notNull(),
+  stripeCents: int8('stripe_cents').notNull(),
+  driftBps: integer('drift_bps').notNull(),
+  flagged: boolean('flagged').notNull(),
+  exceedsCapTolerance: boolean('exceeds_cap_tolerance').notNull(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+/** Spend-cap alerts, once per (account, period, threshold) (T32). */
+export const billingAlerts = pgTable(
+  'billing_alerts',
+  {
+    id: id(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => billingAccounts.userId, { onDelete: 'cascade' }),
+    periodStart: tstz('period_start').notNull(),
+    thresholdPct: smallint('threshold_pct').notNull(),
+    spendMicroUsd: int8('spend_micro_usd').notNull(),
+    capMicroUsd: int8('cap_micro_usd').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [unique('billing_alerts_once').on(t.accountId, t.periodStart, t.thresholdPct)],
+);
 
 export const jobOutbox = pgTable('job_outbox', {
   id: id(),
@@ -356,6 +519,13 @@ export const providerWebhookEvents = pgTable(
     handledAt: tstz('handled_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    // T29
+    objectId: text('object_id'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastError: text('last_error'),
+    accountId: uuid('account_id').references(() => billingAccounts.userId, {
+      onDelete: 'set null',
+    }),
   },
   (t) => [unique('provider_webhook_events_provider_event_key').on(t.provider, t.providerEventId)],
 );
@@ -379,6 +549,8 @@ export const rateLimitBuckets = pgTable(
 // ---------------------------------------------------------------------------------------------
 
 export type Plan = typeof plans.$inferSelect;
+export type PlanRateVersion = typeof planRateVersions.$inferSelect;
+export type StorageAccrualCursorRow = typeof storageAccrualCursors.$inferSelect;
 export type Profile = typeof profiles.$inferSelect;
 export type BillingAccount = typeof billingAccounts.$inferSelect;
 export type GuestSession = typeof guestSessions.$inferSelect;

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { buttonClass } from '@/components/ui';
 import { claimGuestDraftRequest } from '@/lib/claim-client';
 
 /**
@@ -42,30 +43,23 @@ export function ClaimDraft({ galleryId, returnTo }: { galleryId: string; returnT
 
   if (state.kind === 'working') {
     return (
-      <p role="status" aria-live="polite">
+      <p role="status" aria-live="polite" className="text-[var(--color-ink-muted)]">
         Saving your draft to your account…
       </p>
     );
   }
   return (
     <div className="flex flex-col gap-4">
-      <p role="alert" className="text-[var(--color-danger)]">
+      <p role="alert" className="lm-banner lm-banner-error">
         {state.message}
       </p>
-      <div className="flex flex-wrap gap-4">
+      <div className="flex flex-wrap gap-2">
         {state.retryable && (
-          <button
-            type="button"
-            onClick={() => void run()}
-            className="inline-flex min-h-11 items-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-6 font-medium text-white"
-          >
+          <button type="button" onClick={() => void run()} className={buttonClass('primary')}>
             Try again
           </button>
         )}
-        <Link
-          href="/dashboard"
-          className="min-h-11 content-center underline-offset-4 hover:underline"
-        >
+        <Link href="/dashboard" className={buttonClass('ghost')}>
           Go to your galleries
         </Link>
       </div>

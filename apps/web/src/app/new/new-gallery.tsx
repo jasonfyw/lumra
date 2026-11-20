@@ -1,9 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { PublishButton } from '@/components/publish-button';
+import { AppHeader, Icon, Tag, buttonClass } from '@/components/ui';
 import { GalleryUploader } from '@/components/upload';
 import { authUrlForPublish } from '@/lib/claim-client';
 import { openDraftStore } from '@/lib/draft-store';
@@ -35,7 +35,6 @@ export function NewGallery({
   signedIn: boolean;
   initialGalleryId: string | null;
 }) {
-  const router = useRouter();
   const [api] = useState(() => createUploadApi());
   const [setup, setSetup] = useState<Setup>(
     initialGalleryId ? { kind: 'ready', galleryId: initialGalleryId } : { kind: 'pending' },
@@ -56,7 +55,9 @@ export function NewGallery({
           // Storage blocked: the key was never persisted either.
         }
         setSetup({ kind: 'ready', galleryId: gallery.id });
-        router.replace(`/new?gallery=${gallery.id}`);
+        // URL only: a router.replace would re-render this dynamic page on the server (another
+        // auth round trip) just to learn the id the client already has.
+        window.history.replaceState(null, '', `/new?gallery=${gallery.id}`);
         return;
       }
       // Reuses this browser's live draft (cookie) if there is one, else creates it (FR-A01).
@@ -80,7 +81,7 @@ export function NewGallery({
         setSetup({ kind: 'error', message: 'Something went wrong. Try again.', retryable: true });
       }
     }
-  }, [api, router, signedIn]);
+  }, [api, signedIn]);
 
   useEffect(() => {
     if (started.current || initialGalleryId) return;
@@ -93,86 +94,95 @@ export function NewGallery({
   const mode = signedIn ? 'owner' : 'guest';
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:py-12">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="font-[family-name:var(--font-display)] text-3xl font-semibold tracking-tight">
-          New gallery
-        </h1>
-        {signedIn ? (
-          <Link
-            href="/dashboard"
-            className="min-h-11 content-center underline-offset-4 hover:underline"
-          >
-            Your galleries
-          </Link>
-        ) : (
-          <p className="text-sm text-[var(--color-ink-muted)]">No account needed to start.</p>
-        )}
-      </header>
-
-      <div className="flex flex-col gap-2">
-        <label htmlFor="gallery-title" className="text-sm font-medium">
-          Title <span className="font-normal text-[var(--color-ink-muted)]">(optional)</span>
-        </label>
-        <input
-          id="gallery-title"
-          type="text"
-          value={title}
-          maxLength={200}
-          placeholder="Untitled gallery"
-          onChange={(e) => setTitle(e.target.value)}
-          className="min-h-11 rounded-[var(--radius-control)] border border-[var(--color-line)] px-3"
-        />
-      </div>
-
-      {setup.kind === 'error' && (
-        <div role="alert" className="flex flex-col gap-2 text-[var(--color-danger)]">
-          <p>{setup.message}</p>
-          <div className="flex flex-wrap gap-4">
-            {setup.retryable && (
-              <button
-                type="button"
-                onClick={() => void start()}
-                className="min-h-11 font-medium text-[var(--color-ink)] underline underline-offset-4"
-              >
-                Try again
-              </button>
-            )}
-            {setup.upgrade && (
-              <Link
-                href="/pricing"
-                className="min-h-11 content-center text-[var(--color-ink)] underline underline-offset-4"
-              >
-                See plans
-              </Link>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* The zone is usable immediately; files queue until the draft exists. */}
-      <GalleryUploader
-        key={mode}
-        galleryId={galleryId}
-        mode={mode}
-        api={api}
-        signInHref={
-          galleryId
-            ? authUrlForPublish(galleryId, returnTo)
-            : `/auth?returnTo=${encodeURIComponent(returnTo)}`
+    <div className="flex min-h-dvh flex-col">
+      <AppHeader
+        actions={
+          signedIn ? (
+            <Link href="/dashboard" className={buttonClass('ghost')}>
+              Your galleries
+            </Link>
+          ) : null
         }
-      />
+      >
+        <Tag dot>Draft</Tag>
+      </AppHeader>
 
-      {galleryId && (
-        <div className="sticky bottom-0 -mx-4 border-t border-[var(--color-line)] bg-[var(--color-canvas)] px-4 py-3 sm:static sm:mx-0 sm:border-0 sm:p-0">
-          <PublishButton
-            galleryId={galleryId}
-            signedIn={signedIn}
-            isGuestDraft={!signedIn}
-            returnTo={returnTo}
+      {/* --toast-offset keeps the floating upload status clear of the sticky Publish bar on phones. */}
+      <main
+        className={`mx-auto flex w-full max-w-[880px] flex-1 flex-col gap-6 px-4 pt-6 pb-8 sm:px-8 sm:pt-10 ${galleryId ? '[--toast-offset:5rem] sm:[--toast-offset:0px]' : ''}`}
+      >
+        <header className="flex flex-col gap-1">
+          <h1 className="lm-title-1">New gallery</h1>
+          {!signedIn && (
+            <p className="text-[var(--color-ink-muted)]">No account needed to start.</p>
+          )}
+        </header>
+
+        <div className="lm-field">
+          <label htmlFor="gallery-title" className="lm-field-label">
+            Title <span className="font-normal text-[var(--color-ink-muted)]">(optional)</span>
+          </label>
+          <input
+            id="gallery-title"
+            type="text"
+            value={title}
+            maxLength={200}
+            placeholder="Untitled gallery"
+            onChange={(e) => setTitle(e.target.value)}
+            className="lm-input"
           />
         </div>
-      )}
-    </main>
+
+        {setup.kind === 'error' && (
+          <div role="alert" className="lm-banner lm-banner-error flex-col gap-2">
+            <p>{setup.message}</p>
+            <div className="flex flex-wrap gap-2">
+              {setup.retryable && (
+                <button
+                  type="button"
+                  onClick={() => void start()}
+                  className={buttonClass('secondary', 'sm', 'min-h-11')}
+                >
+                  <Icon name="refresh" size={16} />
+                  Try again
+                </button>
+              )}
+              {setup.upgrade && (
+                <Link
+                  href="/pricing"
+                  className={buttonClass('ghost', 'sm', 'min-h-11 text-[var(--color-ink)]')}
+                >
+                  See plans
+                </Link>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* The zone is usable immediately; files queue until the draft exists. */}
+        <GalleryUploader
+          key={mode}
+          galleryId={galleryId}
+          mode={mode}
+          api={api}
+          signInHref={
+            galleryId
+              ? authUrlForPublish(galleryId, returnTo)
+              : `/auth?returnTo=${encodeURIComponent(returnTo)}`
+          }
+        />
+
+        {galleryId && (
+          <div className="sticky bottom-0 -mx-4 mt-auto border-t border-[var(--color-hairline)] bg-[var(--color-surface)] px-4 pt-3 pb-[max(env(safe-area-inset-bottom),12px)] sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0">
+            <PublishButton
+              galleryId={galleryId}
+              signedIn={signedIn}
+              isGuestDraft={!signedIn}
+              returnTo={returnTo}
+            />
+          </div>
+        )}
+      </main>
+    </div>
   );
 }

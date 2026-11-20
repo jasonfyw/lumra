@@ -82,11 +82,33 @@ export const PROCESSOR_LIMITS = {
   vipsConcurrency: 2,
 } as const;
 
+/** Background "Download all" archives (FR-D02–D04, T24/T25, ADR-003). */
 export const ARCHIVE_LIMITS = {
-  /** Proposed partition bounds (FR-D03). */
+  /** Proposed partition bounds (FR-D03): originals per ZIP part, decimal bytes per part. */
   maxItemsPerPart: 500,
   maxBytesPerPart: 2 * BYTES_PER_GB,
+  /** Ready archives are downloadable for this long, then `expired` (FR-D04, Proposed 24 h). */
   retentionMs: 24 * 60 * 60 * 1000,
+  /** A ready archive is reused only while at least this much of its retention is left. */
+  reuseMinRemainingMs: 2 * 60 * 60 * 1000,
+  /** Non-terminal jobs one gallery may have at once (distinct selections / content versions). */
+  maxActiveJobsPerGallery: 5,
+  /**
+   * R2 multipart part size for the streamed ZIP. R2 needs equal-sized parts (≥ 5 MiB, except
+   * the last) and ≤ 10,000 parts; 8 MiB gives ~240 parts for a 2 GB archive part and bounds the
+   * Worker's buffer to one part.
+   */
+  uploadPartBytes: 8 * 1024 * 1024,
+  /** Build attempts (queue deliveries) before a transient failure marks the job `failed`. */
+  maxBuildAttempts: 5,
+  /** Build lease; a redelivery that finds a live lease backs off. > the job deadline. */
+  leaseMs: 15 * 60 * 1000,
+  /** Queued/running jobs untouched for this long are failed by the sweep (`stalled`). */
+  stalledAfterMs: 60 * 60 * 1000,
+  /** Progress page poll cadence while an archive is being prepared (T25). */
+  pollIntervalMs: 2_000,
+  /** Expired jobs handled per sweep run (T25). */
+  sweepBatch: 200,
 } as const;
 
 export const MEDIA_TOKEN = {
@@ -185,6 +207,17 @@ export const RATE_LIMITS = {
    * enough that an attacker can't cheaply lock legitimate recipients out.
    */
   galleryUnlockPerGallery: { limit: 300, windowSeconds: 15 * 60 },
+  /**
+   * Per client IP: "Download all" requests (T24). A repeat for unchanged content returns the
+   * existing job, so this only bounds how many distinct builds one client can start.
+   */
+  publicArchiveCreate: { limit: 20, windowSeconds: 60 * 60 },
+  /** Per client IP: archive status polls (T25; every ~2 s while building, ~4 min when ready). */
+  publicArchiveRead: { limit: 120, windowSeconds: 60 },
+  /** Per user: Stripe Checkout / Billing Portal session creation (T29). Each one is a Stripe call. */
+  billingSession: { limit: 30, windowSeconds: 60 * 60 },
+  /** Per user: spending-cap changes (T32). */
+  billingSettings: { limit: 30, windowSeconds: 60 * 60 },
 } as const satisfies Record<string, RateLimitRule>;
 export type RateLimitRuleName = keyof typeof RATE_LIMITS;
 

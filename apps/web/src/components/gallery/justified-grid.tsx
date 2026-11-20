@@ -20,6 +20,7 @@ import {
   useState,
   type Ref,
 } from 'react';
+import { Icon } from '@/components/ui';
 import { altText, devicePixelRatio, itemLabel, responsiveImageFor } from './media';
 
 export interface JustifiedGridHandle {
@@ -239,7 +240,7 @@ const Tile = memo(function Tile({ item, box, total, dpr, onOpen }: TileProps) {
         data-status={item.status}
         aria-label={item.status === 'ready' ? `Open ${altText(item)}` : itemLabel(item)}
         onClick={() => onOpen(box.index)}
-        className="relative block h-full w-full cursor-zoom-in overflow-hidden bg-[var(--color-surface)] p-0"
+        className="relative block h-full w-full cursor-zoom-in overflow-hidden bg-[var(--color-sunken)] p-0"
       >
         {image ? (
           // Gateway URLs with explicit srcset/sizes; next/image would proxy media through Vercel.
@@ -268,34 +269,17 @@ const Tile = memo(function Tile({ item, box, total, dpr, onOpen }: TileProps) {
 });
 
 function PlaceholderContent({ status }: { status: PublicMediaItem['status'] }) {
-  if (status === 'ready') {
-    // Ready, but its short-lived URL is still being minted: a quiet skeleton, no text.
-    return (
-      <span
-        aria-hidden="true"
-        className="block h-full w-full bg-[var(--color-line)] opacity-40 motion-safe:animate-pulse"
-      />
-    );
+  if (status === 'ready' || status === 'pending') {
+    // Recipients only ever see a neutral, slowly shimmering tile (the label carries the state).
+    return <span aria-hidden="true" className="lm-shimmer block h-full w-full" />;
   }
-  if (status === 'pending') {
-    return (
-      <span
-        aria-hidden="true"
-        className="relative flex h-full w-full items-center justify-center bg-[var(--color-surface)] text-xs text-[var(--color-ink-muted)]"
-      >
-        <span className="absolute inset-0 bg-[var(--color-line)] opacity-60 motion-safe:animate-pulse" />
-        <span className="relative rounded-full bg-[var(--color-canvas)] px-2 py-1">
-          Processing…
-        </span>
-      </span>
-    );
-  }
+  // Unavailable: still neutral and calm — never an error on a recipient screen.
   return (
     <span
       aria-hidden="true"
-      className="flex h-full w-full items-center justify-center border border-[var(--color-line)] bg-[var(--color-surface)] text-xs text-[var(--color-ink-muted)]"
+      className="flex h-full w-full items-center justify-center bg-[var(--color-sunken)] text-[var(--color-ink-muted)]"
     >
-      Unavailable
+      <Icon name="image" size={20} />
     </span>
   );
 }

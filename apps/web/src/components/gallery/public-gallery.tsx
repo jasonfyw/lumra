@@ -9,6 +9,7 @@ import {
 import { selectCover } from '@lumra/domain';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { DownloadAllButton } from './download-all-button';
 import { GalleryView } from './gallery-view';
 import {
   addDownloads,
@@ -201,6 +202,10 @@ export function PublicGallery({ slug, initial }: PublicGalleryProps) {
   }, [anyPending, api, handleGone, router]);
 
   const items = useMemo(() => withUrls(payload.items, cache, Date.now()), [payload.items, cache]);
+  const readyCount = useMemo(
+    () => payload.items.filter((i) => i.status === 'ready').length,
+    [payload.items],
+  );
 
   return (
     <GalleryView
@@ -208,6 +213,7 @@ export function PublicGallery({ slug, initial }: PublicGalleryProps) {
       items={items}
       onVisibleItemsChange={onVisibleItemsChange}
       onLightboxIndexChange={setLightboxIndex}
+      heroActions={<DownloadAllButton slug={slug} readyCount={readyCount} />}
     />
   );
 }

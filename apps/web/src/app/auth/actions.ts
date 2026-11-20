@@ -14,6 +14,11 @@ import {
   type AuthFlowParams,
 } from '@/lib/return-to';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import {
+  classifySupabaseRateLimit,
+  clampRetryAfter,
+  rateLimitMessage as formatRateLimit,
+} from '@/lib/auth-rate-limit';
 
 /**
  * Passwordless sign-in (T05, FR-A04): Supabase email OTP + magic link via `@supabase/ssr`.
@@ -27,6 +32,8 @@ export interface AuthFormState {
   notice: string | null;
   /** Epoch ms of the last successful send; drives the resend cooldown. */
   sentAt: number | null;
+  /** Set when a send was rate limited: seconds until a new code may be requested. */
+  retryAfterSeconds?: number | null;
 }
 
 const log = logger.child({ component: 'auth' });
@@ -52,7 +59,9 @@ function flowFrom(formData: FormData): AuthFlowParams {
  * Returns a user-facing message when limited. Fails open (logged) if the limiter itself is
  * unavailable, e.g. no DATABASE_URL locally: Supabase's limits still apply.
  */
-async function rateLimitMessage(rule: 'authOtpSend' | 'authOtpVerify'): Promise<string | null> {
+async function rateLimitMessage(
+  rule: 'authOtpSend' | 'authOtpVerify',
+): Promise<{ message: string; retryAfterSeconds: number | null } | null> {
   const incoming = await headers();
   const forwarded = new Headers();
   for (const name of ['x-forwarded-for', 'x-real-ip']) {
@@ -74,9 +83,18 @@ async function rateLimitMessage(rule: 'authOtpSend' | 'authOtpVerify'): Promise<
     return null;
   } catch (error) {
     if (error instanceof ApiFailure && error.error.code === 'rate_limited') {
-      return rule === 'authOtpSend'
-        ? 'Too many sign-in emails. Wait a while, then try again.'
-        : 'Too many attempts. Wait a few minutes, then try again.';
+      if (rule === 'authOtpSend') {
+        const details = error.error.details as { retryAfterSeconds?: number } | undefined;
+        const retryAfterSeconds = clampRetryAfter(details?.retryAfterSeconds);
+        return {
+          message: formatRateLimit({ scope: 'hourly', retryAfterSeconds }),
+          retryAfterSeconds,
+        };
+      }
+      return {
+        message: 'Too many attempts. Wait a few minutes, then try again.',
+        retryAfterSeconds: null,
+      };
     }
     log.warn('auth rate limiter unavailable', { rule, err: error });
     return null;
@@ -99,7 +117,15 @@ export async function sendOtpAction(
   if (!supabase) return { ...previous, error: NOT_CONFIGURED, notice: null };
 
   const limited = await rateLimitMessage('authOtpSend');
-  if (limited) return { ...previous, email: email.data, error: limited, notice: null };
+  if (limited) {
+    return {
+      ...previous,
+      email: email.data,
+      error: limited.message,
+      notice: null,
+      retryAfterSeconds: limited.retryAfterSeconds,
+    };
+  }
 
   const confirmUrl = new URL('/auth/confirm', serverEnv().NEXT_PUBLIC_APP_URL);
   confirmUrl.search = authFlowQuery(flowFrom(formData)).toString();
@@ -108,14 +134,20 @@ export async function sendOtpAction(
     options: { emailRedirectTo: confirmUrl.toString(), shouldCreateUser: true },
   });
   if (error) {
-    log.warn('otp send failed', { status: error.status, code: error.code });
+    const limit = classifySupabaseRateLimit(error);
+    log.warn('otp send failed', {
+      status: error.status,
+      code: error.code,
+      ...(limit && { limitScope: limit.scope, retryAfterSeconds: limit.retryAfterSeconds }),
+    });
     return {
       ...previous,
       email: email.data,
-      error: isRateLimited(error)
-        ? 'Too many sign-in emails. Wait a minute, then try again.'
+      error: limit
+        ? formatRateLimit(limit)
         : 'We couldn’t send the email. Check the address and try again.',
       notice: null,
+      retryAfterSeconds: limit?.retryAfterSeconds ?? null,
     };
   }
   return {
@@ -124,6 +156,7 @@ export async function sendOtpAction(
     error: null,
     notice: `We sent a 6-digit code and a sign-in link to ${email.data}.`,
     sentAt: Date.now(),
+    retryAfterSeconds: null,
   };
 }
 
@@ -141,7 +174,7 @@ export async function verifyOtpAction(
   if (!supabase) return { ...previous, error: NOT_CONFIGURED, notice: null };
 
   const limited = await rateLimitMessage('authOtpVerify');
-  if (limited) return { ...previous, error: limited, notice: null };
+  if (limited) return { ...previous, error: limited.message, notice: null };
 
   const { error } = await supabase.auth.verifyOtp({
     email: email.data,

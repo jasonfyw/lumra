@@ -1,6 +1,5 @@
 import type { PlanRates } from '@lumra/config';
 import {
-  BYTES_PER_GB_N,
   MICRO,
   divRoundHalfUp,
   maxBig,
@@ -29,14 +28,14 @@ export class RateVersionMismatchError extends Error {
   }
 }
 
-export type InvoiceLineKind = 'base_fee' | 'storage_overage' | 'delivery_overage';
+export type InvoiceLineKind = 'base_fee' | 'storage_overage';
 
 export interface InvoiceLine {
   kind: InvoiceLineKind;
-  /** Quantity charged: months (base fee), micro GB-months (storage) or bytes (delivery). */
+  /** Quantity charged: months (base fee) or micro GB-months (storage). */
   quantity: bigint;
-  unit: 'month' | 'gb_month_micro' | 'byte';
-  /** Price per whole unit: per month, per GB-month or per GB. */
+  unit: 'month' | 'gb_month_micro';
+  /** Price per whole unit: per month or per GB-month. */
   unitPriceMicroUsd: number;
   amountMicroUsd: number;
   amountCents: number;
@@ -54,7 +53,6 @@ export interface RateInvoiceInput {
   plan: PlanRates;
   /** Period storage in micro GB-months (see `storageGbMonthMicroUnits`). */
   storageGbMonthMicro: number | bigint;
-  deliveryBytes: number | bigint;
   /** The rate version the usage was recorded under; must equal `plan.rateVersion`. */
   rateVersion: number;
 }
@@ -62,25 +60,19 @@ export interface RateInvoiceInput {
 export interface OverageBreakdown {
   storageOverageGbMonthMicro: bigint;
   storageOverageMicroUsd: number;
-  deliveryOverageBytes: bigint;
-  deliveryOverageMicroUsd: number;
 }
 
 /** True when the plan can bill usage above its allowance (Free never can). */
 export function planBillsOverage(plan: PlanRates): boolean {
-  return (
-    plan.storageOverageMicroUsdPerGbMonth !== null || plan.deliveryOverageMicroUsdPerGb !== null
-  );
+  return plan.storageOverageMicroUsdPerGbMonth !== null;
 }
 
 /** Overage quantities and amounts for a period's usage. Free plans always yield zeros. */
 export function computeOverage(
   plan: PlanRates,
   storageGbMonthMicro: number | bigint,
-  deliveryBytes: number | bigint,
 ): OverageBreakdown {
   const storage = toNonNegativeBigInt(storageGbMonthMicro, 'storageGbMonthMicro');
-  const delivery = toNonNegativeBigInt(deliveryBytes, 'deliveryBytes');
 
   let storageOverageGbMonthMicro = 0n;
   let storageOverageMicroUsd = 0n;
@@ -92,21 +84,9 @@ export function computeOverage(
     storageOverageMicroUsd = divRoundHalfUp(storageOverageGbMonthMicro * rate, MICRO);
   }
 
-  let deliveryOverageBytes = 0n;
-  let deliveryOverageMicroUsd = 0n;
-  if (plan.deliveryOverageMicroUsdPerGb !== null) {
-    const included =
-      toNonNegativeBigInt(plan.includedDeliveryGb, 'includedDeliveryGb') * BYTES_PER_GB_N;
-    const rate = toNonNegativeBigInt(plan.deliveryOverageMicroUsdPerGb, 'delivery rate');
-    deliveryOverageBytes = maxBig(0n, delivery - included);
-    deliveryOverageMicroUsd = divRoundHalfUp(deliveryOverageBytes * rate, BYTES_PER_GB_N);
-  }
-
   return {
     storageOverageGbMonthMicro,
     storageOverageMicroUsd: toSafeNumber(storageOverageMicroUsd, 'storageOverageMicroUsd'),
-    deliveryOverageBytes,
-    deliveryOverageMicroUsd: toSafeNumber(deliveryOverageMicroUsd, 'deliveryOverageMicroUsd'),
   };
 }
 
@@ -115,7 +95,7 @@ export function rateInvoice(input: RateInvoiceInput): Invoice {
   if (input.rateVersion !== plan.rateVersion) {
     throw new RateVersionMismatchError(plan.rateVersion, input.rateVersion);
   }
-  const overage = computeOverage(plan, input.storageGbMonthMicro, input.deliveryBytes);
+  const overage = computeOverage(plan, input.storageGbMonthMicro);
   const baseFee = toSafeNumber(toNonNegativeBigInt(plan.monthlyFeeMicroUsd, 'monthlyFeeMicroUsd'));
 
   const lines: InvoiceLine[] = [
@@ -138,16 +118,6 @@ export function rateInvoice(input: RateInvoiceInput): Invoice {
       amountCents: microUsdToCents(overage.storageOverageMicroUsd),
     });
   }
-  if (plan.deliveryOverageMicroUsdPerGb !== null) {
-    lines.push({
-      kind: 'delivery_overage',
-      quantity: overage.deliveryOverageBytes,
-      unit: 'byte',
-      unitPriceMicroUsd: plan.deliveryOverageMicroUsdPerGb,
-      amountMicroUsd: overage.deliveryOverageMicroUsd,
-      amountCents: microUsdToCents(overage.deliveryOverageMicroUsd),
-    });
-  }
 
   return {
     planId: plan.id,
@@ -161,7 +131,6 @@ export function rateInvoice(input: RateInvoiceInput): Invoice {
 /** Period-to-date usage in raw ledger units. */
 export interface PeriodUsage {
   storageByteSeconds: bigint;
-  deliveryBytes: number | bigint;
 }
 
 /**
@@ -176,9 +145,8 @@ export function estimateOverageMicroUsd(
   const overage = computeOverage(
     plan,
     storageGbMonthMicroUnits(usage.storageByteSeconds, secondsPerBillingMonth),
-    usage.deliveryBytes,
   );
-  return overage.storageOverageMicroUsd + overage.deliveryOverageMicroUsd;
+  return overage.storageOverageMicroUsd;
 }
 
 /**

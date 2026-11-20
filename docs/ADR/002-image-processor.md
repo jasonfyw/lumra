@@ -10,8 +10,8 @@ libvips + libheif, which can't run in Vercel functions or plain Workers (PRD §6
 ## Decision
 
 Run the processor as a **Cloudflare Containers** image (Node + sharp built with libheif), invoked from the
-`apps/worker` queue consumer for `media.uploaded` messages. The archive builder (T24) reuses the same container
-image with a separate entry point. Containers scale to zero when idle.
+`apps/worker` queue consumer for `media.uploaded` messages. (The archive builder was planned to reuse this image; ADR-003 builds
+archives in the job Worker instead.) Containers scale to zero when idle.
 
 ### Implementation (T12)
 

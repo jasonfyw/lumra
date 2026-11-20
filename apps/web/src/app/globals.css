@@ -1,5 +1,6 @@
 @import 'tailwindcss';
 @import '@lumra/ui/tokens.css';
+@import '@lumra/ui/components.css';
 
 html {
   color-scheme: light;
@@ -8,15 +9,27 @@ html {
 }
 
 body {
-  background: var(--color-canvas);
+  background: var(--color-paper);
   color: var(--color-ink);
   font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 22px;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
+/* Every control: a solid 2px ink ring with a 2px offset (16:1 on paper). In the base layer so
+   component classes (e.g. `.lm-on-night`) and utilities can adjust it. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+}
+
+::selection {
+  background: var(--color-lumen-soft);
+  color: var(--color-ink);
 }
 
 @keyframes lumra-fade-in {

@@ -5,18 +5,26 @@ import type { LedgerEntry, UsageMetric } from './ledger';
 import type { StripeMeterEvent } from './meters';
 
 /**
- * Persistence ports for the DB layer (T02 schema, T28/T31/T32 adapters). The pure functions in
- * this package take plain values; these interfaces describe what the adapters must supply.
+ * Persistence ports. The pure functions in this package take plain values; these interfaces
+ * describe what the adapters must supply. Postgres implementations live in `@lumra/db`
+ * (`createBillingStores`, T27); `MeterExportStore` is implemented with the Stripe export (T31).
  */
 
 export interface PlanStore {
-  /** Rates for a plan at a specific rate version (`plans` table; seeded from `RATE_CARD_V1`). */
+  /**
+   * Rates for a plan at a specific rate version (`plan_rate_versions`; v1 seeded from
+   * `RATE_CARD_V1`). Throws if the version does not exist.
+   */
   getRates(planId: PlanId, rateVersion: number): Promise<PlanRates>;
+  /** The plan's current version (`plans.rate_version`). */
+  getCurrent(planId: PlanId): Promise<PlanRates>;
 }
 
 export interface UsageLedgerStore {
   /** INSERT … ON CONFLICT (metric, source_id) DO NOTHING; returns false for a duplicate. */
   appendIfAbsent(entry: LedgerEntry): Promise<boolean>;
+  /** Batch form of `appendIfAbsent` in one statement; returns the number of new rows. */
+  appendMany(entries: readonly LedgerEntry[]): Promise<number>;
   /** Period-to-date totals per metric, in raw ledger units. */
   totals(accountId: string, periodStart: Date): Promise<Record<UsageMetric, bigint>>;
   /** Rows for an export run, up to and including `until`. */
@@ -24,17 +32,20 @@ export interface UsageLedgerStore {
 }
 
 export interface BillingAccountStore {
+  /** `null` when the user has no billing account (it is created with the auth user). */
   get(accountId: string): Promise<
-    BillingAccountState & {
-      accountId: string;
-      planId: PlanId;
-      rateVersion: number;
-      stripeCustomerId: string | null;
-      spendCapMicroUsd: number | null;
-      warningThresholdsPct: readonly number[];
-      periodStart: Date;
-      periodEnd: Date;
-    }
+    | (BillingAccountState & {
+        accountId: string;
+        planId: PlanId;
+        rateVersion: number;
+        stripeCustomerId: string | null;
+        spendCapMicroUsd: number | null;
+        warningThresholdsPct: readonly number[];
+        /** Stored subscription period, `null` until T30 sets one (calendar month applies). */
+        billingPeriodStart: Date | null;
+        billingPeriodEnd: Date | null;
+      })
+    | null
   >;
 }
 

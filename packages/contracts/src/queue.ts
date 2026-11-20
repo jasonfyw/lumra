@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { MEDIA_ACTIONS, MEDIA_VARIANTS } from './media-token';
 
 /**
  * Queue messages carry IDs only — never secrets or file bytes (PRD §6.1).
@@ -8,23 +7,28 @@ import { MEDIA_ACTIONS, MEDIA_VARIANTS } from './media-token';
 const base = { traceId: z.string(), dedupeKey: z.string() };
 
 /**
- * Emitted by the media gateway once per successful byte-bearing response (FR-D04).
- * `bytes` is the object size, or the range length for 206 responses. `dedupeKey` is
- * `{jti}:{start}-{end}` so a retried send of the same response is counted once.
- * Consumed by usage-ledger ingestion (T27) from the `lumra-usage-*` queue.
+ * Account emails (PRD §9.4 transition notices, T33; spend-cap alerts, T32). The payload names the
+ * account and a template only — the worker looks the address up at send time, so no personal
+ * data sits in the outbox or the queue. `data` holds small non-personal template values.
  */
-export const deliveryServedMessageSchema = z.object({
-  type: z.literal('delivery.served'),
-  galleryId: z.uuid(),
-  action: z.enum(MEDIA_ACTIONS),
-  mediaId: z.uuid().nullable(),
-  archivePartId: z.uuid().nullable(),
-  variant: z.enum(MEDIA_VARIANTS).nullable(),
-  bytes: z.number().int().positive(),
-  servedAt: z.iso.datetime(),
+export const EMAIL_TEMPLATES = [
+  'pro_activated',
+  'payment_failed',
+  'payment_recovered',
+  'delivery_suspended',
+  'subscription_ended',
+  'spend_cap_alert',
+] as const;
+export type EmailTemplate = (typeof EMAIL_TEMPLATES)[number];
+
+export const emailSendMessageSchema = z.object({
+  type: z.literal('email.send'),
+  accountId: z.uuid(),
+  template: z.enum(EMAIL_TEMPLATES),
+  data: z.record(z.string(), z.union([z.string().max(200), z.number()])).default({}),
   ...base,
 });
-export type DeliveryServedMessage = z.infer<typeof deliveryServedMessageSchema>;
+export type EmailSendMessage = z.infer<typeof emailSendMessageSchema>;
 
 export const queueMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('media.uploaded'), mediaId: z.uuid(), ...base }),
@@ -37,7 +41,7 @@ export const queueMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('gallery.access_changed'), galleryId: z.uuid(), ...base }),
   z.object({ type: z.literal('archive.build'), jobId: z.uuid(), ...base }),
   z.object({ type: z.literal('guest.expire'), guestSessionId: z.uuid(), ...base }),
-  deliveryServedMessageSchema,
+  emailSendMessageSchema,
 ]);
 export type QueueMessage = z.infer<typeof queueMessageSchema>;
 

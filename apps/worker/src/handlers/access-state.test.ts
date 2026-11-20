@@ -58,7 +58,12 @@ const published = (id: string, extra: Partial<GalleryAccessRow> = {}): GalleryAc
   deletedAt: null,
   accessVersion: 1,
   expiresAt: null,
-  billing: { status: 'free', pastDueSince: null, restrictedSince: null, canceledAt: null },
+  billing: {
+    status: 'free',
+    pastDueSince: null,
+    restrictedSince: null,
+    canceledAt: null,
+  },
   ...extra,
 });
 
@@ -153,9 +158,32 @@ describe('isDeliverySuspended', () => {
     });
     expect(isDeliverySuspended(recentPastDue, now)).toBe(false);
     const broken = published(G1, {
-      billing: { status: 'past_due', pastDueSince: null, restrictedSince: null, canceledAt: null },
+      billing: {
+        status: 'past_due',
+        pastDueSince: null,
+        restrictedSince: null,
+        canceledAt: null,
+      },
     });
     expect(isDeliverySuspended(broken, now)).toBe(true);
+  });
+
+  it('never suspends delivery for usage: only billing status counts (ADR-008)', () => {
+    for (const status of ['free', 'active'] as const) {
+      const busy = published(G1, {
+        billing: { status, pastDueSince: null, restrictedSince: null, canceledAt: null },
+      });
+      expect(isDeliverySuspended(busy, now)).toBe(false);
+    }
+    const canceled = published(G1, {
+      billing: {
+        status: 'canceled',
+        pastDueSince: null,
+        restrictedSince: null,
+        canceledAt: new Date(now.getTime() - 86_400_000),
+      },
+    });
+    expect(isDeliverySuspended(canceled, now)).toBe(true);
   });
 });
 

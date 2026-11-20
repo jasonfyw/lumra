@@ -6,6 +6,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
+import { RATE_CARD, RATE_CARD_V1, RATE_CARD_V2, type PlanRates } from '@lumra/config';
 import { DB_ENUMS } from './enums';
 import * as schema from './schema';
 
@@ -36,11 +37,13 @@ function sqlTables(): Record<string, Set<string>> {
     }
     out[m[1]!] = cols;
   }
-  // Later migrations add columns with `alter table public.x add column y ...`.
-  for (const m of sql.matchAll(
-    /alter table public\.(\w+)\s+add column (?:if not exists )?(\w+)/g,
-  )) {
-    out[m[1]!]?.add(m[2]!);
+  // Later migrations add or drop columns with `alter table public.x add|drop column y ...`.
+  // One statement may change several columns (`add column a …, drop column b …`).
+  for (const m of sql.matchAll(/alter table public\.(\w+)\s+([^;]*);/g)) {
+    for (const c of m[2]!.matchAll(/(?:^|,)\s*(add|drop) column (?:if (?:not )?exists )?(\w+)/g)) {
+      if (c[1] === 'add') out[m[1]!]?.add(c[2]!);
+      else out[m[1]!]?.delete(c[2]!);
+    }
   }
   return out;
 }
@@ -65,9 +68,9 @@ describe('SQL enums match TypeScript status sets', () => {
 describe('Drizzle schema mirrors SQL tables', () => {
   const fromSql = sqlTables();
 
-  it('has the same set of public tables (PRD §8 tables + rate_limit_buckets)', () => {
+  it('has the same set of public tables (PRD §8 + rate_limit_buckets + T27 metering)', () => {
     expect(drizzleTables.map((t) => t.name).sort()).toEqual(Object.keys(fromSql).sort());
-    expect(Object.keys(fromSql)).toHaveLength(17);
+    expect(Object.keys(fromSql)).toHaveLength(24);
   });
 
   for (const table of drizzleTables) {
@@ -85,5 +88,101 @@ describe('RLS coverage', () => {
       [...sql.matchAll(/alter table public\.(\w+) enable row level security/g)].map((m) => m[1]),
     );
     for (const table of Object.keys(sqlTables())) expect(enabled, table).toContain(table);
+  });
+});
+
+describe('rate card seed (T27, ADR-008)', () => {
+  // Column order of the `insert into public.plan_rate_versions (...)` seed in the T27 migration.
+  // The three delivery columns were dropped by the ADR-008 migration.
+  const deliveryColumns = [
+    'maxDeliveryBytesPerMonth',
+    'includedDeliveryGb',
+    'deliveryOverageMicroUsdPerGb',
+  ] as const;
+  const columns: (keyof PlanRates | (typeof deliveryColumns)[number])[] = [
+    'id',
+    'rateVersion',
+    'monthlyFeeMicroUsd',
+    'maxActiveGalleries',
+    'maxStorageBytes',
+    'maxDeliveryBytesPerMonth',
+    'includedStorageGbMonth',
+    'includedDeliveryGb',
+    'storageOverageMicroUsdPerGbMonth',
+    'deliveryOverageMicroUsdPerGb',
+    'defaultOverageCapMicroUsd',
+    'brandingVisible',
+  ];
+
+  // The v2 insert (20261116 migration) was written after the delivery columns were dropped.
+  const columnsV2 = columns.filter((c) => !(deliveryColumns as readonly string[]).includes(c));
+
+  function seededRows(table: string, nth = 0, cols = columns): Record<string, unknown>[] {
+    const m = [
+      ...sql.matchAll(
+        new RegExp(`insert into public\\.${table} \\([^)]*\\) values([\\s\\S]*?);`, 'g'),
+      ),
+    ][nth];
+    expect(m, `${table} seed #${nth}`).toBeDefined();
+    // Each row's rate columns are on its first line: `('pro', 1, 2000000, ...`.
+    return [...m![1]!.matchAll(/\('(free|pro)',([^\n]*)/g)].map((row) => {
+      const values = [row[1]!, ...row[2]!.split(',').map((v) => v.replace(/\)$/, '').trim())];
+      const parsed = values.map((v) =>
+        v === 'null'
+          ? null
+          : v === 'true'
+            ? true
+            : v === 'false'
+              ? false
+              : /^\d+$/.test(v)
+                ? Number(v)
+                : v,
+      );
+      return Object.fromEntries(
+        cols
+          .map((c, i) => [c, parsed[i]] as const)
+          .filter(([c]) => !(deliveryColumns as readonly string[]).includes(c)),
+      );
+    });
+  }
+
+  it('plan_rate_versions v1 equals RATE_CARD_V1 exactly (PRD §9.2 proposed defaults)', () => {
+    const rows = seededRows('plan_rate_versions');
+    expect(rows).toEqual([RATE_CARD_V1.free, RATE_CARD_V1.pro]);
+  });
+
+  it('plan_rate_versions v2 equals RATE_CARD_V2: only the Pro storage overage changed (50 000 = $0.05)', () => {
+    const rows = seededRows('plan_rate_versions', 1, columnsV2);
+    expect(rows).toEqual([RATE_CARD_V2.free, RATE_CARD_V2.pro]);
+    expect(RATE_CARD_V2.free).toEqual({ ...RATE_CARD_V1.free, rateVersion: 2 });
+    expect(RATE_CARD_V2.pro).toEqual({
+      ...RATE_CARD_V1.pro,
+      rateVersion: 2,
+      storageOverageMicroUsdPerGbMonth: 50_000,
+    });
+  });
+
+  it('plans are repointed to the current rate card version', () => {
+    expect(RATE_CARD).toBe(RATE_CARD_V2);
+    expect(sql).toMatch(/update public\.plans set rate_version = 2 where id in \('free', 'pro'\);/);
+  });
+
+  it('drops every delivery column and the delivery usage metric (ADR-008)', () => {
+    const tables = sqlTables();
+    for (const table of ['plans', 'plan_rate_versions', 'billing_accounts']) {
+      expect([...tables[table]!].filter((c) => c.includes('delivery'))).toEqual([]);
+    }
+    expect(sqlEnums().usage_metric).toEqual(['storage_byte_seconds']);
+    expect(Object.keys(RATE_CARD_V1.pro).filter((k) => /deliver/i.test(k))).toEqual([]);
+  });
+
+  it('plans are re-projected from their rate version (the core seed predates v1 changes)', () => {
+    // The core-schema `plans` seed is historical; the rate-card migration's trigger copies the
+    // current version's columns onto each plan, and its `update` re-projects the seeded rows.
+    expect(seededRows('plans').map((r) => [r.id, r.rateVersion])).toEqual([
+      ['free', RATE_CARD_V1.free.rateVersion],
+      ['pro', RATE_CARD_V1.pro.rateVersion],
+    ]);
+    expect(sql).toMatch(/update public\.plans set rate_version = rate_version;/);
   });
 });

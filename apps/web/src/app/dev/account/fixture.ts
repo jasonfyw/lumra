@@ -1,0 +1,152 @@
+import { BILLING_POLICY_V1, BYTES_PER_GB, RATE_CARD } from '@lumra/config';
+import { accountUsageSummarySchema, type AccountUsageSummary } from '@lumra/contracts';
+
+/** `/account` billing states for the dev fixture page, screenshots and component tests. */
+export const ACCOUNT_FIXTURE_STATES = [
+  'free',
+  'free_at_caps',
+  'checkout_pending',
+  'pro',
+  'pro_canceling',
+  'pro_alert_80',
+  'pro_spend_cap',
+  'past_due',
+  'restricted',
+  'canceled',
+  'unconfigured',
+] as const;
+export type AccountFixtureState = (typeof ACCOUNT_FIXTURE_STATES)[number];
+
+const DAY = 86_400_000;
+
+export function makeAccountFixture(
+  state: AccountFixtureState,
+  now = new Date('2026-11-13T12:00:00Z'),
+): { summary: AccountUsageSummary; checkout: 'success' | null } {
+  const { free, pro } = RATE_CARD;
+  const isPro = [
+    'pro',
+    'pro_canceling',
+    'pro_alert_80',
+    'pro_spend_cap',
+    'past_due',
+    'restricted',
+  ].includes(state);
+  const plan = isPro ? pro : free;
+  const periodStart = isPro ? new Date('2026-11-04T09:30:00Z') : new Date('2026-11-01T00:00:00Z');
+  const periodEnd = isPro ? new Date('2026-12-04T09:30:00Z') : new Date('2026-12-01T00:00:00Z');
+  const pastDueSince = new Date(now.getTime() - (state === 'restricted' ? 9 : 2) * DAY);
+  const suspends = new Date(pastDueSince.getTime() + BILLING_POLICY_V1.pastDueGraceMs);
+  const canceledAt = new Date(now.getTime() - 3 * DAY);
+
+  const storedBytes =
+    state === 'free_at_caps'
+      ? 970_000_000
+      : state === 'canceled'
+        ? 4.2 * BYTES_PER_GB
+        : isPro
+          ? 12.4 * BYTES_PER_GB
+          : 310_000_000;
+  const pct = (used: number, limit: number | null) =>
+    limit === null ? null : Math.min(100, Math.floor((used * 100) / limit));
+
+  const status: AccountUsageSummary['billingStatus'] =
+    state === 'past_due'
+      ? 'past_due'
+      : state === 'restricted'
+        ? 'restricted'
+        : state === 'canceled'
+          ? 'canceled'
+          : isPro
+            ? 'active'
+            : 'free';
+
+  const summary: AccountUsageSummary = {
+    email: 'ada@example.com',
+    plan: isPro ? 'pro' : 'free',
+    billingStatus: status,
+    period: { start: periodStart.toISOString(), end: periodEnd.toISOString() },
+    storage: {
+      usedBytes: Math.round(storedBytes),
+      limitBytes: plan.maxStorageBytes,
+      percentUsed: pct(storedBytes, plan.maxStorageBytes),
+      tracked: true,
+      itemCount: Math.round(storedBytes / 9_000_000),
+    },
+    billing: {
+      paymentsEnabled: state !== 'unconfigured',
+      hasCustomer: isPro || state === 'canceled',
+      cancelAtPeriodEnd: state === 'pro_canceling',
+      uploadsAllowed: !['past_due', 'restricted', 'canceled'].includes(state),
+      publicDeliveryAllowed: !['restricted', 'canceled'].includes(state),
+      deliverySuspendsAt:
+        state === 'past_due' || state === 'restricted'
+          ? suspends.toISOString()
+          : state === 'canceled'
+            ? canceledAt.toISOString()
+            : null,
+      retentionEndsAt:
+        state === 'past_due' || state === 'restricted'
+          ? new Date(
+              suspends.getTime() + BILLING_POLICY_V1.retentionAfterSuspensionMs,
+            ).toISOString()
+          : state === 'canceled'
+            ? new Date(
+                canceledAt.getTime() + BILLING_POLICY_V1.retentionAfterSuspensionMs,
+              ).toISOString()
+            : null,
+      galleries: {
+        active: state === 'canceled' ? 5 : state === 'free_at_caps' ? 2 : isPro ? 14 : 1,
+        max: plan.maxActiveGalleries,
+      },
+    },
+    spend: isPro
+      ? {
+          capMicroUsd: state === 'pro_spend_cap' ? 5_000_000 : 10_000_000,
+          custom: state === 'pro_spend_cap',
+          defaultCapMicroUsd: pro.defaultOverageCapMicroUsd ?? 0,
+          maxCapMicroUsd: BILLING_POLICY_V1.maxSpendCapMicroUsd,
+          estimatedOverageMicroUsd:
+            state === 'pro_alert_80' ? 8_420_000 : state === 'pro_spend_cap' ? 5_030_000 : 84_000,
+          percentOfCap: state === 'pro_alert_80' ? 84 : state === 'pro_spend_cap' ? 100 : 0,
+          alertsReached:
+            state === 'pro_alert_80' ? [50, 80] : state === 'pro_spend_cap' ? [50, 80, 100] : [],
+          thresholdsPct: [...BILLING_POLICY_V1.defaultAlertThresholdsPct],
+        }
+      : null,
+    invoices: isPro
+      ? [
+          {
+            id: 'in_fixture_2',
+            number: 'A1B2C3D4-0002',
+            status: state === 'past_due' || state === 'restricted' ? 'open' : 'paid',
+            currency: 'usd',
+            totalCents: 284,
+            amountDueCents: 284,
+            createdAt: '2026-11-04T10:31:00.000Z',
+            periodStart: '2026-10-04T09:30:00.000Z',
+            periodEnd: '2026-11-04T09:30:00.000Z',
+            hostedInvoiceUrl: 'https://invoice.stripe.com/i/fixture_2',
+            invoicePdf: 'https://pay.stripe.com/invoice/fixture_2/pdf',
+          },
+          {
+            id: 'in_fixture_1',
+            number: 'A1B2C3D4-0001',
+            status: 'paid',
+            currency: 'usd',
+            totalCents: 200,
+            amountDueCents: 200,
+            createdAt: '2026-10-04T09:30:00.000Z',
+            periodStart: '2026-10-04T09:30:00.000Z',
+            periodEnd: '2026-10-04T09:30:00.000Z',
+            hostedInvoiceUrl: 'https://invoice.stripe.com/i/fixture_1',
+            invoicePdf: null,
+          },
+        ]
+      : [],
+  };
+  return {
+    summary: accountUsageSummarySchema.parse(summary),
+    checkout: state === 'checkout_pending' ? 'success' : null,
+  };
+}

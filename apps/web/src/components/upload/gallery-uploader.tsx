@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { buttonClass } from '@/components/ui';
 import { openDraftStore } from '@/lib/draft-store';
 import {
   baseConcurrency,
@@ -12,7 +13,8 @@ import {
   type UploadApi,
 } from '@/lib/upload';
 import { PHOTO_ACCEPT, UploadZone } from './upload-zone';
-import { UploadList } from './upload-list';
+import { UploadBridgeContext } from './upload-bridge';
+import { UploadToast } from './upload-list';
 
 function connection(): ConnectionInfo | undefined {
   return (globalThis.navigator as { connection?: ConnectionInfo } | undefined)?.connection;
@@ -108,33 +110,51 @@ export function GalleryUploader({
     return () => window.removeEventListener('beforeunload', warn);
   }, [busy]);
 
+  // Let the surrounding editor (if any) preview local files and pick up new photos.
+  const bridge = useContext(UploadBridgeContext);
+  useEffect(() => {
+    if (!bridge) return;
+    bridge.report(
+      snapshot.items.flatMap((i) =>
+        i.mediaId ? [{ mediaId: i.mediaId, state: i.state, file: engine.getFile(i.clientId) }] : [],
+      ),
+    );
+  }, [bridge, engine, snapshot]);
+
   const awaiting = snapshot.items.filter((i) => i.state === 'awaiting_file');
+  const planBlock = planBlockFor(snapshot.items);
 
   return (
     <div className="flex flex-col gap-6">
       {snapshot.authPrompt && (
-        <div
-          role="alert"
-          className="flex flex-col gap-3 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] p-4"
-        >
+        <div role="alert" className="lm-banner lm-banner-cap flex-col gap-3">
           <p className="font-medium">{snapshot.authPrompt.message}</p>
-          <p className="text-sm text-[var(--color-ink-muted)]">
+          <p className="text-[13px] leading-[18px]">
             Photos already uploaded stay in this draft. After signing in, choose the remaining files
             again to continue.
           </p>
           <div>
-            <Link
-              href={signInHref}
-              className="inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-6 font-medium text-white"
-            >
+            <Link href={signInHref} className={buttonClass('primary')}>
               Sign in to keep uploading
             </Link>
           </div>
         </div>
       )}
 
+      {planBlock && (
+        <div role="alert" className="lm-banner lm-banner-cap flex-col gap-3">
+          <p className="font-medium">{planBlock.title}</p>
+          <p className="text-[13px] leading-[18px]">{planBlock.body}</p>
+          <div>
+            <Link href={planBlock.href} className={buttonClass('primary')}>
+              {planBlock.cta}
+            </Link>
+          </div>
+        </div>
+      )}
+
       {awaiting.length > 0 && (
-        <div className="flex flex-col gap-3 rounded-[var(--radius-control)] border border-[var(--color-line)] p-4">
+        <div className="lm-banner flex-col gap-3">
           <p className="font-medium">
             {awaiting.length === 1
               ? '1 upload was interrupted.'
@@ -160,14 +180,14 @@ export function GalleryUploader({
             <button
               type="button"
               onClick={() => resumeInput.current?.click()}
-              className="inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-5 font-medium text-white"
+              className={buttonClass('primary')}
             >
               Choose files to resume
             </button>
             <button
               type="button"
               onClick={() => engine.discardAwaiting()}
-              className="inline-flex min-h-11 items-center justify-center px-4 underline-offset-4 hover:underline"
+              className={buttonClass('ghost')}
             >
               Discard interrupted uploads
             </button>
@@ -177,7 +197,7 @@ export function GalleryUploader({
 
       <UploadZone onFiles={(files) => engine.addFiles(files)} />
 
-      <UploadList
+      <UploadToast
         snapshot={snapshot}
         onRetry={(id) => engine.retry(id)}
         onCancel={(id) => engine.cancel(id)}
@@ -186,4 +206,49 @@ export function GalleryUploader({
       />
     </div>
   );
+}
+
+interface PlanBlock {
+  title: string;
+  body: string;
+  cta: string;
+  href: string;
+}
+
+/**
+ * Plan admission refusals (T28/T32/T33) shown once above the list with the way out: the Free
+ * storage cap → upgrade; the spending cap → raise it; a billing hold → fix payment. Guest quota
+ * refusals are handled by the sign-in prompt instead.
+ */
+export function planBlockFor(
+  items: readonly { error?: { code: string; requiresAuth?: boolean } | null }[],
+): PlanBlock | null {
+  const codes = new Set(
+    items.flatMap((i) => (i.error && !i.error.requiresAuth ? [i.error.code] : [])),
+  );
+  if (codes.has('forbidden')) {
+    return {
+      title: 'Uploads are paused for this account',
+      body: 'There is a problem with your Pro payment. Photos already uploaded are safe; update your payment method to continue.',
+      cta: 'Go to billing',
+      href: '/account',
+    };
+  }
+  if (codes.has('spend_cap_reached')) {
+    return {
+      title: 'This upload would go over your spending cap',
+      body: 'Raise your monthly overage cap to keep uploading this period, or remove photos you no longer need.',
+      cta: 'Adjust spending cap',
+      href: '/account',
+    };
+  }
+  if (codes.has('quota_exceeded')) {
+    return {
+      title: 'Your Free storage is full',
+      body: 'You’ve reached the Free plan’s storage limit. Upgrade to Pro for a larger allowance with pay-as-you-go beyond it, or delete photos you no longer need.',
+      cta: 'Upgrade to Pro',
+      href: '/pricing',
+    };
+  }
+  return null;
 }

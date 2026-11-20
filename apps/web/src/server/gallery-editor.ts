@@ -35,6 +35,7 @@ import { ApiFailure, notFoundError, validationError } from '@/lib/api';
 import type { Tx } from '@/lib/db';
 import { hashGalleryPassword } from '@/lib/password';
 import { enqueueAccessStateSync } from './access-state';
+import { mintOwnerThumbnails, type MintDeps } from './public-gallery';
 
 /**
  * Creator-side gallery editing (T15), publishing (T16) and password/expiry mutations (T19).
@@ -54,6 +55,11 @@ export interface EditorDeps {
   requestId: string;
   /** Absolute app origin used to build share URLs (`NEXT_PUBLIC_APP_URL`). */
   appUrl: string;
+  /**
+   * Media-token signing for editor thumbnails; null/absent when media delivery isn't configured
+   * (thumbnails are then null and the editor shows status tiles).
+   */
+  media?: Omit<MintDeps, 'now'> | null;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -134,18 +140,8 @@ async function enqueueOutbox(
 
 const iso = (d: Date) => d.toISOString();
 
-/** Owner's view of a gallery and all its non-deleted items (creator sees every status). */
-export async function getGalleryDetail(
-  deps: Pick<EditorDeps, 'db' | 'appUrl'>,
-  userId: string,
-  galleryId: string,
-  now = new Date(),
-): Promise<GalleryDetail> {
-  if (!UUID.test(galleryId)) throw galleryNotFound();
-  const [g] = await deps.db.select().from(galleries).where(eq(galleries.id, galleryId));
-  if (!g || !isOwnedLive(g, userId)) throw galleryNotFound();
-
-  const rows = await deps.db
+function selectMediaRows(db: Database, galleryId: string) {
+  return db
     .select({
       id: media.id,
       status: media.status,
@@ -161,11 +157,58 @@ export async function getGalleryDetail(
     .from(media)
     .where(and(eq(media.galleryId, galleryId), isNull(media.deletedAt)))
     .orderBy(sql`${media.sortKey} collate "C"`, media.id);
+}
 
+/** A gallery row (if any) plus its non-deleted media rows, as read by `loadGalleryRows`. */
+export interface GalleryRows {
+  gallery: Gallery | undefined;
+  rows: Awaited<ReturnType<typeof selectMediaRows>>;
+}
+
+/**
+ * Reads the gallery and its media in parallel. It needs no user id, so a page can start it while
+ * the session is still being verified; `getGalleryDetail` checks ownership before using the
+ * result, and rows of a gallery the caller doesn't own are discarded unused.
+ */
+export async function loadGalleryRows(db: Database, galleryId: string): Promise<GalleryRows> {
+  if (!UUID.test(galleryId)) return { gallery: undefined, rows: [] };
+  const [[gallery], rows] = await Promise.all([
+    db.select().from(galleries).where(eq(galleries.id, galleryId)),
+    selectMediaRows(db, galleryId),
+  ]);
+  return { gallery, rows };
+}
+
+/**
+ * Owner's view of a gallery and all its non-deleted items (creator sees every status).
+ * `preloaded` is an in-flight or finished `loadGalleryRows` for the same id, which lets a caller
+ * overlap the reads with authentication.
+ */
+export async function getGalleryDetail(
+  deps: Pick<EditorDeps, 'db' | 'appUrl' | 'media'>,
+  userId: string,
+  galleryId: string,
+  now = new Date(),
+  preloaded?: Promise<GalleryRows>,
+): Promise<GalleryDetail> {
+  if (!UUID.test(galleryId)) throw galleryNotFound();
+  const { gallery: g, rows } = await (preloaded ?? loadGalleryRows(deps.db, galleryId));
+  if (!g || !isOwnedLive(g, userId)) throw galleryNotFound();
+
+  // Ownership is verified above, so owner-scoped thumbnail tokens may be minted (ADR-001).
+  const thumbnails = deps.media
+    ? await mintOwnerThumbnails(
+        deps.db,
+        g,
+        rows.filter((r) => r.status === 'ready').map((r) => r.id),
+        deps.media,
+        now,
+      )
+    : new Map<string, string>();
   const items: EditorMediaItem[] = rows.map((r) => ({
     ...r,
     createdAt: iso(r.createdAt),
-    thumbnailUrl: null, // TODO(T20): creator media tokens via the gateway.
+    thumbnailUrl: thumbnails.get(r.id) ?? null,
   }));
   const cover = selectCover(
     rows.map((r) => ({ id: r.id, status: r.status, uploadOrder: r.createdAt.getTime() })),

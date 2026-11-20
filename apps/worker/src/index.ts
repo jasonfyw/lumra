@@ -9,8 +9,16 @@ import {
 } from '@lumra/observability';
 import { DEADLINES, isDeadlineExceeded, withDeadline } from './deadline';
 import type { Env } from './env';
+import { archiveCrc32 } from './crc';
 import { syncGalleryAccessState } from './handlers/access-state';
+import { handleArchiveBuild, RetryLaterError } from './handlers/archive-build';
+import { runBillingSweep } from './handlers/billing';
+import { handleEmailSend } from './handlers/email';
+import { runMeterExport, stripeMeterSender } from './handlers/meter-export';
+import { sweepArchives } from './handlers/archive-sweep';
 import { handleMediaUploaded } from './handlers/media-uploaded';
+import { runStorageAccrual } from './handlers/metering';
+import { purgeGallery, purgeMedia, sweepDeletions, type PurgeDeps } from './handlers/purge';
 import { bounded, type StepTimings } from './instrument';
 import { loggerFor, type Logger } from './log';
 import { relayOutbox, type QueueProducer, type RelayResult } from './outbox-relay';
@@ -29,14 +37,16 @@ export interface JobContext {
   slot: number;
   /** Per-step wall time, logged when the job ends. */
   timings: StepTimings;
+  /** 1-based delivery attempt of this message (`message.attempts`). */
+  attempt: number;
 }
 
 export type JobHandler = (message: QueueMessage, ctx: JobContext) => Promise<unknown>;
 
 /**
  * Handlers are registered per message type as their tasks land (T12, T13, T24, T06).
- * A type without a handler (e.g. `media.delete` until T13) is retried after 60 s each time and
- * reaches the DLQ after `max_retries`; it never hot-loops and can be replayed once T13 ships.
+ * A valid message whose type has no handler is logged as an error and acked (see `runJob`):
+ * retrying it could never succeed and only parked it in the consumer-less DLQ.
  *
  * Every dependency a handler touches is wrapped by `bounded()`: each DB / R2 / processor call
  * has its own deadline and the whole job is cut off at `DEADLINES.jobMs`.
@@ -61,9 +71,47 @@ export const handlers: Partial<Record<QueueMessage['type'], JobHandler>> = {
     log.info('media.uploaded handled', { mediaId: message.mediaId, outcome, slot });
   },
   'gallery.access_changed': accessStateJob,
-  // Tombstones the gateway's access state immediately (FR-G06). TODO(T13): also enqueue/perform
-  // the R2 cleanup here; until then the nightly orphan sweep removes the objects.
-  'gallery.delete': accessStateJob,
+  /**
+   * T24: stream the job's ZIP parts into temp-archives (ADR-003). Runs under
+   * `DEADLINES.archiveJobMs`; R2 multipart objects are used unwrapped (their per-part calls are
+   * bounded by the job deadline) because `bounded()` would make `resumeMultipartUpload` async.
+   */
+  'archive.build': async (message, { env, services, log, signal, timings, attempt }) => {
+    if (message.type !== 'archive.build') return;
+    const opts = { signal, timings };
+    const outcome = await handleArchiveBuild(message.jobId, {
+      repo: bounded(services.archiveRepo(), 'db', DEADLINES.dbStepMs, opts),
+      originals: bounded(env.ORIGINALS, 'r2.originals', DEADLINES.r2StepMs, opts),
+      archives: env.ARCHIVES,
+      crc32: archiveCrc32,
+      attempt,
+      log,
+    });
+    log.info('archive.build handled', { jobId: message.jobId, outcome, attempt });
+  },
+  // FR-G06: KV tombstone first, then the R2 purge (T13).
+  'gallery.delete': galleryDeleteJob,
+  'media.delete': mediaDeleteJob,
+  // T33/T32: transition notices and spend-cap alerts, sent through Resend (RESEND_API_KEY unset:
+  // logged and acked). Transient failures throw and ride the queue's retry back-off.
+  'email.send': async (message, { env, services, log, signal, timings }) => {
+    if (message.type !== 'email.send') return;
+    const outcome = await handleEmailSend(message, {
+      contacts: bounded(services.accountContactRepo(), 'db', DEADLINES.dbStepMs, {
+        signal,
+        timings,
+      }),
+      config: {
+        apiKey: env.RESEND_API_KEY,
+        from: env.EMAIL_FROM,
+        replyTo: env.EMAIL_REPLY_TO,
+        appUrl: env.APP_URL,
+      },
+      log,
+      signal,
+    });
+    log.info('email.send handled', { template: message.template, outcome });
+  },
 };
 
 /** `gallery.access_changed` / `gallery.delete`: rewrite the gateway's KV access state (T20). */
@@ -78,13 +126,100 @@ async function accessStateJob(message: QueueMessage, ctx: JobContext) {
   log.info('access state synced', { galleryId: message.galleryId, outcome });
 }
 
+/** Purge dependencies, each call bounded by its own deadline (T13). */
+function purgeDeps(
+  env: Env,
+  services: Services,
+  log: Logger,
+  opts: { signal?: AbortSignal; timings?: StepTimings },
+  now: () => number = Date.now,
+): PurgeDeps {
+  return {
+    repo: bounded(services.deletionRepo(), 'db', DEADLINES.dbStepMs, opts),
+    originals: bounded(env.ORIGINALS, 'r2.originals', DEADLINES.r2StepMs, opts),
+    derivatives: bounded(env.DERIVATIVES, 'r2.derivatives', DEADLINES.r2StepMs, opts),
+    archives: bounded(env.ARCHIVES, 'r2.archives', DEADLINES.r2StepMs, opts),
+    log,
+    now,
+  };
+}
+
+/** Thrown when a purge ran out of time: the queue retries and the next run continues. */
+export class PurgeIncompleteError extends Error {
+  constructor(readonly galleryId: string) {
+    super('gallery purge incomplete; will continue on retry');
+    this.name = 'PurgeIncompleteError';
+  }
+}
+
+/** Gallery purge budget inside one job, leaving headroom under `DEADLINES.jobMs`. */
+export const GALLERY_PURGE_BUDGET_MS = 90_000;
+
+/** `media.delete`: remove the original + derivatives from R2, then mark the row `deleted`. */
+async function mediaDeleteJob(message: QueueMessage, ctx: JobContext) {
+  if (message.type !== 'media.delete') return;
+  const { env, services, log, signal, timings } = ctx;
+  const result = await purgeMedia(
+    [message.mediaId],
+    purgeDeps(env, services, log, { signal, timings }),
+  );
+  log.info('media purge finished', { mediaId: message.mediaId, ...result });
+}
+
+/** `gallery.delete`: KV tombstone (gateway denies at once), then purge every object (FR-G06). */
+async function galleryDeleteJob(message: QueueMessage, ctx: JobContext) {
+  if (message.type !== 'gallery.delete') return;
+  await accessStateJob(message, ctx);
+  const { env, services, log, signal, timings } = ctx;
+  const result = await purgeGallery(
+    message.galleryId,
+    purgeDeps(env, services, log, { signal, timings }),
+    { budgetMs: GALLERY_PURGE_BUDGET_MS },
+  );
+  log.info('gallery purge finished', {
+    galleryId: message.galleryId,
+    outcome: result.outcome,
+    archiveObjects: result.archiveObjects,
+    archiveJobs: result.archiveJobs,
+    derivativePrefixObjects: result.derivativePrefixObjects,
+    ...result.media,
+  });
+  if (result.outcome === 'incomplete') throw new PurgeIncompleteError(message.galleryId);
+}
+
 /** Cron that drives the outbox relay (wrangler.jsonc `triggers.crons`). */
 export const OUTBOX_RELAY_CRON = '* * * * *';
 /** Within one cron tick the relay keeps polling for this long, so pickup latency is ~seconds. */
 export const OUTBOX_RELAY_WINDOW_MS = DEADLINES.relayTickMs;
 export const OUTBOX_RELAY_IDLE_MS = 3_000;
+/** Whole-job deadline per message type (archive builds stream up to ~2 GB per part). */
+export function jobDeadlineMs(type: QueueMessage['type']): number {
+  return type === 'archive.build' ? DEADLINES.archiveJobMs : DEADLINES.jobMs;
+}
+
 /** Delay before re-delivering a message whose type has no handler yet. */
 export const UNHANDLED_RETRY_SECONDS = 60;
+/** Backstop deletion sweep (T13, FR-G06): stuck `deleting` media and deleted galleries. */
+export const DELETION_SWEEP_CRON = '*/15 * * * *';
+/** Wall-time budget for one sweep; the rest of the backlog is picked up 15 minutes later. */
+export const DELETION_SWEEP_BUDGET_MS = 50_000;
+/**
+ * Hourly storage GB-month accrual (T27), off the hour and away from the other crons; the billing
+ * sweep (T33: past-due grace, canceled → free, spend-cap alerts) runs right after it.
+ */
+export const STORAGE_ACCRUAL_CRON = '7 * * * *';
+/**
+ * Archive TTL / stalled-job sweep (T25). Shares the 15-minute reconcile tick with the deletion
+ * sweep (one cron string can only dispatch once), so it is an alias, not a separate trigger.
+ */
+export const ARCHIVE_SWEEP_CRON = DELETION_SWEEP_CRON;
+
+/** Daily Stripe Billing Meter export (T31), off-peak; also the nightly reconcile tick. */
+export const METER_EXPORT_CRON = '17 3 * * *';
+
+/** Wall-time budget for one accrual run; unfinished accounts are picked up next hour. */
+export const STORAGE_ACCRUAL_BUDGET_MS = 50_000;
+
 /** Path of the finalize "kick" (web → worker after an upload commits). */
 export const RELAY_KICK_PATH = '/internal/relay';
 
@@ -200,8 +335,19 @@ export function createWorker(options: WorkerOptions = {}) {
     const jobLog = log.child({ traceId, type, messageId: message.id });
     const handler = handlers[type];
     if (!handler) {
-      jobLog.warn('no handler registered', { attempt: message.attempts });
-      message.retry({ delaySeconds: UNHANDLED_RETRY_SECONDS });
+      // Ack, don't retry: redelivery can't succeed and the DLQ has no consumer. The error log +
+      // Sentry event are the record; the outbox row (same dedupeKey) can be re-queued once a
+      // handler ships.
+      jobLog.error('no handler registered; message dropped', {
+        attempt: message.attempts,
+        dedupeKey: parsed.data.dedupeKey,
+      });
+      Sentry.withScope((scope) => {
+        scope.setTag('requestId', traceId);
+        scope.setTag('jobType', type);
+        Sentry.captureMessage(`no handler registered for ${type}`, 'error');
+      });
+      message.ack();
       return;
     }
 
@@ -209,12 +355,26 @@ export function createWorker(options: WorkerOptions = {}) {
     const timings: StepTimings = {};
     jobLog.info('job started', { attempt: message.attempts, slot });
     try {
-      await withDeadline(`job ${type}`, DEADLINES.jobMs, (signal) =>
-        handler(parsed.data, { env, services, log: jobLog, signal, slot, timings }),
+      await withDeadline(`job ${type}`, jobDeadlineMs(type), (signal) =>
+        handler(parsed.data, {
+          env,
+          services,
+          log: jobLog,
+          signal,
+          slot,
+          timings,
+          attempt: message.attempts,
+        }),
       );
       message.ack();
       jobLog.info('job finished', { ms: now() - started, steps: timings });
     } catch (error) {
+      if (error instanceof RetryLaterError) {
+        // Expected back-off (e.g. another delivery holds an archive build lease): no Sentry.
+        jobLog.info('job deferred', { reason: error.message, retryInSeconds: error.delaySeconds });
+        message.retry({ delaySeconds: error.delaySeconds });
+        return;
+      }
       const timedOut = isDeadlineExceeded(error);
       const delaySeconds = timedOut
         ? timeoutRetryDelaySeconds(message.attempts)
@@ -244,6 +404,91 @@ export function createWorker(options: WorkerOptions = {}) {
       });
       message.retry({ delaySeconds });
     }
+  }
+
+  /** Hourly storage accrual run (T27). Per-account failures are logged inside the run. */
+  async function storageAccrualTick(services: Services, log: Logger): Promise<void> {
+    const started = now();
+    const timings: StepTimings = {};
+    const result = await runStorageAccrual({
+      repo: bounded(services.billingRepo(), 'db', DEADLINES.dbStepMs, { timings }),
+      log,
+      now,
+      budgetMs: STORAGE_ACCRUAL_BUDGET_MS,
+    });
+    log.info('storage accrual finished', { ...result, ms: now() - started, steps: timings });
+  }
+
+  /** Hourly billing maintenance (T33) + spend-cap alerts (T32). */
+  async function billingSweepTick(services: Services, log: Logger): Promise<void> {
+    const started = now();
+    const timings: StepTimings = {};
+    const repo = bounded(services.billingStateRepo(), 'db.billing', DEADLINES.dbStepMs, {
+      timings,
+    });
+    const result = await runBillingSweep({
+      repo,
+      plans: bounded(services.billingRepo().plans, 'db.plans', DEADLINES.dbStepMs, { timings }),
+      log,
+      now: () => new Date(now()),
+      traceId: 'cron:billing-sweep',
+    });
+    log.info('billing sweep finished', { ...result, ms: now() - started, steps: timings });
+  }
+
+  /** Stripe meter export (T31): daily for all open periods, hourly for periods just closed. */
+  async function meterExportTick(
+    env: Env,
+    services: Services,
+    log: Logger,
+    mode: 'daily' | 'period_close',
+  ): Promise<void> {
+    if (!env.STRIPE_SECRET_KEY) {
+      log.info('meter export skipped: STRIPE_SECRET_KEY not set', { mode });
+      return;
+    }
+    const started = now();
+    const timings: StepTimings = {};
+    const result = await runMeterExport({
+      repo: bounded(services.meterExportRepo(), 'db.meters', DEADLINES.dbStepMs, { timings }),
+      plans: bounded(services.billingRepo().plans, 'db.plans', DEADLINES.dbStepMs, { timings }),
+      send: stripeMeterSender(env.STRIPE_SECRET_KEY),
+      log,
+      now: () => new Date(now()),
+      mode,
+    });
+    log.info('meter export finished', { mode, ...result, ms: now() - started, steps: timings });
+  }
+
+  /** Backstop deletion sweep (T13). Per-item failures are logged inside the sweep. */
+  async function deletionSweepTick(env: Env, services: Services, log: Logger): Promise<void> {
+    const started = now();
+    const timings: StepTimings = {};
+    const result = await sweepDeletions(purgeDeps(env, services, log, { timings }, now), {
+      budgetMs: DELETION_SWEEP_BUDGET_MS,
+      nowDate: new Date(now()),
+    });
+    log.info('deletion sweep finished', {
+      galleries: result.galleries,
+      galleriesIncomplete: result.galleriesIncomplete,
+      galleriesFailed: result.galleriesFailed,
+      mediaBatchesFailed: result.mediaBatchesFailed,
+      budgetExhausted: result.budgetExhausted,
+      ...result.media,
+      ms: now() - started,
+      steps: timings,
+    });
+  }
+
+  async function archiveSweepTick(env: Env, services: Services, log: Logger): Promise<void> {
+    const timings: StepTimings = {};
+    const result = await sweepArchives({
+      repo: bounded(services.archiveRepo(), 'db', DEADLINES.dbStepMs, { timings }),
+      archives: bounded(env.ARCHIVES, 'r2.archives', DEADLINES.r2StepMs, { timings }),
+      log,
+      now,
+    });
+    log.info('archive sweep finished', { ...result, steps: timings });
   }
 
   return {
@@ -349,8 +594,81 @@ export function createWorker(options: WorkerOptions = {}) {
     ): Promise<void> {
       parseEnv('worker', workerEnvSchema, env as unknown as Record<string, unknown>);
       const log = loggerFor(env);
+      if (controller.cron === STORAGE_ACCRUAL_CRON) {
+        // Accrual first (it moves Pro spend), then the billing sweep reads the new totals. Each
+        // failure is reported on its own so one never blocks the other.
+        const services = makeServices(env);
+        let firstError: unknown;
+        try {
+          try {
+            await storageAccrualTick(services, log);
+          } catch (error) {
+            log.error('storage accrual failed', { err: error });
+            Sentry.captureException(error);
+            firstError ??= error;
+          }
+          try {
+            await billingSweepTick(services, log);
+          } catch (error) {
+            log.error('billing sweep failed', { err: error });
+            Sentry.captureException(error);
+            firstError ??= error;
+          }
+          try {
+            // Final usage of periods that just closed, while Stripe's invoice is still a draft.
+            await meterExportTick(env, services, log, 'period_close');
+          } catch (error) {
+            log.error('meter export failed', { err: error, mode: 'period_close' });
+            Sentry.captureException(error);
+            firstError ??= error;
+          }
+        } finally {
+          await closeServices(services, log, ctx);
+        }
+        if (firstError !== undefined) throw firstError;
+        return;
+      }
+      if (controller.cron === DELETION_SWEEP_CRON) {
+        // One 15-minute reconcile tick runs both sweeps; each failure is reported on its own so
+        // a broken deletion sweep never stops archive expiry (and vice versa).
+        const services = makeServices(env);
+        let firstError: unknown;
+        try {
+          try {
+            await deletionSweepTick(env, services, log);
+          } catch (error) {
+            log.error('deletion sweep failed', { err: error });
+            Sentry.captureException(error);
+            firstError ??= error;
+          }
+          try {
+            await archiveSweepTick(env, services, log);
+          } catch (error) {
+            log.error('archive sweep failed', { err: error });
+            Sentry.captureException(error);
+            firstError ??= error;
+          }
+        } finally {
+          await closeServices(services, log, ctx);
+        }
+        if (firstError !== undefined) throw firstError;
+        return;
+      }
+      if (controller.cron === METER_EXPORT_CRON) {
+        // Daily Stripe meter export (T31). Remaining T13 nightly reconcilers will join this tick.
+        const services = makeServices(env);
+        try {
+          await meterExportTick(env, services, log, 'daily');
+        } catch (error) {
+          log.error('meter export failed', { err: error, mode: 'daily' });
+          Sentry.captureException(error);
+          throw error;
+        } finally {
+          await closeServices(services, log, ctx);
+        }
+        return;
+      }
       if (controller.cron !== OUTBOX_RELAY_CRON) {
-        // Reconcilers / cleanup land with T13.
         log.info('scheduled tick', { cron: controller.cron });
         return;
       }

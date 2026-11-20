@@ -1,6 +1,5 @@
 import * as Sentry from '@sentry/cloudflare';
 import { mediaGatewayEnvSchema, parseEnv, type MediaGatewayEnv } from '@lumra/config';
-import type { QueueMessage } from '@lumra/contracts';
 import {
   createLogger,
   generateRequestId,
@@ -11,6 +10,7 @@ import {
   type Logger,
 } from '@lumra/observability';
 import { createKvGalleryAccessStore, type GalleryAccessStore } from '@lumra/tokens';
+import type { EdgeCache } from './edge-cache';
 import { handleMediaRequest, type GatewayDeps } from './handler';
 import { corsHeaders } from './http';
 
@@ -29,8 +29,6 @@ export interface Env {
   ARCHIVES: R2Bucket;
   /** Gallery access state mirrored by the web app (`gallery:{id}`). */
   ACCESS_STATE: KVNamespace;
-  /** Producer for `delivery.served` usage events. */
-  USAGE: Queue<QueueMessage>;
 }
 
 // Per-isolate caches: parsed env and the KV store (whose ≤5 s memo must outlive a request).
@@ -57,6 +55,16 @@ function accessStore(kv: KVNamespace): GalleryAccessStore {
     storeCache.set(kv, store);
   }
   return store;
+}
+
+/**
+ * `caches.default` on a custom domain (`media.lumra.photos`). On `*.workers.dev` the Cache API is a
+ * no-op, so it is skipped there (no pointless body tee) and responses report `BYPASS`.
+ */
+function edgeCacheFor(url: URL): EdgeCache | null {
+  if (url.hostname.endsWith('.workers.dev')) return null;
+  const storage = (globalThis as { caches?: { default?: EdgeCache } }).caches;
+  return storage?.default ?? null;
 }
 
 const noStore = (status: number, body: string, headers?: HeadersInit) => {
@@ -111,7 +119,7 @@ async function route(
   let config: MediaGatewayEnv;
   try {
     config = loadEnv(env);
-    if (!env.ORIGINALS || !env.DERIVATIVES || !env.ARCHIVES || !env.ACCESS_STATE || !env.USAGE) {
+    if (!env.ORIGINALS || !env.DERIVATIVES || !env.ARCHIVES || !env.ACCESS_STATE) {
       throw new Error('missing binding');
     }
   } catch (error) {
@@ -144,9 +152,9 @@ async function route(
     keyring: config.MEDIA_TOKEN_SECRET,
     accessStore: accessStore(env.ACCESS_STATE),
     buckets: { originals: env.ORIGINALS, derivatives: env.DERIVATIVES, archives: env.ARCHIVES },
-    usage: env.USAGE,
     allowedOrigins: config.APP_ORIGIN,
     now: () => new Date(),
+    edgeCache: edgeCacheFor(url),
     waitUntil: (promise) => ctx.waitUntil(promise),
     log: (level, msg, fields) => log[level](msg, fields),
   };
@@ -165,7 +173,7 @@ async function route(
 
 /**
  * Media gateway (PRD §6.1, ADR-001): the only read path into the private R2 buckets.
- * `GET|HEAD /m/:token` — verify token → check gallery access state → stream from R2.
+ * `GET|HEAD /m/:token` — verify token → check gallery access state → edge cache (previews) → R2.
  *
  * T04 layer: request ID (echoed as `x-request-id` on every response), shared redacting
  * logger, Sentry via `withSentry`. Request paths are never logged (they carry tokens).

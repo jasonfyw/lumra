@@ -3,7 +3,6 @@
  * (`@cloudflare/vitest-pool-workers` does not yet support the repo's Vitest major.)
  * They model only the binding behaviour the gateway relies on.
  */
-import type { QueueMessage } from '@lumra/contracts';
 
 interface StoredObject {
   bytes: Uint8Array;
@@ -75,16 +74,6 @@ export class FakeKv {
   }
 }
 
-export class FakeQueue {
-  readonly messages: QueueMessage[] = [];
-  fail = false;
-
-  async send(message: QueueMessage): Promise<void> {
-    if (this.fail) throw new Error('queue unavailable');
-    this.messages.push(message);
-  }
-}
-
 /** Collects `waitUntil` promises so tests can await background work. */
 export class FakeExecutionContext {
   readonly pending: Promise<unknown>[] = [];
@@ -95,5 +84,60 @@ export class FakeExecutionContext {
   passThroughOnException(): void {}
   async drain(): Promise<void> {
     await Promise.all(this.pending);
+  }
+}
+
+interface CachedEntry {
+  bytes: Uint8Array;
+  status: number;
+  headers: [string, string][];
+  expiresAt: number;
+}
+
+/**
+ * Stand-in for `caches.default`: stores by URL, honours `s-maxage`/`max-age` from the stored
+ * response's `Cache-Control` and rejects what the real Cache API rejects (non-GET keys, 206s,
+ * `no-store`/`private`). `noop` models `*.workers.dev`, where every call does nothing.
+ */
+export class FakeCache {
+  readonly entries = new Map<string, CachedEntry>();
+  readonly calls: string[] = [];
+  noop = false;
+  failMatch = false;
+
+  async match(request: Request): Promise<Response | undefined> {
+    this.calls.push(`match:${request.url}`);
+    if (this.failMatch) throw new Error('cache unavailable');
+    if (this.noop) return undefined;
+    const entry = this.entries.get(request.url);
+    if (!entry) return undefined;
+    if (Date.now() >= entry.expiresAt) {
+      this.entries.delete(request.url);
+      return undefined;
+    }
+    return new Response(entry.bytes.slice(), { status: entry.status, headers: entry.headers });
+  }
+
+  async put(request: Request, response: Response): Promise<void> {
+    this.calls.push(`put:${request.url}`);
+    if (request.method !== 'GET') throw new TypeError('Cache key must be a GET request');
+    if (response.status === 206) throw new TypeError('Cannot cache a 206 response');
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (this.noop) return;
+    const cc = response.headers.get('Cache-Control') ?? '';
+    if (/no-store|private/i.test(cc)) return;
+    const ttl = Number(/s-maxage=(\d+)/.exec(cc)?.[1] ?? /max-age=(\d+)/.exec(cc)?.[1] ?? 0);
+    if (ttl <= 0) return;
+    this.entries.set(request.url, {
+      bytes,
+      status: response.status,
+      headers: [...response.headers],
+      expiresAt: Date.now() + ttl * 1000,
+    });
+  }
+
+  async delete(request: Request): Promise<boolean> {
+    this.calls.push(`delete:${request.url}`);
+    return this.entries.delete(request.url);
   }
 }

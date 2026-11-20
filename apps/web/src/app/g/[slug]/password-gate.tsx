@@ -2,11 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useId, useRef, useState, type FormEvent } from 'react';
-
-const button =
-  'inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-6 font-medium text-white disabled:opacity-60';
-const input =
-  'min-h-11 w-full rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white px-3 text-base';
+import { Icon, buttonClass } from '@/components/ui';
 
 interface ErrorBody {
   error?: { code?: string; details?: { retryAfterSeconds?: unknown; challenge?: unknown } };
@@ -75,38 +71,43 @@ export function PasswordGate({ slug }: { slug: string }) {
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center gap-6 px-4 py-16">
-      <div className="flex flex-col gap-2">
-        <h1 className="font-[family-name:var(--font-display)] text-2xl font-semibold tracking-tight">
-          This gallery is password protected
-        </h1>
-        <p className="text-[var(--color-ink-muted)]">
-          Enter the password you were given to view the photos.
-        </p>
+    <main className="lm-gate">
+      <div className="lm-gate-icon">
+        <Icon name="lock" size={24} />
       </div>
-      <form onSubmit={onSubmit} noValidate className="flex flex-col gap-3">
-        <label htmlFor={inputId} className="text-sm font-medium">
-          Password
-        </label>
-        <input
-          ref={inputRef}
-          id={inputId}
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          autoFocus
-          maxLength={256}
-          required
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          aria-invalid={error ? true : undefined}
-          aria-describedby={error ? errorId : undefined}
-          className={input}
-        />
-        <p id={errorId} role="alert" aria-live="polite" className="min-h-5 text-sm text-red-700">
-          {error ?? ''}
-        </p>
-        <button type="submit" disabled={pending} className={button}>
+      <div className="flex flex-col items-center gap-2">
+        <h1 className="lm-title-display-sm">This gallery is password protected</h1>
+        <p className="lm-gate-body">Enter the password you were given to view the photos.</p>
+      </div>
+      <form
+        onSubmit={onSubmit}
+        noValidate
+        className="flex w-full max-w-[340px] flex-col gap-3 text-left"
+      >
+        <div className="lm-field">
+          <label htmlFor={inputId} className="lm-field-label">
+            Password
+          </label>
+          <input
+            ref={inputRef}
+            id={inputId}
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            autoFocus
+            maxLength={256}
+            required
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? errorId : undefined}
+            className="lm-input"
+          />
+          <p id={errorId} role="alert" aria-live="polite" className="lm-field-error min-h-[18px]">
+            {error ?? ''}
+          </p>
+        </div>
+        <button type="submit" disabled={pending} className={buttonClass('primary', 'lg', 'w-full')}>
           {pending ? 'Checking…' : 'View gallery'}
         </button>
       </form>

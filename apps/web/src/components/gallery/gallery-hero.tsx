@@ -1,11 +1,15 @@
 import { GALLERY_LIMITS } from '@lumra/config';
 import type { PublicGallery, PublicMediaItem } from '@lumra/contracts';
+import type { ReactNode } from 'react';
 import { selectCover } from '@lumra/domain';
+import { Icon } from '@/components/ui';
 import { altText, responsiveImageFor } from './media';
 
 export interface GalleryHeroProps {
   gallery: Pick<PublicGallery, 'title' | 'coverMediaId'>;
   items: readonly PublicMediaItem[];
+  /** Recipient actions shown beside the title (e.g. "Download all"). */
+  actions?: ReactNode;
 }
 
 /** Width used to choose the hero's fallback `src`; `srcset` lets the browser pick per screen. */
@@ -16,7 +20,7 @@ const HERO_SRC_WIDTH = 1280;
  * first ready photo by upload order (`selectCover`), else a neutral placeholder. Server-safe:
  * no hooks, no data fetching.
  */
-export function GalleryHero({ gallery, items }: GalleryHeroProps) {
+export function GalleryHero({ gallery, items, actions }: GalleryHeroProps) {
   const cover = selectCover(items, gallery.coverMediaId);
   const image = cover ? responsiveImageFor(cover, HERO_SRC_WIDTH) : null;
   const title = gallery.title.trim() || GALLERY_LIMITS.defaultTitle;
@@ -24,7 +28,7 @@ export function GalleryHero({ gallery, items }: GalleryHeroProps) {
 
   return (
     <header>
-      <div className="relative h-[min(68svh,760px)] min-h-56 w-full overflow-hidden bg-[var(--color-surface)]">
+      <div className="relative h-[62svh] max-h-[640px] min-h-[300px] w-full overflow-hidden bg-[var(--color-sunken)]">
         {cover && image ? (
           // Gateway URLs with their own srcset; next/image would proxy media through Vercel.
           // eslint-disable-next-line @next/next/no-img-element
@@ -44,17 +48,20 @@ export function GalleryHero({ gallery, items }: GalleryHeroProps) {
             role="img"
             aria-label="Cover photo not available yet"
             data-testid="hero-placeholder"
-            className="h-full w-full bg-gradient-to-br from-[var(--color-surface)] to-[var(--color-line)]"
-          />
+            className="flex h-full w-full items-center justify-center bg-[var(--color-sunken)] text-[var(--color-ink-muted)]"
+          >
+            <Icon name="image" size={28} />
+          </div>
         )}
       </div>
-      <div className="px-4 pt-8 pb-6 sm:px-6 sm:pt-12 sm:pb-8 lg:px-10">
-        <h1 className="max-w-5xl font-[family-name:var(--font-display)] text-4xl font-semibold tracking-tight text-balance break-words sm:text-6xl">
-          {title}
-        </h1>
-        <p className="mt-3 text-sm text-[var(--color-ink-muted)] sm:text-base">
-          {photoCount === 1 ? '1 photo' : `${photoCount.toLocaleString('en-US')} photos`}
-        </p>
+      <div className="mx-auto flex w-full max-w-[var(--content-max)] flex-wrap items-end justify-between gap-6 px-4 pt-6 pb-5 sm:px-8 sm:pt-12 sm:pb-8">
+        <div className="min-w-0">
+          <h1 className="lm-hero-title max-w-5xl text-balance break-words">{title}</h1>
+          <p className="lm-num mt-2 text-[15px] leading-[22px] text-[var(--color-ink-muted)] sm:text-[17px] sm:leading-[26px]">
+            {photoCount === 1 ? '1 photo' : `${photoCount.toLocaleString('en-US')} photos`}
+          </p>
+        </div>
+        {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
       </div>
     </header>
   );

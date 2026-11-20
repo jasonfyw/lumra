@@ -15,6 +15,7 @@ Email OTP and magic link only, through Supabase Auth and `@supabase/ssr`.
 | Session cookie refresh                  | `apps/web/src/proxy.ts` (Next 16 proxy, formerly middleware) |
 | `returnTo` / intent parsing             | `apps/web/src/lib/return-to.ts`                              |
 | Email templates                         | `infra/supabase/templates/*.html` (`config.toml`)            |
+| Apply templates to a hosted project     | `scripts/supabase-apply-email-templates.mjs`                 |
 
 - `signInWithOtp` sends one email with the code **and** a link. Its `emailRedirectTo` is
   `${NEXT_PUBLIC_APP_URL}/auth/confirm?returnTo=…[&intent=publish&galleryId=…]`.
@@ -27,7 +28,11 @@ Email OTP and magic link only, through Supabase Auth and `@supabase/ssr`.
 - Errors are shown in `role="alert"` and status text in an `aria-live` region. Supabase's error text
   is never shown. An invalid or expired link redirects to `/auth?error=link_invalid` and keeps the
   intent.
-- Resend has a 60 s cooldown in the UI, matching Supabase `max_frequency`. The profile and the Free
+- Resend has a 60 s cooldown in the UI, matching Supabase `max_frequency`, started after every
+  successful send. Rate-limited sends return `retryAfterSeconds` in the action state
+  (`lib/auth-rate-limit.ts`): N parsed from Supabase's "after N seconds" message, 60 s default for
+  `over_email_send_rate_limit`, the limiter's `Retry-After` window for `authOtpSend`, and 15 min
+  with an "about N minutes" message for project-wide limits. The send buttons count down. The profile and the Free
   billing account are created by the `handle_new_user` trigger on first sign-in.
 - **Rate limits (FR-A05):** the send and verify actions apply the app limiter (`lib/rate-limit.ts`)
   per client IP: `RATE_LIMITS.authOtpSend` (10/hour) and `authOtpVerify` (30 per 15 min). When
@@ -122,10 +127,36 @@ the guest capability cookie of the session that owns the draft. It runs as one t
 
 - Auth → URL configuration: set Site URL to `NEXT_PUBLIC_APP_URL` and allow
   `https://<app>/auth/confirm**` plus the preview URLs as redirects.
-- Auth → Email templates: paste `infra/supabase/templates/magic_link.html` into **Magic Link** and
-  **Confirm signup**. Without this, the email has no code and the link only works in the
-  requesting browser.
+- Auth → Email templates: apply the branded templates with the script (preferred; it reads the
+  subjects and files from `infra/supabase/config.toml`, so hosted and local never drift):
+
+  ```sh
+  export SUPABASE_ACCESS_TOKEN=sbp_...            # personal access token, never committed
+  node scripts/supabase-apply-email-templates.mjs --dry-run   # lists fields that would change
+  node scripts/supabase-apply-email-templates.mjs             # PATCH /v1/projects/{ref}/config/auth
+  ```
+
+  It sets `mailer_subjects_*` and `mailer_templates_*_content` for **Magic Link** and **Confirm
+  signup** only (the two emails `signInWithOtp` sends: existing and new users). Invite, recovery,
+  email change and reauthentication are not used (no passwords, no invites, no email-change UI) and
+  keep Supabase's defaults. Pass `--project-ref <ref>` or `SUPABASE_PROJECT_REF` for another
+  project. Pasting the HTML into the dashboard by hand also works. Without the templates the email
+  has no code and the link only works in the requesting browser.
+
+  Every template shows the 6-digit `{{ .Token }}`, a sign-in button
+  (`{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next={{ .RedirectTo }}`),
+  the 15-minute expiry and a "didn't request this" line. Subject:
+  `Your Lumra sign-in code: {{ .Token }}`. The first `href` in each file must stay the sign-in link
+  (the e2e suite reads it), and the copy ("6-digit", "15 minutes") must match `otp_length` and
+  `otp_expiry` in `config.toml`; `apps/web/src/app/auth/email-templates.test.ts` checks both.
+
 - Auth → Providers → Email: enable it, with no password sign-in. Set OTP length 6 and expiry
-  900 s, and configure a production SMTP provider. The built-in sender is rate-limited heavily and
-  is not meant for production.
+  900 s.
+- Auth → SMTP settings (production sender, **Resend**): enable custom SMTP with host
+  `smtp.resend.com`, port `465`, username `resend`, password = a Resend API key with "Sending
+  access" (use a dedicated key for Supabase, separate from the Worker's), sender email
+  `noreply@lumra.photos`, sender name `Lumra`. This is the same address the Worker uses for app
+  email (`Lumra <noreply@lumra.photos>`), so SPF/DKIM/DMARC for `lumra.photos` (verified in Resend)
+  cover both. The built-in Supabase sender is rate-limited heavily and not meant for production.
+  After enabling custom SMTP, raise Auth → Rate limits → emails per hour (default 30) to taste.
 - Auth → Rate limits: review the email-send and verify limits (FR-A05).

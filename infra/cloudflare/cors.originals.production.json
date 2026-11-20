@@ -2,7 +2,11 @@
   "rules": [
     {
       "allowed": {
-        "origins": ["https://lumra-ten.vercel.app"],
+        "origins": [
+          "https://www.lumra.photos",
+          "https://lumra.photos",
+          "https://lumra-ten.vercel.app"
+        ],
         "methods": ["PUT", "HEAD"],
         "headers": ["content-type"]
       },

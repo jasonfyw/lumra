@@ -104,16 +104,28 @@ export function createKvGalleryAccessStore(
 
 export type GalleryAccessDecision = 'allow' | 'not_found' | 'revoked' | 'expired' | 'suspended';
 
-/** Pure authorization rule applied by the gateway after token verification. */
+/**
+ * Pure authorization rule applied by the gateway after token verification.
+ *
+ * `ownerPreview` is set only for verified `preview` tokens with `scope: 'owner'`, which the web
+ * app mints solely for the authenticated owner's editor (ADR-001 "Owner previews"). Those also
+ * load while the gallery is a draft (drafts have no KV document) or expired, so the creator can
+ * manage it. Deletion (tombstone), any `access_version` mismatch and delivery suspension deny
+ * them exactly like recipient tokens.
+ */
 export function evaluateGalleryAccess(
   state: GalleryAccessState | null,
   tokenAccessVersion: number,
   now: Date,
+  options: { ownerPreview?: boolean } = {},
 ): GalleryAccessDecision {
-  if (!state || state.deleted) return 'not_found';
+  const owner = options.ownerPreview === true;
+  if (!state) return owner ? 'allow' : 'not_found';
+  if (state.deleted) return 'not_found';
   // Any mismatch denies: lower = revoked (password change), higher = KV not yet updated.
   if (state.accessVersion !== tokenAccessVersion) return 'revoked';
-  if (state.expiresAt !== null && Date.parse(state.expiresAt) <= now.getTime()) return 'expired';
+  const expired = state.expiresAt !== null && Date.parse(state.expiresAt) <= now.getTime();
+  if (expired && !owner) return 'expired';
   if (state.deliverySuspended) return 'suspended';
   return 'allow';
 }

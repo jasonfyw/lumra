@@ -2,6 +2,8 @@ import { publicGalleryResponseSchema } from '@lumra/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makeGalleryFixture } from './gallery/fixture';
 import DevGalleryPage from './gallery/page';
+import DevArchivePage from './archive/page';
+import { ARCHIVE_FIXTURE_STATES, makeArchiveFixture } from './archive/fixture';
 import { GET } from './placeholder/[w]/[h]/route';
 
 const ctx = (w: string, h: string) => ({ params: Promise.resolve({ w, h }) });
@@ -67,5 +69,22 @@ describe('dev gallery page', () => {
     const ratios = fixture.items.map((item) => (item.width ?? 3) / (item.height ?? 2));
     expect(Math.max(...ratios)).toBeGreaterThanOrEqual(3); // panoramas
     expect(Math.min(...ratios)).toBeLessThan(1); // portraits
+  });
+});
+
+describe('dev archive page (T25)', () => {
+  it('is 404 in production', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    await expect(DevArchivePage({ searchParams: Promise.resolve({}) })).rejects.toThrow();
+  });
+
+  it('builds a contract-valid fixture for every state', () => {
+    for (const state of ARCHIVE_FIXTURE_STATES) {
+      const fixture = makeArchiveFixture(state, 3);
+      expect(fixture.status).toBe(state);
+      expect(
+        fixture.parts.every((p) => (p.downloadUrl !== undefined) === (state === 'ready')),
+      ).toBe(true);
+    }
   });
 });

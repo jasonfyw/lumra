@@ -1,16 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RATE_CARD_V1 } from '@lumra/config';
 import { DEADLINES } from './deadline';
 import worker, {
+  DELETION_SWEEP_CRON,
   OUTBOX_RELAY_CRON,
   RELAY_KICK_PATH,
+  STORAGE_ACCRUAL_CRON,
+  ARCHIVE_SWEEP_CRON,
   createWorker,
   handlers,
+  jobDeadlineMs,
   retryDelaySeconds,
   timeoutRetryDelaySeconds,
   sentryOptions,
   type Env,
   type JobHandler,
 } from './index';
+import { RetryLaterError } from './handlers/archive-build';
 import type { Services } from './services';
 
 function fakeMessage(body: unknown, attempts = 1) {
@@ -80,6 +86,13 @@ function fakeServices(claimBatches: number) {
     markFailed: vi.fn(async () => {}),
   };
   const close = vi.fn(async () => {});
+  // Billing state with nothing to do (no past-due / Pro accounts).
+  const billingState = {
+    safeguardContexts: vi.fn(async () => []),
+    recordSpendAlerts: vi.fn(async () => []),
+    sweepCandidates: vi.fn(async () => []),
+    applySweep: vi.fn(async () => true),
+  } as unknown as ReturnType<Services['billingStateRepo']>;
   const services = {
     outboxRepo: () => outbox,
     mediaRepo: () => {
@@ -91,6 +104,22 @@ function fakeServices(claimBatches: number) {
     accessStateRepo: () => {
       throw new Error('unused');
     },
+    accountContactRepo: () => {
+      throw new Error('unused');
+    },
+    archiveRepo: () => {
+      throw new Error('unused');
+    },
+    billingRepo: () => {
+      throw new Error('unused');
+    },
+    billingStateRepo: () => billingState,
+    meterExportRepo: () => {
+      throw new Error('unused');
+    },
+    deletionRepo: () => {
+      throw new Error('unused');
+    },
     close,
   } as Services;
   return { services, outbox, close };
@@ -99,6 +128,35 @@ function fakeServices(claimBatches: number) {
 describe('queue consumer', () => {
   it('registers the media.uploaded handler (T12)', () => {
     expect(handlers['media.uploaded']).toBeTypeOf('function');
+  });
+
+  it('registers email.send (T33) so notices are acked, not dropped as unhandled', () => {
+    expect(handlers['email.send']).toBeTypeOf('function');
+  });
+
+  it('registers archive.build (T24) with the long archive deadline', () => {
+    expect(handlers['archive.build']).toBeTypeOf('function');
+    expect(jobDeadlineMs('archive.build')).toBe(DEADLINES.archiveJobMs);
+    expect(jobDeadlineMs('media.uploaded')).toBe(DEADLINES.jobMs);
+    expect(DEADLINES.archiveJobMs).toBeLessThan(15 * 60_000);
+  });
+
+  it('defers a RetryLaterError with its own delay and passes the attempt number', async () => {
+    let seenAttempt = 0;
+    const handler = vi.fn().mockImplementation(async (_m, { attempt }) => {
+      seenAttempt = attempt;
+      throw new RetryLaterError(900, 'lease held');
+    });
+    const msg = fakeMessage({
+      type: 'archive.build',
+      jobId: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',
+      traceId: 'req-1',
+      dedupeKey: 'archive.build:9a8b7c6d',
+    });
+    await withHandler('archive.build', handler, () => worker.queue(batchOf(msg), env, ctx));
+    expect(seenAttempt).toBe(msg.attempts);
+    expect(msg.retry).toHaveBeenCalledWith({ delaySeconds: 900 });
+    expect(msg.ack).not.toHaveBeenCalled();
   });
 
   it('acks poison messages instead of retrying forever', async () => {
@@ -158,20 +216,72 @@ describe('queue consumer', () => {
     expect(retryDelaySeconds(10)).toBe(900);
   });
 
-  it('retries messages with no registered handler with a fixed delay (→ DLQ, no hot loop)', async () => {
+  it('registers the deletion handlers (T13)', () => {
+    expect(handlers['media.delete']).toBeTypeOf('function');
+    expect(handlers['gallery.delete']).toBeTypeOf('function');
+  });
+
+  it('purges a media.delete message end to end and acks it', async () => {
+    const mediaId = '0b6f3c2e-8a51-4c1e-9d7a-2f4b5c6d7e8f';
+    const galleryId = '1c7f4d3f-9b62-4d2f-8e8b-3a5c6d7e8f90';
+    const repo = {
+      getMediaForPurge: vi.fn(async () => [
+        {
+          id: mediaId,
+          galleryId,
+          status: 'deleting',
+          originalKey: `originals/owner-12345678/${galleryId}/${mediaId}/source`,
+          mediaDeleted: true,
+          galleryDeleted: false,
+          variantKeys: [`derivatives/${galleryId}/${mediaId}/w640q80.webp`],
+        },
+      ]),
+      markMediaDeleted: vi.fn(async (ids: string[]) => ids),
+    };
+    const { services } = fakeServices(0);
+    services.deletionRepo = () => repo as unknown as ReturnType<Services['deletionRepo']>;
+    const originals = { delete: vi.fn(async () => {}) };
+    const derivatives = { delete: vi.fn(async () => {}) };
+    const w = createWorker({ createServices: () => services });
     const msg = fakeMessage({
       type: 'media.delete',
-      mediaId: '0b6f3c2e-8a51-4c1e-9d7a-2f4b5c6d7e8f',
-      traceId: 'req-3',
-      dedupeKey: 'media.delete:0b6f',
+      mediaId,
+      traceId: 'req-9',
+      dedupeKey: `media.delete:${mediaId}`,
     });
-    expect(handlers['media.delete']).toBeUndefined();
-    await worker.queue(batchOf(msg), env, ctx);
-    expect(msg.retry).toHaveBeenCalledWith({ delaySeconds: 60 });
-    expect(msg.ack).not.toHaveBeenCalled();
-    expect(events().find((e) => e.msg === 'no handler registered')).toMatchObject({
-      level: 'warn',
+    await w.queue(
+      batchOf(msg),
+      { ORIGINALS: originals, DERIVATIVES: derivatives, ARCHIVES: {} } as unknown as Env,
+      ctx,
+    );
+    expect(msg.ack).toHaveBeenCalledOnce();
+    expect(originals.delete).toHaveBeenCalledWith([
+      `originals/owner-12345678/${galleryId}/${mediaId}/source`,
+    ]);
+    expect(derivatives.delete).toHaveBeenCalledOnce();
+    expect(repo.markMediaDeleted).toHaveBeenCalledWith([mediaId]);
+    const finished = events().find((e) => e.msg === 'media purge finished');
+    expect(finished).toMatchObject({ mediaId, purged: 1, objectKeys: 2 });
+    // Logs carry ids and counts only, never object keys.
+    expect(lines.join('\n')).not.toContain('originals/');
+  });
+
+  it('acks (drops) valid messages with no registered handler instead of retrying into the DLQ', async () => {
+    const msg = fakeMessage({
+      type: 'guest.expire',
+      guestSessionId: '0b6f3c2e-8a51-4c1e-9d7a-2f4b5c6d7e8f',
       traceId: 'req-3',
+      dedupeKey: 'guest.expire:0b6f',
+    });
+    expect(handlers['guest.expire']).toBeUndefined();
+    await worker.queue(batchOf(msg), env, ctx);
+    expect(msg.ack).toHaveBeenCalledOnce();
+    expect(msg.retry).not.toHaveBeenCalled();
+    expect(events().find((e) => e.msg === 'no handler registered; message dropped')).toMatchObject({
+      level: 'error',
+      traceId: 'req-3',
+      type: 'guest.expire',
+      dedupeKey: 'guest.expire:0b6f',
     });
   });
 });
@@ -231,11 +341,109 @@ describe('scheduled outbox relay', () => {
     expect(clock).toBeGreaterThan(40_000);
   });
 
-  it('ignores other crons (T13)', async () => {
-    const { services, outbox } = fakeServices(1);
+  it('runs the storage accrual for its hourly cron (T27) and closes the pool', async () => {
+    const { services, outbox, close } = fakeServices(0);
+    const repo = {
+      storageAccrualCandidates: vi.fn(async () => []),
+      storageByteSecondsToDate: vi.fn(),
+      commitStorageAccrual: vi.fn(),
+      plans: { getCurrent: vi.fn(async () => RATE_CARD_V1.free) },
+    };
+    services.billingRepo = () => repo as unknown as ReturnType<Services['billingRepo']>;
     const w = createWorker({ createServices: () => services });
-    await w.scheduled({ cron: '*/15 * * * *' } as ScheduledController, {} as Env);
+    await w.scheduled({ cron: STORAGE_ACCRUAL_CRON } as ScheduledController, {} as Env);
+    expect(repo.storageAccrualCandidates).toHaveBeenCalledTimes(1);
     expect(outbox.claim).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    expect(events().some((e) => e.msg === 'storage accrual finished')).toBe(true);
+    expect(events().some((e) => e.msg === 'billing sweep finished')).toBe(true);
+  });
+
+  it('runs the deletion sweep on its */15 cron (T13) and closes the pool', async () => {
+    const { services, outbox, close } = fakeServices(1);
+    const repo = {
+      listStuckGalleries: vi.fn(async () => []),
+      listStuckMedia: vi.fn(async () => []),
+    };
+    services.deletionRepo = () => repo as unknown as ReturnType<Services['deletionRepo']>;
+    services.archiveRepo = () =>
+      ({
+        expireDue: vi.fn(async () => []),
+        failStalled: vi.fn(async () => 0),
+      }) as unknown as ReturnType<Services['archiveRepo']>;
+    const w = createWorker({
+      createServices: () => services,
+      now: () => Date.parse('2026-11-11T12:00:00Z'),
+    });
+    expect(DELETION_SWEEP_CRON).toBe('*/15 * * * *');
+    const bucket = { delete: vi.fn(), list: vi.fn() };
+    await w.scheduled(
+      { cron: DELETION_SWEEP_CRON } as ScheduledController,
+      {
+        ORIGINALS: bucket,
+        DERIVATIVES: bucket,
+        ARCHIVES: bucket,
+      } as unknown as Env,
+    );
+    expect(repo.listStuckGalleries).toHaveBeenCalledWith(new Date('2026-11-11T11:00:00Z'), 10);
+    expect(repo.listStuckMedia).toHaveBeenCalledOnce();
+    expect(outbox.claim).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    expect(events().find((e) => e.msg === 'deletion sweep finished')).toMatchObject({
+      galleries: 0,
+      purged: 0,
+    });
+  });
+
+  it('runs the archive sweep on the same 15-minute tick (T25), even if the deletion sweep fails', async () => {
+    const { services, outbox, close } = fakeServices(1);
+    const repo = { expireDue: vi.fn(async () => []), failStalled: vi.fn(async () => 0) };
+    services.archiveRepo = () => repo as unknown as ReturnType<Services['archiveRepo']>;
+    services.deletionRepo = () =>
+      ({
+        listStuckGalleries: vi.fn(async () => {
+          throw new Error('db down');
+        }),
+        listStuckMedia: vi.fn(async () => []),
+      }) as unknown as ReturnType<Services['deletionRepo']>;
+    const w = createWorker({ createServices: () => services });
+    expect(ARCHIVE_SWEEP_CRON).toBe(DELETION_SWEEP_CRON);
+    const bucket = { delete: vi.fn(), list: vi.fn() };
+    await expect(
+      w.scheduled(
+        { cron: ARCHIVE_SWEEP_CRON } as ScheduledController,
+        { ORIGINALS: bucket, DERIVATIVES: bucket, ARCHIVES: bucket } as unknown as Env,
+      ),
+    ).rejects.toThrow('db down');
+    expect(events().some((e) => e.msg === 'deletion sweep failed')).toBe(true);
+    expect(repo.expireDue).toHaveBeenCalledTimes(1);
+    expect(repo.failStalled).toHaveBeenCalledTimes(1);
+    expect(outbox.claim).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    expect(events().some((e) => e.msg === 'archive sweep finished')).toBe(true);
+  });
+
+  it('runs the daily meter export on the nightly cron; skipped without a Stripe key (T31)', async () => {
+    const { services, outbox, close } = fakeServices(1);
+    const repo = { exportPeriods: vi.fn(async () => []), unsent: vi.fn(async () => []) };
+    services.meterExportRepo = () => repo as unknown as ReturnType<Services['meterExportRepo']>;
+    services.billingRepo = () =>
+      ({ plans: { getRates: vi.fn() } }) as unknown as ReturnType<Services['billingRepo']>;
+    const w = createWorker({ createServices: () => services });
+    await w.scheduled({ cron: '17 3 * * *' } as ScheduledController, {} as Env);
+    expect(outbox.claim).not.toHaveBeenCalled();
+    expect(repo.exportPeriods).not.toHaveBeenCalled();
+    expect(events().some((e) => e.msg === 'meter export skipped: STRIPE_SECRET_KEY not set')).toBe(
+      true,
+    );
+    await w.scheduled(
+      { cron: '17 3 * * *' } as ScheduledController,
+      {
+        STRIPE_SECRET_KEY: 'sk_test_x',
+      } as Env,
+    );
+    expect(repo.exportPeriods).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalled();
   });
 });
 

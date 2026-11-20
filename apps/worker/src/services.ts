@@ -1,9 +1,21 @@
 import {
   createAccessStateRepository,
+  createAccountContactRepository,
+  createArchiveRepository,
+  createBillingRepository,
+  createBillingStateRepository,
+  createDeletionRepository,
+  createMeterExportRepository,
   createMediaPipelineRepository,
   createOutboxRepository,
   createSqlClient,
   type AccessStateRepository,
+  type AccountContactRepository,
+  type ArchiveRepository,
+  type BillingRepository,
+  type BillingStateRepository,
+  type DeletionRepository,
+  type MeterExportRepository,
   type MediaPipelineRepository,
   type OutboxRepository,
 } from '@lumra/db';
@@ -19,6 +31,18 @@ export interface Services {
   mediaRepo(): MediaPipelineRepository;
   outboxRepo(): OutboxRepository;
   accessStateRepo(): AccessStateRepository;
+  /** Recipient lookup for `email.send` (address read at send time, never queued). */
+  accountContactRepo(): AccountContactRepository;
+  /** Archive jobs/parts for `archive.build` and the archive sweep (T24/T25). */
+  archiveRepo(): ArchiveRepository;
+  /** Rate card, usage ledger and metering reads/writes (T27). */
+  billingRepo(): BillingRepository;
+  /** Spend-cap alerts + hourly billing sweep (T32/T33). */
+  billingStateRepo(): BillingStateRepository;
+  /** Stripe meter export cursors and stored events (T31). */
+  meterExportRepo(): MeterExportRepository;
+  /** Physical deletion: purge reads/marks and the backstop sweep (T13). */
+  deletionRepo(): DeletionRepository;
   /**
    * Processor client. `slot` pins the container instance (0..PROCESSOR_POOL_SIZE-1) so the
    * concurrent jobs of one batch never share an instance (`processor_busy`); without it the
@@ -91,6 +115,12 @@ export function createServices(env: Env): Services {
     mediaRepo: () => createMediaPipelineRepository(db()),
     outboxRepo: () => createOutboxRepository(db()),
     accessStateRepo: () => createAccessStateRepository(db()),
+    accountContactRepo: () => createAccountContactRepository(db()),
+    archiveRepo: () => createArchiveRepository(db()),
+    billingRepo: () => createBillingRepository(db()),
+    billingStateRepo: () => createBillingStateRepository(db()),
+    meterExportRepo: () => createMeterExportRepository(db()),
+    deletionRepo: () => createDeletionRepository(db()),
     processor: (slot) => {
       let client = processors.get(slot);
       if (!client) {

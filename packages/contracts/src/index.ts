@@ -1,5 +1,7 @@
 export * from './access-state';
+export * from './account';
 export * from './api';
+export * from './archive';
 export * from './gallery';
 export * from './gallery-editor';
 export * from './guest';
@@ -9,3 +11,4 @@ export * from './queue';
 export * from './upload';
 export * from './public-gallery';
 export * from './processor';
+export * from './billing';

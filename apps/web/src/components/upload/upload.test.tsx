@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { UploadEngine, type UploadItemSnapshot, type UploadSnapshot } from '@/lib/upload';
 import { FakeLumra, photo, readPrefix, uuid } from '@/lib/upload/test-fakes';
-import { UploadList, summarize } from './upload-list';
+import { UploadToast, summarize } from './upload-list';
 import { UploadZone } from './upload-zone';
 
 function item(overrides: Partial<UploadItemSnapshot>): UploadItemSnapshot {
@@ -98,7 +98,7 @@ describe('UploadZone', () => {
   });
 });
 
-describe('UploadList', () => {
+describe('UploadToast', () => {
   it('renders per-file status, total progress and actions', async () => {
     const user = userEvent.setup();
     const onRetry = vi.fn();
@@ -120,7 +120,7 @@ describe('UploadList', () => {
       percent: 50,
     });
     render(
-      <UploadList
+      <UploadToast
         snapshot={snapshotOf([failed, uploading])}
         onRetry={onRetry}
         onCancel={onCancel}
@@ -156,21 +156,21 @@ describe('UploadList', () => {
         onRemove: vi.fn(),
         announceIntervalMs: 3000,
       };
-      const { rerender } = render(<UploadList snapshot={snapshotOf([a])} {...props} />);
+      const { rerender } = render(<UploadToast snapshot={snapshotOf([a])} {...props} />);
       const live = screen.getByTestId('upload-announcer');
       expect(live).toHaveAttribute('aria-live', 'polite');
       expect(live).toHaveTextContent('Uploading: 0 of 1 photos done, 10% overall.');
 
       act(() => vi.advanceTimersByTime(3000));
       rerender(
-        <UploadList
+        <UploadToast
           snapshot={snapshotOf([{ ...a, percent: 40, bytesUploaded: 800_000 }])}
           {...props}
         />,
       );
       expect(live).toHaveTextContent('40% overall');
       rerender(
-        <UploadList
+        <UploadToast
           snapshot={snapshotOf([{ ...a, percent: 60, bytesUploaded: 1_200_000 }])}
           {...props}
         />,
@@ -180,7 +180,7 @@ describe('UploadList', () => {
       expect(live).toHaveTextContent('60% overall');
 
       rerender(
-        <UploadList
+        <UploadToast
           snapshot={snapshotOf([{ ...a, state: 'uploaded', bytesUploaded: a.size }])}
           {...props}
         />,
@@ -190,6 +190,106 @@ describe('UploadList', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe('floating toast states', () => {
+    const noop = { onRetry: vi.fn(), onCancel: vi.fn(), onRemove: vi.fn() };
+    const uploadedBytes = (i: UploadItemSnapshot) => ({ ...i, bytesUploaded: i.size });
+
+    it('collapses to a summary row that expands to the per-file list', async () => {
+      const user = userEvent.setup();
+      const items = [
+        item({ name: 'a.jpg', state: 'ready', bytesUploaded: 2_000_000 }),
+        item({ name: 'b.jpg', state: 'uploading', bytesUploaded: 500_000, percent: 25 }),
+        item({ name: 'c.jpg', state: 'queued' }),
+      ];
+      render(<UploadToast snapshot={snapshotOf(items)} {...noop} />);
+      const toggle = screen.getByRole('button', { name: 'Uploading 1 of 3…' });
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByText('b.jpg')).not.toBeInTheDocument();
+      expect(screen.getByRole('progressbar', { name: 'Total upload progress' })).toBeVisible();
+      // No close button while work is in flight.
+      expect(screen.queryByRole('button', { name: 'Close upload status' })).not.toBeInTheDocument();
+
+      await user.click(toggle);
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByText('b.jpg')).toBeInTheDocument();
+    });
+
+    it('shows processing, then a done state with a focusable close button', async () => {
+      const user = userEvent.setup();
+      const a = uploadedBytes(item({ name: 'a.jpg', state: 'processing' }));
+      const { rerender } = render(
+        <UploadToast snapshot={snapshotOf([a])} autoDismissMs={0} {...noop} />,
+      );
+      expect(screen.getByRole('button', { name: 'Processing 1 photo…' })).toBeVisible();
+      expect(screen.queryByRole('button', { name: 'Close upload status' })).not.toBeInTheDocument();
+
+      rerender(
+        <UploadToast
+          snapshot={snapshotOf([{ ...a, state: 'ready' }])}
+          autoDismissMs={0}
+          {...noop}
+        />,
+      );
+      expect(screen.getByRole('button', { name: 'All 1 photo uploaded' })).toBeVisible();
+      const close = screen.getByRole('button', { name: 'Close upload status' });
+      close.focus();
+      expect(close).toHaveFocus();
+      await user.click(close);
+      expect(screen.queryByRole('region', { name: 'Uploads' })).not.toBeInTheDocument();
+    });
+
+    it('dismisses itself a few seconds after finishing without errors', () => {
+      vi.useFakeTimers();
+      try {
+        const done = uploadedBytes(item({ state: 'ready' }));
+        render(<UploadToast snapshot={snapshotOf([done])} autoDismissMs={4000} {...noop} />);
+        expect(screen.getByRole('region', { name: 'Uploads' })).toBeVisible();
+        act(() => vi.advanceTimersByTime(3900));
+        expect(screen.getByRole('region', { name: 'Uploads' })).toBeVisible();
+        act(() => vi.advanceTimersByTime(200));
+        expect(screen.queryByRole('region', { name: 'Uploads' })).not.toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('stays open with errors, expanded, and never auto-dismisses', () => {
+      vi.useFakeTimers();
+      try {
+        const failed = item({
+          name: 'bad.jpg',
+          state: 'failed',
+          error: { code: 'upload_interrupted', message: 'Upload interrupted.', retryable: true },
+        });
+        render(
+          <UploadToast
+            snapshot={snapshotOf([uploadedBytes(item({ state: 'ready' })), failed])}
+            autoDismissMs={1000}
+            {...noop}
+          />,
+        );
+        expect(screen.getByRole('button', { name: '1 upload needs attention' })).toBeVisible();
+        expect(screen.getByRole('button', { name: 'Retry bad.jpg' })).toBeVisible();
+        act(() => vi.advanceTimersByTime(10_000));
+        expect(screen.getByRole('region', { name: 'Uploads' })).toBeVisible();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a new batch after closing starts a fresh toast', async () => {
+      const user = userEvent.setup();
+      const first = uploadedBytes(item({ name: 'old.jpg', state: 'ready' }));
+      const { rerender } = render(
+        <UploadToast snapshot={snapshotOf([first])} autoDismissMs={0} {...noop} />,
+      );
+      await user.click(screen.getByRole('button', { name: 'Close upload status' }));
+      const next = item({ name: 'new.jpg', state: 'uploading', bytesUploaded: 1, percent: 1 });
+      rerender(<UploadToast snapshot={snapshotOf([first, next])} autoDismissMs={0} {...noop} />);
+      expect(screen.getByRole('button', { name: 'Uploading 0 of 1…' })).toBeVisible();
+    });
   });
 
   it('summarizes failures and files waiting to be reselected', () => {
@@ -225,7 +325,7 @@ describe('UploadZone + engine', () => {
       return (
         <>
           <UploadZone onFiles={(files) => engine.addFiles(files)} />
-          <UploadList snapshot={snap} onRetry={vi.fn()} onCancel={vi.fn()} onRemove={vi.fn()} />
+          <UploadToast snapshot={snap} onRetry={vi.fn()} onCancel={vi.fn()} onRemove={vi.fn()} />
         </>
       );
     }
@@ -233,6 +333,7 @@ describe('UploadZone + engine', () => {
     await user.upload(screen.getByTestId('upload-input'), [photo('a.jpg', 1000)]);
     await vi.waitFor(() => expect(engine.getSnapshot().items[0]?.state).toBe('uploaded'));
     rerender(<Harness />);
+    await user.click(screen.getByRole('button', { name: /Processing 1 photo/ }));
     expect(screen.getByText('Uploaded · processing soon')).toBeInTheDocument();
     engine.dispose();
   });

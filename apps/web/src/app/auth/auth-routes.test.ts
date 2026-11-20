@@ -184,7 +184,7 @@ describe('auth server actions', () => {
       error: { status: 429, code: 'over_email_send_rate_limit', message: 'internal detail' },
     });
     const limited = await sendOtpAction(state, form({ email: 'a@b.co' }));
-    expect(limited.error).toMatch(/Too many/);
+    expect(limited.error).toMatch(/You can request a new code in \d+s/);
     expect(limited.error).not.toContain('internal detail');
 
     const codeState = { ...state, step: 'code' as const, email: 'a@b.co' };
@@ -223,6 +223,7 @@ describe('auth server actions', () => {
     auth.limited = 'authOtpSend';
     const send = await sendOtpAction(state, form({ email: 'a@b.co' }));
     expect(send.error).toMatch(/Too many sign-in emails/);
+    expect(send.retryAfterSeconds).toBe(60);
     expect(auth.signInWithOtp).not.toHaveBeenCalled();
     auth.limited = 'authOtpVerify';
     const verify = await verifyOtpAction(
@@ -231,6 +232,19 @@ describe('auth server actions', () => {
     );
     expect(verify.error).toMatch(/Too many attempts/);
     expect(auth.verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it('maps a Supabase per-address 429 to a countdown', async () => {
+    auth.signInWithOtp.mockResolvedValueOnce({
+      error: {
+        status: 429,
+        code: 'over_email_send_rate_limit',
+        message: 'For security purposes, you can only request this after 45 seconds.',
+      },
+    });
+    const res = await sendOtpAction(state, form({ email: 'a@b.co' }));
+    expect(res.error).toBe('You can request a new code in 45s.');
+    expect(res.retryAfterSeconds).toBe(45);
   });
 
   it('degrades gracefully without Supabase env', async () => {

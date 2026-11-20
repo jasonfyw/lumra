@@ -98,6 +98,24 @@ describe('PublicGallery', () => {
     expect(calls.filter((c) => c.endsWith('?urls=0')).length).toBe(before);
   });
 
+  it('shows "Download all" only once a photo is ready (T25)', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(json({ expiresAt: new Date().toISOString(), items: [], missing: [] })),
+    );
+    const { unmount } = render(
+      <PublicGallery slug="abc" initial={{ gallery, items: [pending(1)] }} />,
+    );
+    expect(document.querySelector('button.lm-btn-primary')).toBeNull();
+    unmount();
+    render(<PublicGallery slug="abc" initial={{ gallery, items: [ready(1), pending(2)] }} />);
+    expect(
+      Array.from(document.querySelectorAll('button')).some((b) => b.textContent === 'Download all'),
+    ).toBe(true);
+  });
+
   it('refreshes the route when the gallery expires mid-visit', async () => {
     vi.stubGlobal(
       'fetch',

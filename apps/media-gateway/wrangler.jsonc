@@ -17,8 +17,6 @@
   // Gallery access state (`gallery:{id}`), written by the web app (ADR-001). Namespace ids are
   // provisioned on first deploy / filled in by T38; local dev uses a Miniflare namespace.
   "kv_namespaces": [{ "binding": "ACCESS_STATE" }],
-  // `delivery.served` usage events; consumed by usage-ledger ingestion (T27).
-  "queues": { "producers": [{ "binding": "USAGE", "queue": "lumra-usage-dev" }] },
   // Secrets (set with `wrangler secret put`):
   //   MEDIA_TOKEN_SECRET — verification keyring `kid:secret[,kid:secret]` (ADR-001); local dev
   //                        reads it from `.dev.vars`.
@@ -35,18 +33,33 @@
         { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives-staging" },
       ],
       "kv_namespaces": [{ "binding": "ACCESS_STATE" }],
-      "queues": { "producers": [{ "binding": "USAGE", "queue": "lumra-usage-staging" }] },
     },
     "production": {
-      // Served on the Worker's workers.dev URL; no custom media domain while on vercel.app.
-      "vars": { "APP_ORIGIN": "https://lumra-ten.vercel.app" },
+      // Canonical app origin is www.lumra.photos (apex 308s to www); lumra-ten.vercel.app is kept
+      // during the domain transition.
+      //
+      // Served on the Workers custom domain media.lumra.photos (jasonfyw/lumra#83), where the
+      // Cache API works and previews are edge-cached after authorization (ADR-001). Deploying this
+      // requires the `lumra.photos` zone to be ACTIVE on Cloudflare (nameservers switched);
+      // `wrangler deploy --env production` fails while the zone is pending. Wrangler creates the
+      // proxied DNS record and certificate for the custom domain itself — do not add one by hand.
+      // workers_dev stays on during the transition so already-issued workers.dev URLs keep working
+      // (no edge cache there: X-Lumra-Cache: BYPASS). Turn it off once NEXT_PUBLIC_MEDIA_URL points
+      // at media.lumra.photos everywhere.
+      //
+      // Never enable Workers Caching (`"cache": { "enabled": true }`): it caches in front of the
+      // Worker and would serve media without authorization.
+      "routes": [{ "pattern": "media.lumra.photos", "custom_domain": true }],
+      "workers_dev": true,
+      "vars": {
+        "APP_ORIGIN": "https://www.lumra.photos,https://lumra.photos,https://lumra-ten.vercel.app",
+      },
       "r2_buckets": [
         { "binding": "ORIGINALS", "bucket_name": "lumra-originals" },
         { "binding": "DERIVATIVES", "bucket_name": "lumra-derivatives" },
         { "binding": "ARCHIVES", "bucket_name": "lumra-temp-archives" },
       ],
       "kv_namespaces": [{ "binding": "ACCESS_STATE", "id": "411b68f7b8da4404ac02dc09ca186ecd" }],
-      "queues": { "producers": [{ "binding": "USAGE", "queue": "lumra-usage" }] },
     },
   },
 }

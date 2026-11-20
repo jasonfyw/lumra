@@ -5,9 +5,11 @@ Filled in as the relevant systems land (T13, T38). Each runbook: symptom → das
 - [x] [Queue backlog > 30 min / DLQ growth (T12)](#queue-backlog--dead-letter-queue)
 - [ ] Upload finalize error rate > 2% (T10)
 - [x] [Gallery access state out of sync / gateway 403s (T20)](#gallery-access-state-kv-sync-t20)
+- [x] [Deleted media / galleries not purged from R2 (T13)](#physical-deletion-purge-t13)
 - [ ] Media gateway 5xx > 1% for 10 min (T20)
-- [ ] Stripe webhook unresolved > 15 min (T29)
-- [ ] Billed vs provider consumption drift > 10% (T31)
+- [x] [Stripe webhook unresolved > 15 min / billing state (T29–T33)](#stripe-webhooks-and-billing-state-t29t33)
+- [x] [Billed vs internal drift > 10% / meter export failures (T31)](#meter-export-and-reconciliation-t31)
+- [x] [Viral / scraped gallery serving cost (no delivery cap, ADR-008)](#viral--scraped-gallery-serving-cost-adr-008)
 - [ ] Suspected unauthorized disclosure — P1 incident (T34)
 - [ ] Database restore from PITR (T37)
 - [ ] Disable uploads / checkout via feature flag; read-only mode (T38)
@@ -18,10 +20,33 @@ See [AUTH.md](AUTH.md) for the flow, the hosted Supabase email-template and redi
 the manual QA script.
 
 - Users report "no code in the email" or "link only works on one device": the hosted project is
-  still using Supabase's default templates. Paste `infra/supabase/templates/magic_link.html` (AUTH.md).
+  still using Supabase's default templates. Run `node scripts/supabase-apply-email-templates.mjs` (AUTH.md).
+- Sign-in emails not arriving or rate-limited: check Supabase Auth → SMTP (Resend, `smtp.resend.com`:465,
+  user `resend`, sender `noreply@lumra.photos`) and the Resend dashboard → Logs. The SMTP key is a
+  separate Resend API key from the Worker's `RESEND_API_KEY`.
 - Claims refused: grep logs for `guest claim refused` and its `reason`
   (`no_capability` = a different browser, `session_expired`, `capability_mismatch`). The client
   always sees a 404.
+
+## Application email (Resend, `email.send`)
+
+Billing notices and spend-cap alerts go out from the worker through Resend (BILLING.md
+"Notifications"). Sender `Lumra <noreply@lumra.photos>` on the verified `lumra.photos` domain.
+
+- **Set up / rotate the key:** create a Resend API key with sending access restricted to
+  `lumra.photos`, then `wrangler secret put RESEND_API_KEY --env production` (run from
+  `apps/worker`; no redeploy needed for a secret change). Optional vars `EMAIL_FROM`,
+  `EMAIL_REPLY_TO`, `APP_URL` go in the worker's `vars` or `--var`.
+- **Nothing is sent:** grep worker logs for `email not sent: RESEND_API_KEY not set` (secret
+  missing), `email not sent: account has no address` (empty `profiles.email`), `email rejected by
+provider` (4xx: `status`/`reason` say why, e.g. `validation_error`, `invalid_from_address`, 401/403
+  bad key or unverified domain) and `email delivery will be retried` (429/5xx; the queue retries,
+  then the DLQ). Confirm in Resend dashboard → Logs / Emails by the idempotency key
+  (`email:<template>:<account>:<instant>`).
+- **Replay:** emails sent before the key existed were acked and not queued again. Re-enqueue by
+  resetting the `job_outbox` row (same dedupe key) only if the notice is still relevant; the
+  `Idempotency-Key` prevents double sends within 24 h.
+- **Never** log or paste recipient addresses or the key into tickets; use the account id.
 
 ## Gallery access state (KV sync, T20)
 
@@ -76,9 +101,11 @@ all sessions of a gallery by bumping `galleries.access_version` (+ enqueue the K
 - `media_variants`. Failed jobs retry with exponential backoff (20 s … 15 min); jobs that hit a
   deadline retry after 5 s, 15 s, 60 s, 180 s, 600 s. After `max_retries: 5` they land in
   `lumra-jobs-dlq-<env>`. Poison (schema-invalid) messages are logged as `invalid queue message`
-  and acked, never retried. Valid messages whose type has no handler yet (e.g. `media.delete` until
-  T13) are logged as `no handler registered` and retried every 60 s; after `max_retries` they sit in
-  the DLQ — replay them once the handler ships.
+  and acked, never retried. Valid messages whose type has no handler (e.g. `guest.expire` today)
+  are logged as `no handler registered; message dropped` (error, with `type` and `dedupeKey`, plus a
+  Sentry event) and acked — retrying could never succeed and only parked them in the DLQ, which has
+  no consumer. Once the handler ships, re-queue them from the outbox:
+  `update public.job_outbox set processed_at = null, available_at = now() where event_name = '<type>' and …;`
 
 **Deadlines**: nothing in the worker may wait forever. Postgres: `connect_timeout` 5 s, idle 2 s,
 `fetch_types` off (direct connections also get `statement_timeout` 15 s; behind Hyperdrive the
@@ -154,6 +181,174 @@ and updated_at < now() - interval '30 minutes' group by 1;` (T13 re-enqueues the
 
 **Follow-up**: record the incident, the replay counts printed by the script, and whether alert
 thresholds need tuning.
+
+## Physical deletion purge (T13)
+
+**Pipeline** (FR-G06): deleting a photo (or aborting an upload) sets media `deleting` + `deleted_at`
+and writes `media.delete:{mediaId}`; deleting a gallery sets it `deleted` and writes
+`gallery.access_changed` + `gallery.delete:{galleryId}`. The worker's `media.delete` handler deletes
+the original (`ORIGINALS`, `media.original_key`) and every variant (`DERIVATIVES`,
+`media_variants.object_key`), then marks the row `deleted` (variant rows are kept). `gallery.delete`
+writes the KV tombstone, then purges every media of the gallery in batches of 200, everything left
+under `derivatives/{galleryId}/` and `archives/{galleryId}/` (`ARCHIVES`), and marks its
+`archive_jobs` `deleted`; a run that exceeds 90 s retries and continues where it stopped. Marking
+`deleted` frees plan admission (`deleting` media with a completed upload still count).
+
+**Backstop sweep** (`*/15 * * * *`, ≤ 50 s per tick): media soft-deleted more than 1 h ago and not
+`deleted` (index `media_purge_pending_idx`), and galleries deleted more than 1 h ago that still have
+non-`deleted` media or archive jobs (10 per tick, oldest first), are purged the same way. Logs:
+`deletion sweep finished` with `galleries`, `purged`, `objectKeys`, `invalidKeys`,
+`galleriesFailed`, `mediaBatchesFailed`, `budgetExhausted`; per job `media purge finished` /
+`gallery purge finished`. Logs carry ids and counts only, never object keys.
+
+**Symptoms**: rows in `deleting` for more than a few hours; `deletion sweep finished` with
+`galleriesFailed`/`mediaBatchesFailed` > 0 or `budgetExhausted: true` on consecutive ticks;
+`purge refused: … is not deleted` (a message named live data — a producer bug).
+
+```sql
+select count(*), min(deleted_at) from public.media where deleted_at is not null and status <> 'deleted';
+select g.id, g.deleted_at from public.galleries g where g.deleted_at is not null
+  and exists (select 1 from public.media m where m.gallery_id = g.id and m.status <> 'deleted');
+```
+
+**Mitigate**: R2/Postgres outage → nothing to do; the sweep catches up once healthy (the purge is
+idempotent and safe to run concurrently). `purge skipped invalid object keys` means a stored key
+doesn't match the key scheme; those objects are left for the R2 orphan reconcile — inspect the row.
+
+**Gateway window**: the gateway does not check per-media deletion. A media token issued before the
+delete (≤ 5 min TTL + 30 s skew) can still fetch the preview — from R2 until the purge removes it, or
+from the gateway's edge cache — and no new tokens are minted for `deleting` media. Cached preview
+bytes are not evicted by the purge; each colo's copy expires **≤ 1 h** after it was cached
+(`EDGE_CACHE_TTL_SECONDS`), inside FR-G06's 24 h. See [Media edge cache](#media-edge-cache-83).
+Gallery deletion is enforced at once through the KV tombstone and the `access_version` bump (checked
+before the cache).
+
+## Stripe webhooks and billing state (T29–T33)
+
+**Setup** (once per Stripe mode; see [BILLING.md](BILLING.md#stripe-setup-scriptsstripe-setupmjs)):
+
+1. `STRIPE_SECRET_KEY=sk_… node scripts/stripe-setup.mjs --app-url https://www.lumra.photos`
+   (`--dry-run` first). It prints product/price/meter/portal ids; nothing needs to be copied into env.
+2. Stripe Dashboard → Developers → Webhooks → add endpoint
+   `https://www.lumra.photos/api/v1/billing/webhook` with events `checkout.session.completed`,
+   `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`,
+   `invoice.finalized`, `invoice.paid`, `invoice.payment_failed`, `invoice.voided`,
+   `invoice.marked_uncollectible`.
+   Copy its signing secret.
+3. Vercel → project env (Production; Preview with test keys): `STRIPE_SECRET_KEY`,
+   `STRIPE_WEBHOOK_SECRET`. Redeploy. Locally: `stripe listen --forward-to
+localhost:3000/api/v1/billing/webhook` prints a `whsec_…` for `.env.local`.
+
+**Price change (rate v1 → v2, $0.10 → $0.05/GB-month)**, order per Stripe mode (test first):
+(1) apply migration `20261116000100`; (2) `node scripts/stripe-setup.mjs --dry-run`, then without
+`--dry-run` (creates `lumra_pro_storage_overage_v2`, archives `…_v1`); (3) deploy web + worker immediately
+(Checkout resolves `…_v2` by lookup key; the old build needs the v1 price active); (4)
+`node scripts/stripe-setup.mjs --migrate-subscriptions --dry-run`, then for real. Verify with
+`select plan_id, rate_version, decision from public.plan_rate_versions` and a test-mode Checkout. A
+`billing reconciliation mismatch` for an invoice finalised between steps 3 and 4 is expected: compare
+the Stripe invoice lines with the rate of the period's highest `rating_version`.
+
+**Symptoms**: Stripe shows failing deliveries; a customer paid but `/account` still says Free;
+`stripe webhook signature rejected` in logs (wrong secret / wrong mode); 503s on the webhook
+(env not set — Stripe keeps retrying for 3 days, so setting the env recovers everything).
+
+```sql
+-- Unhandled or failing events (payloads are not stored; look them up in Stripe by id).
+select provider_event_id, event_type, status, attempt_count, last_error, received_at
+from public.provider_webhook_events where status in ('received', 'failed') order by received_at;
+-- One account's billing state.
+select status, stripe_customer_id, stripe_subscription_id, stripe_subscription_status,
+       past_due_since, restricted_since, canceled_at, subscription_event_at
+from public.billing_accounts where user_id = '…';
+```
+
+**Mitigate**: fix the cause, then **resend the event from the Stripe Dashboard** (processing is
+idempotent; handled events are no-ops). Never edit `status` by hand without also enqueueing
+`select public.enqueue_owner_access_sync('<user>', 'manual')` so the gateway sees the change. Galleries
+are never paused for usage (ADR-008); only billing status takes them offline. Logs to grep:
+`stripe webhook handled` (`outcome`, `reason`), `billing account updated from stripe`,
+`spend-cap alerts recorded`, `billing sweep finished`.
+
+## Meter export and reconciliation (T31)
+
+**Symptoms**: `billing reconciliation mismatch` (error log), `meter event send failed`,
+`meter export failed for account`, `meter export skipped: STRIPE_SECRET_KEY not set`.
+
+```sql
+select * from public.billing_reconciliations where flagged or exceeds_cap_tolerance order by created_at desc;
+select idempotency_key, status, attempt_count, last_error, created_at from public.billing_exports
+where status <> 'sent' order by created_at;
+select * from public.billing_meter_cursors where account_id = '…';
+```
+
+**Mitigate**:
+
+- Unsent rows retry on every run (hourly/daily). A `failed` row with `attempt_count ≥ 1000` was a
+  permanent 4xx (e.g. `timestamp_too_far_in_past` after an outage > 35 days): bill that usage with a
+  one-off invoice item in the dashboard and leave the row as the audit record.
+- `meter export failed for account` with `reconcile: true`: exported units exceed the ledger total
+  (a compensating ledger row lowered usage). Credit the customer in Stripe; never edit cursors down.
+- Drift: compare the invoice lines in Stripe with the account's `usage_ledger` totals for the
+  `usage_period_start`. Discounts or manual invoice items explain most drift; otherwise check unsent
+  exports for that period. Overage above cap + tolerance (`exceeds_cap_tolerance`): issue the credit
+  promised by the pricing page (ADR-004).
+- Never resend an event by hand with a new identifier; resend the stored payload (set the row back
+  to `pending` with `attempt_count = 0`).
+
+## Viral / scraped gallery serving cost (ADR-008)
+
+Lumra does not meter, cap or bill delivery, so nothing stops a hot gallery automatically. Every
+view and download costs one Worker request; downloads and preview edge-cache misses also cost an R2
+Class B read (egress itself is free). Repeat preview views from the same colo are edge hits.
+
+**Symptoms**: R2 Class B operations or `lumra-media-gateway` requests far above baseline in the
+Cloudflare dashboard; one `galleryId` dominating gateway logs (`requestId`, never full IPs).
+
+**Mitigate**: rate-limit or challenge the hot path with a Cloudflare WAF rule on the gateway host;
+if abusive, the owner (or an operator, with notice) can set a password, an expiry or unpublish the
+gallery, which revokes tokens through the normal access-state sync. Never re-introduce a usage-based
+pause without a PRD change. A low hit ratio on a hot gallery (see below) usually means traffic is
+still on the `workers.dev` URL or spread across many colos.
+
+## Media edge cache (#83)
+
+**Behaviour** (ADR-001 "Edge cache"): on `media.lumra.photos`, full-body preview `GET`s are served
+from the Workers Cache API (`caches.default`, per colo) **after** token + access-state checks. Key
+`https://media-cache.lumra.internal/v1/{objectKey}` (never the token). Entry TTL 1 h
+(`s-maxage=3600`); the client still gets `private, max-age=300`. Originals, archives, `HEAD` and
+`Range` requests bypass it. On `*.workers.dev` the Cache API is a no-op and the gateway reports
+`BYPASS`.
+
+**Verify** (needs a fresh preview URL from a gallery page — tokens live ≤ 5 min; never paste one
+into a ticket or log):
+
+```sh
+curl -s -o /dev/null -D - "https://media.lumra.photos/m/<token>" | grep -i x-lumra-cache   # MISS
+curl -s -o /dev/null -D - "https://media.lumra.photos/m/<token>" | grep -i x-lumra-cache   # HIT
+```
+
+The second request from the same colo must say `HIT` (a different token for the same photo also
+hits). Originals/archives always say `BYPASS`.
+
+**Hit ratio:** Cloudflare → Workers & Pages → `lumra-media-gateway` → Logs, filter
+`msg = "media served"` and `action = "preview"`, group by `cache`; ratio = `HIT / (HIT + MISS)`.
+Mostly `BYPASS` previews means clients still use the `workers.dev` URL (check
+`NEXT_PUBLIC_MEDIA_URL`). R2 Class B operations on `lumra-derivatives` should drop accordingly.
+`edge cache put failed` / `edge cache match failed` warnings mean the Cache API is erroring; requests
+still serve from R2.
+
+**Purge / emergency removal:** the T13 purge does not evict cache entries; they age out within 1 h
+per colo. To remove cached media sooner (e.g. a legal takedown), Cloudflare → `lumra.photos` →
+Caching → Configuration → **Purge Everything** (custom-key Cache API entries can't be purged by URL),
+or bump `EDGE_CACHE_VERSION` in `apps/media-gateway/src/edge-cache.ts` and deploy. Revoking access
+(password change, unpublish, expiry, suspension, delete) needs no purge: it is checked before the
+cache on every request.
+
+**Cutover** (once the `lumra.photos` zone is active): `pnpm --filter @lumra/media-gateway exec
+wrangler deploy --env production` (creates the `media.lumra.photos` custom domain, DNS record and
+certificate), check `https://media.lumra.photos/health`, then set `NEXT_PUBLIC_MEDIA_URL=https://media.lumra.photos`
+in Vercel (Production) and redeploy the web app. Rollback: set `NEXT_PUBLIC_MEDIA_URL` back to the
+`workers.dev` URL and redeploy web; `workers_dev` stays enabled, so both hosts work throughout.
 
 ## Observability (T04)
 

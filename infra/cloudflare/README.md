@@ -8,26 +8,47 @@ This directory holds account-level resources that are created once per environme
 Production names have no suffix (`lumra-originals`); dev/staging append `-<env>`. These must
 match the bucket/queue names in the two `wrangler.jsonc` files.
 
-| Resource  | Name pattern                                | Notes                                                                                     |
-| --------- | ------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| R2 bucket | `lumra-originals[-<env>]`                   | Private. CORS: `PUT`/`HEAD` from app origins only. Aborts stale multipart uploads (2 d).  |
-| R2 bucket | `lumra-derivatives[-<env>]`                 | Private. No CORS. Read only through the media gateway binding.                            |
-| R2 bucket | `lumra-temp-archives[-<env>]`               | Private. No CORS. Lifecycle: delete objects after 1 day (FR-D04).                         |
-| Queue     | `lumra-jobs[-<env>]` + `lumra-jobs-dlq[-…]` | Messages carry IDs only.                                                                  |
-| API token | `lumra-web-presign-<env>`                   | Object Read & Write on `originals` only; used by Vercel to presign PUTs (dashboard step). |
-| Gateway   | `lumra-media-gateway` on `*.workers.dev`    | No custom media domain while the app runs on `lumra-ten.vercel.app`.                      |
+| Resource  | Name pattern                                  | Notes                                                                                      |
+| --------- | --------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| R2 bucket | `lumra-originals[-<env>]`                     | Private. CORS: `PUT`/`HEAD` from app origins only. Aborts stale multipart uploads (2 d).   |
+| R2 bucket | `lumra-derivatives[-<env>]`                   | Private. No CORS. Read only through the media gateway binding.                             |
+| R2 bucket | `lumra-temp-archives[-<env>]`                 | Private. No CORS. Lifecycle: delete objects after 1 day (FR-D04).                          |
+| Queue     | `lumra-jobs[-<env>]` + `lumra-jobs-dlq[-…]`   | Messages carry IDs only.                                                                   |
+| API token | `lumra-web-presign-<env>`                     | Object Read & Write on `originals` only; used by Vercel to presign PUTs (dashboard step).  |
+| Gateway   | `lumra-media-gateway` on `media.lumra.photos` | Workers custom domain (production); `*.workers.dev` kept during the transition. See below. |
 
 No bucket has `r2.dev` public access or a custom domain: the only read path is the media gateway
 (R2 binding), and the only write path from browsers is a presigned URL (PRD §6.1–6.2, §11).
 
+## Zone and media domain (production, #83)
+
+The `lumra.photos` zone lives on Cloudflare (free plan). The app's apex and `www` records stay
+**DNS-only** (grey cloud) pointing at Vercel; don't proxy them. The media gateway is a Workers
+custom domain, `media.lumra.photos`, declared in `apps/media-gateway/wrangler.jsonc` (`routes` with
+`custom_domain: true`); `wrangler deploy --env production` creates its DNS record and certificate,
+and only works once the zone is **active** (nameservers switched at the registrar). The Workers Cache
+API only works on the custom domain, so the gateway's preview edge cache (ADR-001) is live only
+there.
+
+After the domain serves `https://media.lumra.photos/health`, set in Vercel (Production):
+
+| Variable                | Value                        |
+| ----------------------- | ---------------------------- |
+| `NEXT_PUBLIC_MEDIA_URL` | `https://media.lumra.photos` |
+
+and redeploy the web app (it is inlined at build time). The web app has no image-host allowlist or
+CSP `img-src` to update; media URLs are validated only as absolute http(s) (`mediaUrlSchema`). The
+gateway's `APP_ORIGIN` (CORS) lists app origins, not the media host, so it doesn't change. Keep
+`workers_dev` enabled until no client uses the old URL.
+
 ## Files
 
-| File                           | Applied to      | Purpose                                                                                                                                                                                                                               |
-| ------------------------------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cors.originals.<env>.json`    | originals       | Allow `PUT`/`HEAD` with `content-type` from the env's app origin only (dev/staging: `http://localhost:3000`; production: `https://lumra-ten.vercel.app`); expose `ETag` (needed to complete multipart uploads); preflight cached 1 h. |
-| `lifecycle.originals.json`     | originals       | Abort incomplete multipart uploads after 2 days (abandoned uploads still bill storage).                                                                                                                                               |
-| `lifecycle.temp-archives.json` | temp-archives   | Delete archive objects (and abort their multipart uploads) after 1 day.                                                                                                                                                               |
-| `setup.sh`                     | one env per run | Creates missing buckets/queues, disables `r2.dev`, applies CORS + lifecycle, prints verification. Idempotent.                                                                                                                         |
+| File                           | Applied to      | Purpose                                                                                                                                                                                                                                                                                                              |
+| ------------------------------ | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cors.originals.<env>.json`    | originals       | Allow `PUT`/`HEAD` with `content-type` from the env's app origin only (dev/staging: `http://localhost:3000`; production: `https://www.lumra.photos`, `https://lumra.photos` and, during the transition, `https://lumra-ten.vercel.app`); expose `ETag` (needed to complete multipart uploads); preflight cached 1 h. |
+| `lifecycle.originals.json`     | originals       | Abort incomplete multipart uploads after 2 days (abandoned uploads still bill storage).                                                                                                                                                                                                                              |
+| `lifecycle.temp-archives.json` | temp-archives   | Delete archive objects (and abort their multipart uploads) after 1 day.                                                                                                                                                                                                                                              |
+| `setup.sh`                     | one env per run | Creates missing buckets/queues, disables `r2.dev`, applies CORS + lifecycle, prints verification. Idempotent.                                                                                                                                                                                                        |
 
 The staging app origin is added to `cors.originals.staging.json` once the stable staging alias exists
 (T38). CORS is not access control — presigned URLs are — but keeping origins tight limits which

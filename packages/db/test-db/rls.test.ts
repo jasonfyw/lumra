@@ -194,6 +194,7 @@ const SERVICE_ONLY_TABLES = [
   'job_outbox',
   'provider_webhook_events',
   'rate_limit_buckets',
+  'storage_accrual_cursors',
 ] as const;
 
 describe('service-only tables', () => {

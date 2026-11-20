@@ -10,6 +10,19 @@ describe('parseEnv', () => {
     expect(env.R2_BUCKET_ORIGINALS).toBe('lumra-originals');
   });
 
+  it('accepts the production media domain and the transitional workers.dev gateway URL', () => {
+    for (const media of [
+      'https://media.lumra.photos',
+      'https://lumra-media-gateway-production.example.workers.dev',
+    ]) {
+      const env = parseEnv('web', webServerEnvSchema, {
+        NEXT_PUBLIC_APP_URL: 'https://www.lumra.photos',
+        NEXT_PUBLIC_MEDIA_URL: media,
+      });
+      expect(env.NEXT_PUBLIC_MEDIA_URL).toBe(media);
+    }
+  });
+
   it('reports every invalid key in a readable error', () => {
     expect(() =>
       parseEnv('web', webServerEnvSchema, {
@@ -49,6 +62,37 @@ describe('parseEnv', () => {
           NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon',
         }),
       ).not.toThrow();
+    }
+  });
+
+  it('validates Stripe keys without echoing them; empty values mean unset (T29)', () => {
+    const base = { NEXT_PUBLIC_APP_URL: 'http://localhost:3000' };
+    const ok = parseEnv('web', webServerEnvSchema, {
+      ...base,
+      STRIPE_SECRET_KEY: 'sk_test_51Abc',
+      STRIPE_WEBHOOK_SECRET: 'whsec_abc123',
+    });
+    expect(ok.STRIPE_SECRET_KEY).toBe('sk_test_51Abc');
+    const empty = parseEnv('web', webServerEnvSchema, {
+      ...base,
+      STRIPE_SECRET_KEY: '',
+      STRIPE_WEBHOOK_SECRET: '',
+    });
+    expect(empty.STRIPE_SECRET_KEY).toBeUndefined();
+    expect(empty.STRIPE_WEBHOOK_SECRET).toBeUndefined();
+    try {
+      parseEnv('web', webServerEnvSchema, {
+        ...base,
+        STRIPE_SECRET_KEY: 'pk_live_notasecretkey',
+        STRIPE_WEBHOOK_SECRET: 'nope-secret-value',
+      });
+      expect.unreachable();
+    } catch (error) {
+      const message = (error as Error).message;
+      expect(message).toContain('STRIPE_SECRET_KEY');
+      expect(message).toContain('STRIPE_WEBHOOK_SECRET');
+      expect(message).not.toContain('pk_live_notasecretkey');
+      expect(message).not.toContain('nope-secret-value');
     }
   });
 

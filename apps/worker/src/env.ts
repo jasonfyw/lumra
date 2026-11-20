@@ -16,6 +16,22 @@ export interface Env {
    * endpoint answers 503 and processing relies on the once-a-minute cron relay alone.
    */
   WORKER_KICK_SECRET?: string;
+  /**
+   * Stripe secret key for the Billing Meter export (T31; secret). Unset ⇒ the export is skipped
+   * and nothing is built, so cursors never advance without a way to send.
+   */
+  STRIPE_SECRET_KEY?: string;
+  /**
+   * Resend API key for application email (`email.send`; secret). Unset => messages are logged
+   * and acked without sending (no crash).
+   */
+  RESEND_API_KEY?: string;
+  /** Sender, default `Lumra <noreply@lumra.photos>` (verified Resend domain lumra.photos). */
+  EMAIL_FROM?: string;
+  /** Optional Reply-To address. */
+  EMAIL_REPLY_TO?: string;
+  /** Public app origin for links in emails, default `https://www.lumra.photos`. */
+  APP_URL?: string;
   HYPERDRIVE?: Hyperdrive;
   /** Cloudflare Containers Durable Object namespace for the image processor (ADR-002). */
   IMAGE_PROCESSOR?: DurableObjectNamespace;

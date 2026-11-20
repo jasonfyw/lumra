@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react';
 import type { EditorMediaItem, MediaStatus } from '@lumra/contracts';
+import { Icon } from '@/components/ui';
 
 /** Creator-facing tile labels: the creator sees pipeline states, incl. recoverable failures. */
 export const STATUS_LABEL: Record<MediaStatus, string> = {
@@ -15,6 +16,103 @@ export const STATUS_LABEL: Record<MediaStatus, string> = {
   deleted: 'Removed',
 };
 
+/** Pipeline states shown as a spinner overlay (still uploading or processing). */
+const IN_PROGRESS: ReadonlySet<MediaStatus> = new Set([
+  'reserved',
+  'uploading',
+  'uploaded',
+  'processing',
+  'deleting',
+]);
+
+/** Short overlay label (visually hidden; announced with the spinner). */
+const PENDING_LABEL: Partial<Record<MediaStatus, string>> = {
+  reserved: 'Waiting to upload',
+  uploading: 'Uploading',
+  uploaded: 'Processing',
+  processing: 'Processing',
+  deleting: 'Removing',
+};
+
+/**
+ * The picture area of one tile:
+ * - ready → the owner thumbnail only (no badge); without one, a neutral image placeholder;
+ * - uploading/processing → spinner overlay over the local preview (if the uploader on this page
+ *   still holds the file) or over the neutral shimmer; static icon under reduced motion;
+ * - failed → icon + short text, full message as tooltip (never colour alone).
+ */
+export function TileMedia({
+  item,
+  localPreview,
+  onThumbnailError,
+}: {
+  item: EditorMediaItem;
+  localPreview?: string;
+  onThumbnailError?: (mediaId: string) => void;
+}) {
+  // The `src` that failed to load; a newer URL from the next refresh renders again.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+
+  if (item.status === 'failed') {
+    return (
+      <div
+        className="flex h-full w-full flex-col items-center justify-center gap-1 bg-[var(--color-danger-soft)] px-2 text-center text-[var(--color-danger)]"
+        title={STATUS_LABEL.failed}
+        data-testid="tile-failed"
+      >
+        <Icon name="alert" size={22} />
+        <span className="text-[13px] leading-[18px] font-medium">Unavailable</span>
+        <span className="text-[12px] leading-4">Re-upload or delete</span>
+      </div>
+    );
+  }
+
+  const pending = IN_PROGRESS.has(item.status);
+  const remote = item.status === 'ready' ? item.thumbnailUrl : null;
+  const src = remote && remote !== failedSrc ? remote : (localPreview ?? null);
+
+  return (
+    <div className="relative h-full w-full">
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element -- short-lived gateway URL / local blob
+        <img
+          key={src}
+          src={src}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          className={`h-full w-full object-cover ${pending ? 'lm-tile-pending-img' : ''}`}
+          data-testid="tile-thumbnail"
+          onError={() => {
+            if (src !== remote) return;
+            setFailedSrc(src);
+            onThumbnailError?.(item.id);
+          }}
+        />
+      ) : pending ? (
+        <span aria-hidden="true" className="lm-shimmer block h-full w-full" />
+      ) : (
+        <span
+          aria-hidden="true"
+          className="flex h-full w-full items-center justify-center bg-[var(--color-sunken)] text-[var(--color-ink-muted)]"
+        >
+          <Icon name="image" size={24} />
+        </span>
+      )}
+      {pending && (
+        <span className="lm-tile-status" data-testid="tile-pending">
+          <span className="lm-tile-status-chip">
+            <span className="lm-spinner" aria-hidden="true" />
+            <Icon name="clock" size={20} className="lm-spinner-static" />
+            <span className="sr-only">{PENDING_LABEL[item.status] ?? 'Processing'}</span>
+          </span>
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** Returns a copy of `list` with the element at `from` moved to index `to`. */
 export function moveItem<T>(list: readonly T[], from: number, to: number): T[] {
   const next = [...list];
@@ -27,8 +125,8 @@ export function moveItem<T>(list: readonly T[], from: number, to: number): T[] {
 const LONG_PRESS_MS = 400;
 const DRAG_SLOP_PX = 6;
 
-const small =
-  'inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 text-sm disabled:opacity-40';
+/** Tile controls: 36px icon buttons on fine pointers, the full 44px tap target on touch. */
+const small = 'lm-iconbtn size-9 pointer-coarse:size-11';
 
 interface DragState {
   from: number;
@@ -40,7 +138,7 @@ interface DragState {
 }
 
 /**
- * Editor grid (T15): status tiles, cover selection, delete, and reorder by drag (mouse/pen:
+ * Editor grid (T15): photo thumbnails with status overlays, cover selection, delete, and reorder by drag (mouse/pen:
  * drag the handle; touch: long-press the handle, then drag) with accessible "Move earlier /
  * Move later" buttons as the non-drag alternative (PRD §4).
  */
@@ -52,11 +150,17 @@ export function MediaGrid({
   onMove,
   onSetCover,
   onDelete,
+  localPreviews,
+  onThumbnailError,
 }: {
   items: readonly EditorMediaItem[];
   coverMediaId: string | null;
   effectiveCoverMediaId: string | null;
   disabled?: boolean;
+  /** Object URLs of files still held by the uploader on this page, by media id. */
+  localPreviews?: ReadonlyMap<string, string>;
+  /** A ready tile's gateway thumbnail failed to load (e.g. its token expired). */
+  onThumbnailError?: (mediaId: string) => void;
   onMove: (from: number, to: number) => void;
   onSetCover: (mediaId: string | null) => void;
   onDelete: (item: EditorMediaItem) => void;
@@ -132,7 +236,7 @@ export function MediaGrid({
 
   if (items.length === 0) {
     return (
-      <p className="rounded-[var(--radius-control)] border border-dashed border-[var(--color-line)] p-8 text-center text-[var(--color-ink-muted)]">
+      <p className="rounded-[var(--radius-md)] border border-dashed border-[var(--color-border)] bg-[var(--color-sunken)] p-8 text-center text-[var(--color-ink-muted)]">
         No photos yet.
       </p>
     );
@@ -141,7 +245,7 @@ export function MediaGrid({
   return (
     <ol
       aria-label="Photos in this gallery"
-      className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4"
+      className="grid grid-cols-2 gap-x-1 gap-y-3 sm:grid-cols-3 xl:grid-cols-4"
     >
       {items.map((item, index) => {
         const isCover = coverMediaId === item.id;
@@ -153,35 +257,42 @@ export function MediaGrid({
             data-tile-index={index}
             aria-label={`${item.filename}, ${STATUS_LABEL[item.status]}, position ${position}`}
             className={[
-              'flex flex-col overflow-hidden rounded-[var(--radius-control)] border bg-[var(--color-surface)]',
-              dragOver === index && dragFrom !== null && dragFrom !== index
-                ? 'border-[var(--color-focus)] ring-2 ring-[var(--color-focus)]'
-                : 'border-[var(--color-line)]',
-              dragFrom === index ? 'opacity-50' : '',
+              'relative flex flex-col transition-opacity duration-[var(--duration-fast)]',
+              dragFrom === index ? 'opacity-35' : '',
             ].join(' ')}
           >
-            <div className="relative flex aspect-[4/3] items-center justify-center bg-[var(--color-line)]">
-              {item.thumbnailUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element -- short-lived gateway URL
-                <img src={item.thumbnailUrl} alt="" className="h-full w-full object-cover" />
-              ) : (
+            <div
+              className="relative aspect-[4/3] bg-[var(--color-sunken)]"
+              data-testid="media-tile"
+              data-status={item.status}
+            >
+              {dragOver === index && dragFrom !== null && dragFrom !== index && (
+                // The ink drop line marks where the dragged photo lands.
                 <span
-                  className={`px-2 text-center text-sm ${item.status === 'failed' ? 'text-[var(--color-danger)]' : 'text-[var(--color-ink-muted)]'}`}
-                >
-                  {STATUS_LABEL[item.status]}
-                </span>
+                  aria-hidden="true"
+                  className={`absolute inset-y-0 z-10 w-[3px] bg-[var(--color-ink)] shadow-[0_0_0_1px_var(--color-surface)] ${dragFrom < index ? '-right-0.5' : '-left-0.5'}`}
+                />
               )}
+              <TileMedia
+                item={item}
+                localPreview={localPreviews?.get(item.id)}
+                onThumbnailError={onThumbnailError}
+              />
               {isHero && (
-                <span className="absolute left-2 top-2 rounded bg-[var(--color-accent)] px-2 py-0.5 text-xs text-white">
+                <span className="lm-tag lm-tag-surface absolute top-2 right-2 shadow-[var(--shadow-raised)]">
+                  <Icon name="star" size={14} />
                   {isCover ? 'Cover' : 'Cover (auto)'}
                 </span>
               )}
             </div>
-            <div className="flex flex-col gap-2 p-2">
-              <p className="truncate text-sm" title={item.filename}>
+            <div className="flex flex-col gap-0.5 pt-1.5">
+              <p
+                className="truncate text-[12px] leading-4 text-[var(--color-ink-muted)]"
+                title={item.filename}
+              >
                 {item.filename}
               </p>
-              <div className="flex flex-wrap gap-1">
+              <div className="-ml-1.5 flex flex-wrap items-center">
                 <button
                   type="button"
                   className={`${small} cursor-grab touch-none select-none`}
@@ -194,7 +305,7 @@ export function MediaGrid({
                   onPointerCancel={reset}
                   onContextMenu={(e) => e.preventDefault()}
                 >
-                  <span aria-hidden="true">⠿</span>
+                  <Icon name="grip" size={18} />
                 </button>
                 <button
                   type="button"
@@ -203,7 +314,7 @@ export function MediaGrid({
                   disabled={disabled || index === 0}
                   onClick={() => onMove(index, index - 1)}
                 >
-                  <span aria-hidden="true">←</span>
+                  <Icon name="chevron-left" size={18} />
                 </button>
                 <button
                   type="button"
@@ -212,11 +323,11 @@ export function MediaGrid({
                   disabled={disabled || index === items.length - 1}
                   onClick={() => onMove(index, index + 1)}
                 >
-                  <span aria-hidden="true">→</span>
+                  <Icon name="chevron-right" size={18} />
                 </button>
                 <button
                   type="button"
-                  className={small}
+                  className={`${small} aria-pressed:bg-[var(--color-lumen-soft)] aria-pressed:text-[var(--color-lumen-ink)]`}
                   aria-pressed={isCover}
                   aria-label={
                     isCover ? `Unset ${item.filename} as cover` : `Use ${item.filename} as cover`
@@ -224,16 +335,16 @@ export function MediaGrid({
                   disabled={disabled}
                   onClick={() => onSetCover(isCover ? null : item.id)}
                 >
-                  {isCover ? 'Cover ✓' : 'Cover'}
+                  <Icon name="star" size={18} />
                 </button>
                 <button
                   type="button"
-                  className={`${small} text-[var(--color-danger)]`}
+                  className={`${small} ml-auto text-[var(--color-danger)]`}
                   aria-label={`Delete ${item.filename}`}
                   disabled={disabled}
                   onClick={() => onDelete(item)}
                 >
-                  Delete
+                  <Icon name="trash" size={18} />
                 </button>
               </div>
             </div>

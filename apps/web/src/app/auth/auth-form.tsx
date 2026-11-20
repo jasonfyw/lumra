@@ -1,6 +1,7 @@
 'use client';
 
 import { useActionState, useEffect, useRef, useState } from 'react';
+import { buttonClass } from '@/components/ui';
 import type { AuthFlowParams } from '@/lib/return-to';
 import { sendOtpAction, verifyOtpAction, type AuthFormState } from './actions';
 
@@ -15,20 +16,33 @@ const initialState: AuthFormState = {
   sentAt: null,
 };
 
-const button =
-  'inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-accent)] px-6 font-medium text-white disabled:opacity-60';
-const input =
-  'min-h-11 w-full rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white px-3 text-base';
+const button = buttonClass('primary', 'lg', 'mt-3 w-full');
+const input = 'lm-input';
+const textButton = buttonClass('ghost', 'sm', '-mx-2 min-h-11');
 
-function useCooldown(sentAt: number | null): number {
-  const [now, setNow] = useState(() => Date.now());
+/**
+ * Seconds left before another code may be requested: a proactive cooldown after a successful
+ * send, or the server's `retryAfterSeconds` after a rate-limited one. Ticks once a second.
+ */
+export function useCooldown(state: AuthFormState): number {
+  const [deadline, setDeadline] = useState(0);
+  const [now, setNow] = useState(0);
   useEffect(() => {
-    if (!sentAt) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const seconds = state.sentAt ? RESEND_COOLDOWN_S : (state.retryAfterSeconds ?? 0);
+    const start = Date.now();
+    setNow(start);
+    setDeadline(seconds > 0 ? start + seconds * 1000 : 0);
+  }, [state]);
+  useEffect(() => {
+    if (deadline <= 0) return;
+    const timer = setInterval(() => {
+      const t = Date.now();
+      setNow(t);
+      if (t >= deadline) clearInterval(timer);
+    }, 1000);
     return () => clearInterval(timer);
-  }, [sentAt]);
-  if (!sentAt) return 0;
-  return Math.max(0, RESEND_COOLDOWN_S - Math.floor((now - sentAt) / 1000));
+  }, [deadline]);
+  return deadline > now ? Math.ceil((deadline - now) / 1000) : 0;
 }
 
 function FlowFields({ flow }: { flow: AuthFlowParams }) {
@@ -55,11 +69,12 @@ export function AuthForm({
   const [verifyState, verify, verifying] = useActionState(verifyOtpAction, initialState);
   const [editingEmail, setEditingEmail] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
-  const cooldown = useCooldown(sendState.sentAt);
+  const cooldown = useCooldown(sendState);
 
   const onCodeStep = sendState.step === 'code' && !editingEmail;
   // The latest action decides which message is current.
   const error = onCodeStep ? (verifyState.error ?? sendState.error) : sendState.error;
+  const rateLimited = !!sendState.retryAfterSeconds && error === sendState.error;
   const notice = onCodeStep && !verifyState.error ? sendState.notice : null;
 
   useEffect(() => {
@@ -67,15 +82,20 @@ export function AuthForm({
   }, [onCodeStep, sendState.sentAt]);
 
   return (
-    <div className="flex flex-col gap-6">
-      <div aria-live="polite" role="status" className="min-h-6 text-[var(--color-ink-muted)]">
+    <div className="flex flex-col gap-4">
+      <div aria-live="polite" role="status" className="text-[var(--color-ink-muted)] empty:hidden">
         {notice}
       </div>
-      {error && (
-        <p role="alert" className="text-[var(--color-danger)]">
-          {error}
-        </p>
-      )}
+      {error &&
+        (rateLimited ? (
+          <p role="status" aria-live="polite" className="lm-banner lm-banner-error">
+            {error}
+          </p>
+        ) : (
+          <p role="alert" className="lm-banner lm-banner-error">
+            {error}
+          </p>
+        ))}
 
       {!onCodeStep ? (
         <form
@@ -83,11 +103,11 @@ export function AuthForm({
             setEditingEmail(false);
             return send(formData);
           }}
-          className="flex flex-col gap-3"
+          className="flex flex-col gap-2"
           noValidate
         >
           <FlowFields flow={flow} />
-          <label htmlFor="email" className="font-medium">
+          <label htmlFor="email" className="lm-field-label">
             Email
           </label>
           <input
@@ -101,16 +121,20 @@ export function AuthForm({
             aria-invalid={!!sendState.error}
             className={input}
           />
-          <button type="submit" disabled={sending} className={button}>
-            {sending ? 'Sending…' : 'Email me a sign-in code'}
+          <button type="submit" disabled={sending || cooldown > 0} className={`${button} lm-num`}>
+            {sending
+              ? 'Sending…'
+              : cooldown > 0
+                ? `Send again in ${cooldown}s`
+                : 'Email me a sign-in code'}
           </button>
         </form>
       ) : (
         <div className="flex flex-col gap-4">
-          <form action={verify} className="flex flex-col gap-3" noValidate>
+          <form action={verify} className="flex flex-col gap-2" noValidate>
             <FlowFields flow={flow} />
             <input type="hidden" name="email" value={sendState.email} />
-            <label htmlFor="code" className="font-medium">
+            <label htmlFor="code" className="lm-field-label">
               6-digit code
             </label>
             <input
@@ -125,32 +149,28 @@ export function AuthForm({
               required
               aria-invalid={!!verifyState.error}
               aria-describedby="code-help"
-              className={`${input} tracking-[0.4em]`}
+              className={`${input} lm-num min-h-[52px] text-center text-[22px] font-medium tracking-[0.5em]`}
             />
-            <p id="code-help" className="text-sm text-[var(--color-ink-muted)]">
+            <p id="code-help" className="lm-field-hint">
               Or open the link in the email on this device.
             </p>
             <button type="submit" disabled={verifying} className={button}>
               {verifying ? 'Checking…' : 'Sign in'}
             </button>
           </form>
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <form action={send}>
               <FlowFields flow={flow} />
               <input type="hidden" name="email" value={sendState.email} />
               <button
                 type="submit"
                 disabled={sending || cooldown > 0}
-                className="min-h-11 underline-offset-4 hover:underline disabled:text-[var(--color-ink-muted)] disabled:no-underline"
+                className={`${textButton} lm-num`}
               >
                 {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
               </button>
             </form>
-            <button
-              type="button"
-              onClick={() => setEditingEmail(true)}
-              className="min-h-11 underline-offset-4 hover:underline"
-            >
+            <button type="button" onClick={() => setEditingEmail(true)} className={textButton}>
               Use a different email
             </button>
           </div>
