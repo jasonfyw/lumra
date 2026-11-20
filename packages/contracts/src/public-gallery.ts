@@ -74,6 +74,11 @@ export const publicGallerySchema = z.object({
   id: z.uuid(),
   slug: z.string().min(1),
   title: z.string(),
+  /**
+   * The owner's display name (`null` when unset). The only owner field in the public payload:
+   * never email or other account data.
+   */
+  ownerName: z.string().nullable(),
   coverMediaId: z.uuid().nullable(),
   /** "Made with Lumra" badge (shown for Free-plan galleries). */
   brandingVisible: z.boolean(),

@@ -4,6 +4,7 @@ export * from './claim';
 export * from './cover';
 export * from './filenames';
 export * from './gallery';
+export * from './gallery-title';
 export * from './justified-layout';
 export * from './media';
 export * from './ordering';

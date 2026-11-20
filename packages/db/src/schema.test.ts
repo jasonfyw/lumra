@@ -186,3 +186,18 @@ describe('rate card seed (T27, ADR-008)', () => {
     expect(sql).toMatch(/update public\.plans set rate_version = rate_version;/);
   });
 });
+
+describe('user display name (20261120000300)', () => {
+  it('reuses profiles.display_name instead of adding a parallel column', () => {
+    expect(sqlTables().profiles!.has('display_name')).toBe(true);
+    expect(sqlTables().profiles!.has('name')).toBe(false);
+    expect(getTableConfig(schema.profiles).columns.map((c) => c.name)).toContain('display_name');
+  });
+
+  it('constrains it to trimmed 1-80 chars when set', () => {
+    expect(sql).toMatch(/drop constraint profiles_display_name_check;/);
+    expect(sql).toMatch(
+      /add constraint profiles_display_name_valid\s+check \(\s*display_name is null\s+or \(\s*display_name = btrim\(display_name\)\s+and char_length\(display_name\) between 1 and 80/,
+    );
+  });
+});

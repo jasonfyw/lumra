@@ -147,6 +147,12 @@ describe('GET /api/v1/public/galleries/{slug}', () => {
     const body = await readJson<PublicGalleryResponse>(res);
     const data = publicGalleryResponseSchema.parse(body.data);
     expect(data.gallery).toMatchObject({ id: g.id, title: 'Autumn', brandingVisible: false });
+    // Owner name only when set; never the owner's email or id.
+    expect(data.gallery.ownerName).toBeNull();
+    await sql`update public.profiles set display_name = 'Ada Lovelace' where user_id = ${g.ownerId}`;
+    const named = await readJson<PublicGalleryResponse>(await get(g.slug));
+    expect(publicGalleryResponseSchema.parse(named.data).gallery.ownerName).toBe('Ada Lovelace');
+    expect(JSON.stringify(named)).not.toContain('@example.test');
     expect(data.items.map((i) => [i.id, i.status])).toEqual([
       [a, 'ready'],
       [b, 'pending'],

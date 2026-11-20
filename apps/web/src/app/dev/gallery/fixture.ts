@@ -109,6 +109,7 @@ export function makeGalleryFixture(
       id: fixtureId(0xa11e7),
       slug: 'dev-fixture',
       title: 'Coastline, autumn',
+      ownerName: 'Ada Lovelace',
       coverMediaId: coverItem?.id ?? null,
       brandingVisible: options.branding ?? true,
       contentVersion: 1,

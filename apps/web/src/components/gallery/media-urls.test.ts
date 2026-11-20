@@ -30,6 +30,7 @@ describe('media URL cache', () => {
         id: id(99),
         slug: 's',
         title: 't',
+        ownerName: null,
         coverMediaId: null,
         brandingVisible: true,
         contentVersion: 1,
