@@ -9,6 +9,7 @@ export * from './media';
 export * from './ordering';
 export * from './purge';
 export * from './quota';
+export * from './selection';
 export * from './slug';
 export * from './srcset';
 export * from './state-machine';

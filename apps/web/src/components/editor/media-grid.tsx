@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react';
 import type { EditorMediaItem, MediaStatus } from '@lumra/contracts';
+import type { SelectClick } from '@lumra/domain';
 import { Icon } from '@/components/ui';
 
 /** Creator-facing tile labels: the creator sees pipeline states, incl. recoverable failures. */
@@ -140,7 +141,8 @@ interface DragState {
 /**
  * Editor grid (T15): photo thumbnails with status overlays, cover selection, delete, and reorder by drag (mouse/pen:
  * drag the handle; touch: long-press the handle, then drag) with accessible "Move earlier /
- * Move later" buttons as the non-drag alternative (PRD §4).
+ * Move later" buttons as the non-drag alternative (PRD §4). Tiles can be multi-selected (checkbox,
+ * shift-click range, Cmd/Ctrl-click toggle); dragging a selected tile moves the whole selection.
  */
 export function MediaGrid({
   items,
@@ -152,6 +154,9 @@ export function MediaGrid({
   onDelete,
   localPreviews,
   onThumbnailError,
+  selected,
+  onSelect,
+  onDragMove,
 }: {
   items: readonly EditorMediaItem[];
   coverMediaId: string | null;
@@ -161,6 +166,11 @@ export function MediaGrid({
   localPreviews?: ReadonlyMap<string, string>;
   /** A ready tile's gateway thumbnail failed to load (e.g. its token expired). */
   onThumbnailError?: (mediaId: string) => void;
+  /** Selected media ids; omitted = selection UI off. */
+  selected?: ReadonlySet<string>;
+  onSelect?: (mediaId: string, click: SelectClick) => void;
+  /** A completed drag (defaults to `onMove`); the owner moves the whole selection if needed. */
+  onDragMove?: (from: number, to: number) => void;
   onMove: (from: number, to: number) => void;
   onSetCover: (mediaId: string | null) => void;
   onDelete: (item: EditorMediaItem) => void;
@@ -168,6 +178,10 @@ export function MediaGrid({
   const drag = useRef<DragState | null>(null);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  const selecting = (selected?.size ?? 0) > 0;
+  // Dragging a selected tile drags the whole selection.
+  const draggedId = dragFrom === null ? null : items[dragFrom]?.id;
+  const draggingGroup = draggedId != null && (selected?.has(draggedId) ?? false);
 
   function indexAt(x: number, y: number): number | null {
     if (typeof document.elementFromPoint !== 'function') return null;
@@ -231,7 +245,9 @@ export function MediaGrid({
     const target = dragOver;
     const wasActive = state.active;
     reset();
-    if (wasActive && target !== null && target !== state.from) onMove(state.from, target);
+    if (wasActive && target !== null && target !== state.from) {
+      (onDragMove ?? onMove)(state.from, target);
+    }
   }
 
   if (items.length === 0) {
@@ -251,6 +267,8 @@ export function MediaGrid({
         const isCover = coverMediaId === item.id;
         const isHero = effectiveCoverMediaId === item.id;
         const position = `${index + 1} of ${items.length}`;
+        const isSelected = selected?.has(item.id) ?? false;
+        const dimmed = dragFrom === index || (draggingGroup && isSelected);
         return (
           <li
             key={item.id}
@@ -258,13 +276,24 @@ export function MediaGrid({
             aria-label={`${item.filename}, ${STATUS_LABEL[item.status]}, position ${position}`}
             className={[
               'relative flex flex-col transition-opacity duration-[var(--duration-fast)]',
-              dragFrom === index ? 'opacity-35' : '',
+              dimmed ? 'opacity-35' : '',
             ].join(' ')}
           >
             <div
-              className="relative aspect-[4/3] bg-[var(--color-sunken)]"
+              className={[
+                'group relative aspect-[4/3] bg-[var(--color-sunken)]',
+                onSelect ? 'select-none' : '',
+                isSelected ? 'outline-[3px] -outline-offset-[3px] outline-[var(--color-ink)]' : '',
+              ].join(' ')}
               data-testid="media-tile"
               data-status={item.status}
+              data-selected={isSelected ? 'true' : undefined}
+              onClick={(e) => {
+                if (!onSelect || disabled) return;
+                const shift = e.shiftKey;
+                const toggle = e.metaKey || e.ctrlKey || (selecting && !shift);
+                if (shift || toggle) onSelect(item.id, { shift, toggle });
+              }}
             >
               {dragOver === index && dragFrom !== null && dragFrom !== index && (
                 // The ink drop line marks where the dragged photo lands.
@@ -278,6 +307,27 @@ export function MediaGrid({
                 localPreview={localPreviews?.get(item.id)}
                 onThumbnailError={onThumbnailError}
               />
+              {onSelect && (
+                <label
+                  className={[
+                    'absolute top-1 left-1 z-10 flex size-9 cursor-pointer items-center justify-center pointer-coarse:size-11',
+                    selecting || isSelected
+                      ? 'opacity-100'
+                      : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100',
+                  ].join(' ')}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    className="size-5 cursor-pointer accent-[var(--color-ink)]"
+                    aria-label={`Select ${item.filename}`}
+                    checked={isSelected}
+                    disabled={disabled}
+                    onChange={() => undefined}
+                    onClick={(e) => onSelect(item.id, { shift: e.shiftKey, toggle: true })}
+                  />
+                </label>
+              )}
               {isHero && (
                 <span className="lm-tag lm-tag-surface absolute top-2 right-2 shadow-[var(--shadow-raised)]">
                   <Icon name="star" size={14} />

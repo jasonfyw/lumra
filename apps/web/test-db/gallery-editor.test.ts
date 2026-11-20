@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import type {
   DeleteGalleryResponse,
+  BulkDeleteMediaResponse,
   DeleteMediaResponse,
   GalleryDetail,
   PublishGalleryResponse,
@@ -24,6 +25,7 @@ import {
 import { POST as publishRoute } from '@/app/api/v1/galleries/[id]/publish/route';
 import { PUT as passwordRoute } from '@/app/api/v1/galleries/[id]/password/route';
 import { PATCH as orderRoute } from '@/app/api/v1/galleries/[id]/media/order/route';
+import { POST as bulkDeleteRoute } from '@/app/api/v1/galleries/[id]/media/bulk-delete/route';
 import { DELETE as deleteMediaRoute } from '@/app/api/v1/galleries/[id]/media/[mediaId]/route';
 import {
   cleanup,
@@ -54,6 +56,11 @@ const api = {
   order: (id: string, orderedIds: string[], headers?: Record<string, string>) =>
     orderRoute(
       jsonRequest(`${base(id)}/media/order`, { method: 'PATCH', body: { orderedIds }, headers }),
+      p(id),
+    ),
+  bulkDel: (id: string, mediaIds: string[], headers?: Record<string, string>) =>
+    bulkDeleteRoute(
+      jsonRequest(`${base(id)}/media/bulk-delete`, { body: { mediaIds }, headers }),
       p(id),
     ),
   delMedia: (id: string, mediaId: string, headers?: Record<string, string>) =>
@@ -134,6 +141,7 @@ describe('authorization (every endpoint)', () => {
       ['password', () => api.password(g, { password: 'secret-1' })],
       ['order', () => api.order(g, [m])],
       ['delete media', () => api.delMedia(g, m)],
+      ['bulk delete media', () => api.bulkDel(g, [m])],
     ] as const;
 
   it('401 for unauthenticated callers', async () => {
@@ -710,5 +718,56 @@ describe('DELETE /api/v1/galleries/{id}/media/{mediaId}', () => {
     const [row] = await sql<{ status: string }[]>`
       select status from public.media where id = ${foreign}`;
     expect(row!.status).toBe('ready');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+
+describe('POST /api/v1/galleries/{id}/media/bulk-delete', () => {
+  it('deletes all selected items with one version bump, clears the cover, enqueues cleanup', async () => {
+    const { gallery } = await ownedWithUser();
+    const a = await addMedia(gallery, 'a0');
+    const b = await addMedia(gallery, 'a1');
+    const c = await addMedia(gallery, 'a2');
+    await api.patch(gallery, { coverMediaId: b });
+    const v = (await galleryRow(gallery)).content_version;
+
+    const res = await api.bulkDel(gallery, [a, b]);
+    expect(res.status).toBe(200);
+    const { data } = await readJson<BulkDeleteMediaResponse>(res);
+    expect(data).toEqual({ mediaIds: [a, b], contentVersion: v + 1, coverMediaId: null });
+    expect(await orderOf(gallery)).toEqual([c]);
+    for (const id of [a, b]) {
+      const events = await outbox(id);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        event_name: 'media.delete',
+        dedupe_key: `media.delete:${id}`,
+      });
+    }
+  });
+
+  it('is all-or-nothing: an unknown, already-deleted or foreign id changes nothing', async () => {
+    const { user, gallery } = await ownedWithUser();
+    const a = await addMedia(gallery, 'a0');
+    const other = await createOwnedGallery(user, { title: 'Other' });
+    const foreign = await addMedia(other, 'a0');
+    const v = (await galleryRow(gallery)).content_version;
+
+    for (const bad of [randomUUID(), foreign]) {
+      expect((await api.bulkDel(gallery, [a, bad])).status).toBe(404);
+    }
+    expect(await orderOf(gallery)).toEqual([a]);
+    expect((await galleryRow(gallery)).content_version).toBe(v);
+    expect(await outbox(a)).toHaveLength(0);
+    expect(await orderOf(other)).toEqual([foreign]);
+  });
+
+  it('validates the body', async () => {
+    const { gallery } = await ownedWithUser();
+    const a = await addMedia(gallery, 'a0');
+    expect((await api.bulkDel(gallery, [])).status).toBe(422);
+    expect((await api.bulkDel(gallery, [a, a])).status).toBe(422);
+    expect((await api.bulkDel(gallery, ['nope'])).status).toBe(422);
   });
 });
