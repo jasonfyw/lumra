@@ -28,7 +28,11 @@ Email OTP and magic link only, through Supabase Auth and `@supabase/ssr`.
 - Errors are shown in `role="alert"` and status text in an `aria-live` region. Supabase's error text
   is never shown. An invalid or expired link redirects to `/auth?error=link_invalid` and keeps the
   intent.
-- Resend has a 60 s cooldown in the UI, matching Supabase `max_frequency`. The profile and the Free
+- Resend has a 60 s cooldown in the UI, matching Supabase `max_frequency`, started after every
+  successful send. Rate-limited sends return `retryAfterSeconds` in the action state
+  (`lib/auth-rate-limit.ts`): N parsed from Supabase's "after N seconds" message, 60 s default for
+  `over_email_send_rate_limit`, the limiter's `Retry-After` window for `authOtpSend`, and 15 min
+  with an "about N minutes" message for project-wide limits. The send buttons count down. The profile and the Free
   billing account are created by the `handle_new_user` trigger on first sign-in.
 - **Rate limits (FR-A05):** the send and verify actions apply the app limiter (`lib/rate-limit.ts`)
   per client IP: `RATE_LIMITS.authOtpSend` (10/hour) and `authOtpVerify` (30 per 15 min). When
