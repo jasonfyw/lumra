@@ -20,15 +20,29 @@ const button = buttonClass('primary', 'lg', 'mt-3 w-full');
 const input = 'lm-input';
 const textButton = buttonClass('ghost', 'sm', '-mx-2 min-h-11');
 
-function useCooldown(sentAt: number | null): number {
-  const [now, setNow] = useState(() => Date.now());
+/**
+ * Seconds left before another code may be requested: a proactive cooldown after a successful
+ * send, or the server's `retryAfterSeconds` after a rate-limited one. Ticks once a second.
+ */
+export function useCooldown(state: AuthFormState): number {
+  const [deadline, setDeadline] = useState(0);
+  const [now, setNow] = useState(0);
   useEffect(() => {
-    if (!sentAt) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const seconds = state.sentAt ? RESEND_COOLDOWN_S : (state.retryAfterSeconds ?? 0);
+    const start = Date.now();
+    setNow(start);
+    setDeadline(seconds > 0 ? start + seconds * 1000 : 0);
+  }, [state]);
+  useEffect(() => {
+    if (deadline <= 0) return;
+    const timer = setInterval(() => {
+      const t = Date.now();
+      setNow(t);
+      if (t >= deadline) clearInterval(timer);
+    }, 1000);
     return () => clearInterval(timer);
-  }, [sentAt]);
-  if (!sentAt) return 0;
-  return Math.max(0, RESEND_COOLDOWN_S - Math.floor((now - sentAt) / 1000));
+  }, [deadline]);
+  return deadline > now ? Math.ceil((deadline - now) / 1000) : 0;
 }
 
 function FlowFields({ flow }: { flow: AuthFlowParams }) {
@@ -55,11 +69,12 @@ export function AuthForm({
   const [verifyState, verify, verifying] = useActionState(verifyOtpAction, initialState);
   const [editingEmail, setEditingEmail] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
-  const cooldown = useCooldown(sendState.sentAt);
+  const cooldown = useCooldown(sendState);
 
   const onCodeStep = sendState.step === 'code' && !editingEmail;
   // The latest action decides which message is current.
   const error = onCodeStep ? (verifyState.error ?? sendState.error) : sendState.error;
+  const rateLimited = !!sendState.retryAfterSeconds && error === sendState.error;
   const notice = onCodeStep && !verifyState.error ? sendState.notice : null;
 
   useEffect(() => {
@@ -71,11 +86,16 @@ export function AuthForm({
       <div aria-live="polite" role="status" className="text-[var(--color-ink-muted)] empty:hidden">
         {notice}
       </div>
-      {error && (
-        <p role="alert" className="lm-banner lm-banner-error">
-          {error}
-        </p>
-      )}
+      {error &&
+        (rateLimited ? (
+          <p role="status" aria-live="polite" className="lm-banner lm-banner-error">
+            {error}
+          </p>
+        ) : (
+          <p role="alert" className="lm-banner lm-banner-error">
+            {error}
+          </p>
+        ))}
 
       {!onCodeStep ? (
         <form
@@ -101,8 +121,12 @@ export function AuthForm({
             aria-invalid={!!sendState.error}
             className={input}
           />
-          <button type="submit" disabled={sending} className={button}>
-            {sending ? 'Sending…' : 'Email me a sign-in code'}
+          <button type="submit" disabled={sending || cooldown > 0} className={`${button} lm-num`}>
+            {sending
+              ? 'Sending…'
+              : cooldown > 0
+                ? `Send again in ${cooldown}s`
+                : 'Email me a sign-in code'}
           </button>
         </form>
       ) : (
