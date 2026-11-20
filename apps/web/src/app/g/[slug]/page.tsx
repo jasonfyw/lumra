@@ -2,10 +2,12 @@ import type { Metadata } from 'next';
 import { cookies, headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 import { PublicGallery } from '@/components/gallery';
+import { getAuthenticatedUser } from '@/lib/actor';
 import { ApiFailure } from '@/lib/api';
 import { getDb } from '@/lib/db';
 import { GALLERY_SESSION_COOKIE } from '@/lib/gallery-session';
 import { clientIp, enforceRateLimit } from '@/lib/rate-limit';
+import { trackGalleryEvent, visitorFromHeaders } from '@/server/gallery-analytics';
 import { mintDeps } from '@/server/public-context';
 import { loadPublicGallery } from '@/server/public-gallery';
 import { GalleryNotice } from './gallery-notice';
@@ -41,6 +43,14 @@ export default async function GalleryPage({ params }: { params: Promise<{ slug: 
       sessionToken: (await cookies()).get(GALLERY_SESSION_COOKIE)?.value,
     });
     if ('passwordRequired' in data) return <PasswordGate slug={slug} />;
+    // Only an unlocked, successfully loaded gallery is a view. Scheduled for after the response;
+    // never able to fail or slow the page.
+    trackGalleryEvent(
+      db,
+      slug,
+      { type: 'view' },
+      visitorFromHeaders(requestHeaders, getAuthenticatedUser()),
+    );
     return <PublicGallery key={data.gallery.id} slug={slug} initial={data} />;
   } catch (error) {
     if (!(error instanceof ApiFailure)) throw error;

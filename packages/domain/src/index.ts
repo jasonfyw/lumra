@@ -1,4 +1,5 @@
 export * from './access-state';
+export * from './analytics';
 export * from './archive';
 export * from './claim';
 export * from './cover';

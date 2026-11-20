@@ -43,8 +43,11 @@ const STATE_LABEL = { draft: 'Draft', published: 'Published', expired: 'Expired'
 export function GalleryEditor({
   initial,
   uploadSlot,
+  statsSlot,
 }: {
   initial: GalleryDetail;
+  /** Muted analytics line (FR-N02) rendered under the status line. */
+  statsSlot?: ReactNode;
   /** Upload zone (T14). Until it lands, a placeholder explains that uploads start from `/new`. */
   uploadSlot?: ReactNode;
 }) {
@@ -360,6 +363,7 @@ export function GalleryEditor({
                 </>
               )}
             </p>
+            {statsSlot}
           </header>
 
           <p role="status" aria-live="polite" className="sr-only">
