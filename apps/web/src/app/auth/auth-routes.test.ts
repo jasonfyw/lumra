@@ -184,7 +184,7 @@ describe('auth server actions', () => {
       error: { status: 429, code: 'over_email_send_rate_limit', message: 'internal detail' },
     });
     const limited = await sendOtpAction(state, form({ email: 'a@b.co' }));
-    expect(limited.error).toMatch(/Too many/);
+    expect(limited.error).toMatch(/You can request a new code in \d+s/);
     expect(limited.error).not.toContain('internal detail');
 
     const codeState = { ...state, step: 'code' as const, email: 'a@b.co' };
