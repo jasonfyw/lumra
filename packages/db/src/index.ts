@@ -13,3 +13,4 @@ export * from './repositories/billing';
 export * from './repositories/archive';
 export * from './repositories/deletion';
 export * from './repositories/meter-export';
+export * from './repositories/account-contact';

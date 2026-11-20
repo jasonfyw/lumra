@@ -12,7 +12,8 @@ import type { Env } from './env';
 import { archiveCrc32 } from './crc';
 import { syncGalleryAccessState } from './handlers/access-state';
 import { handleArchiveBuild, RetryLaterError } from './handlers/archive-build';
-import { handleEmailSend, runBillingSweep } from './handlers/billing';
+import { runBillingSweep } from './handlers/billing';
+import { handleEmailSend } from './handlers/email';
 import { runMeterExport, stripeMeterSender } from './handlers/meter-export';
 import { sweepArchives } from './handlers/archive-sweep';
 import { handleMediaUploaded } from './handlers/media-uploaded';
@@ -91,10 +92,24 @@ export const handlers: Partial<Record<QueueMessage['type'], JobHandler>> = {
   // FR-G06: KV tombstone first, then the R2 purge (T13).
   'gallery.delete': galleryDeleteJob,
   'media.delete': mediaDeleteJob,
-  // T33/T32: transition notices and spend-cap alerts (no provider yet: logged and acked).
-  'email.send': async (message, { log }) => {
+  // T33/T32: transition notices and spend-cap alerts, sent through Resend (RESEND_API_KEY unset:
+  // logged and acked). Transient failures throw and ride the queue's retry back-off.
+  'email.send': async (message, { env, services, log, signal, timings }) => {
     if (message.type !== 'email.send') return;
-    const outcome = await handleEmailSend(message, { log });
+    const outcome = await handleEmailSend(message, {
+      contacts: bounded(services.accountContactRepo(), 'db', DEADLINES.dbStepMs, {
+        signal,
+        timings,
+      }),
+      config: {
+        apiKey: env.RESEND_API_KEY,
+        from: env.EMAIL_FROM,
+        replyTo: env.EMAIL_REPLY_TO,
+        appUrl: env.APP_URL,
+      },
+      log,
+      signal,
+    });
     log.info('email.send handled', { template: message.template, outcome });
   },
 };

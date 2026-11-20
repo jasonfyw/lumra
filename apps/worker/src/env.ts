@@ -21,6 +21,17 @@ export interface Env {
    * and nothing is built, so cursors never advance without a way to send.
    */
   STRIPE_SECRET_KEY?: string;
+  /**
+   * Resend API key for application email (`email.send`; secret). Unset => messages are logged
+   * and acked without sending (no crash).
+   */
+  RESEND_API_KEY?: string;
+  /** Sender, default `Lumra <hello@lumra.photos>` (verified Resend domain lumra.photos). */
+  EMAIL_FROM?: string;
+  /** Optional Reply-To address. */
+  EMAIL_REPLY_TO?: string;
+  /** Public app origin for links in emails, default `https://www.lumra.photos`. */
+  APP_URL?: string;
   HYPERDRIVE?: Hyperdrive;
   /** Cloudflare Containers Durable Object namespace for the image processor (ADR-002). */
   IMAGE_PROCESSOR?: DurableObjectNamespace;

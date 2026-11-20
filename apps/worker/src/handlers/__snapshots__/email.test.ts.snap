@@ -1,0 +1,94 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`email templates > matches snapshots of the subjects and plain text 1`] = `
+{
+  "delivery_suspended": {
+    "subject": "Your Lumra galleries are paused",
+    "text": "Your galleries are paused
+
+Because your payment is still unresolved after the grace period, your galleries are no longer viewable by visitors.
+
+Nothing has been deleted. Update your payment method and delivery resumes right away.
+
+Update payment method: https://www.lumra.photos/account
+
+You are receiving this because it concerns your Lumra account. Questions? Just reply to this email.
+
+Lumra - lumra.photos
+",
+  },
+  "payment_failed": {
+    "subject": "Action needed: your Lumra payment failed",
+    "text": "We could not process your payment
+
+Your latest Lumra payment did not go through. Your galleries are still available for now, but new uploads are paused until this is resolved.
+
+Please update your payment method. If the payment stays unresolved, your galleries will stop being viewable after the grace period.
+
+Update payment method: https://www.lumra.photos/account
+
+You are receiving this because it concerns your Lumra account. Questions? Just reply to this email.
+
+Lumra - lumra.photos
+",
+  },
+  "payment_recovered": {
+    "subject": "Your Lumra payment went through",
+    "text": "Payment received, thank you
+
+Your payment went through and your account is in good standing again.
+
+Open your account: https://www.lumra.photos/account
+
+You are receiving this because it concerns your Lumra account. Questions? Just reply to this email.
+
+Lumra - lumra.photos
+",
+  },
+  "pro_activated": {
+    "subject": "Welcome to Lumra Pro",
+    "text": "Lumra Pro is active
+
+Thanks for upgrading. Your Pro plan is active, with more storage and room for more galleries.
+
+You can see your plan, usage and invoices on your account page.
+
+Open your account: https://www.lumra.photos/account
+
+You are receiving this because it concerns your Lumra account. Questions? Just reply to this email.
+
+Lumra - lumra.photos
+",
+  },
+  "spend_cap_alert": {
+    "subject": "Lumra usage alert: 80% of your spend cap",
+    "text": "You have used 80% of your spend cap
+
+So far this billing period: $8.00 of your $10.00 cap.
+
+Storage overage on your Pro plan is approaching the cap you set. At the cap, new uploads pause. You can change the cap at any time.
+
+Manage spend cap: https://www.lumra.photos/account
+
+You are receiving this because it concerns your Lumra account. Questions? Just reply to this email.
+
+Lumra - lumra.photos
+",
+  },
+  "subscription_ended": {
+    "subject": "Your Lumra Pro plan has ended",
+    "text": "Your Pro plan has ended
+
+Your account is now on the Free plan. Free has limits on galleries and storage, so some content may be unavailable until you are within the limits or upgrade again.
+
+You can download or delete content, or resubscribe, from your account.
+
+Review your account: https://www.lumra.photos/account
+
+You are receiving this because it concerns your Lumra account. Questions? Just reply to this email.
+
+Lumra - lumra.photos
+",
+  },
+}
+`;

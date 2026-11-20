@@ -2,7 +2,7 @@ import { BILLING_POLICY_V1, RATE_CARD_V1 } from '@lumra/config';
 import type { BillingStateRepository, SweepCandidate } from '@lumra/db';
 import { describe, expect, it, vi } from 'vitest';
 import { silentLogger } from '../log';
-import { handleEmailSend, noticeFor, runBillingSweep } from './billing';
+import { noticeFor, runBillingSweep } from './billing';
 
 const DAY = 86_400_000;
 const now = new Date('2026-11-20T12:00:00Z');
@@ -93,27 +93,5 @@ describe('runBillingSweep (T33)', () => {
     expect(noticeFor('payment_failed', id(1), at).dedupeKey).toBe(
       `email:payment_failed:${id(1)}:2026-11-01T00:00:00.000Z`,
     );
-  });
-});
-
-describe('email.send', () => {
-  it('acks and logs without personal data while no provider is configured', async () => {
-    const info = vi.fn();
-    const outcome = await handleEmailSend(
-      {
-        type: 'email.send',
-        accountId: id(1),
-        template: 'payment_failed',
-        data: {},
-        traceId: 't',
-        dedupeKey: 'd',
-      },
-      { log: { ...silentLogger, info } as unknown as typeof silentLogger },
-    );
-    expect(outcome).toBe('skipped_unconfigured');
-    expect(info).toHaveBeenCalledWith('email not sent: no email provider configured', {
-      template: 'payment_failed',
-      accountId: id(1),
-    });
   });
 });

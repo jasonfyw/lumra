@@ -104,28 +104,3 @@ export async function runBillingSweep(deps: BillingSweepDeps): Promise<BillingSw
   }
   return result;
 }
-
-// ---------------------------------------------------------------------------------------------
-// email.send
-// ---------------------------------------------------------------------------------------------
-
-export type EmailOutcome = 'skipped_unconfigured';
-
-/**
- * `email.send` (transition notices, spend-cap alerts). Lumra has no transactional email provider
- * for application mail yet: Supabase sends auth mail through its own SMTP (Resend, PLAN §5 #3),
- * which this Worker cannot use. Until a provider is wired (TODO: RESEND_API_KEY + a verified
- * sending domain, then render `template` and look up the account's email by `accountId`), the
- * message is acknowledged and logged without personal data. The notice is still visible in the
- * app: `/account` derives its banners from the billing state and the recorded alerts.
- */
-export async function handleEmailSend(
-  message: EmailSendMessage,
-  deps: { log: Logger },
-): Promise<EmailOutcome> {
-  deps.log.info('email not sent: no email provider configured', {
-    template: message.template,
-    accountId: message.accountId,
-  });
-  return 'skipped_unconfigured';
-}
