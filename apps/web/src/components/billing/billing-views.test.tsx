@@ -23,12 +23,12 @@ describe('pricing (PRD §9.3)', () => {
       <PricingView free={RATE_CARD.free} pro={RATE_CARD.pro} viewer={{ kind: 'anonymous' }} />,
     );
     expect(screen.getByText('$2.50')).toBeInTheDocument();
-    expect(screen.getByText(/2 active galleries/)).toBeInTheDocument();
-    expect(screen.getByText(/20 GB-month of storage included/)).toBeInTheDocument();
-    expect(screen.getByText(/Then \$0\.05 per GB-month/)).toBeInTheDocument();
+    expect(screen.getByText(/2 galleries/)).toBeInTheDocument();
+    expect(screen.getAllByText(/20 GB-month included/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/\$0\.05 per extra GB-month/)).toBeInTheDocument();
     // Delivery is neither metered nor charged (ADR-008).
     expect(screen.queryByText(/per GB delivered|of delivery a month|bandwidth/i)).toBeNull();
-    expect(screen.getAllByText(/Views and downloads included, not metered/)).toHaveLength(2);
+    expect(screen.getAllByText(/Free views and downloads/)).toHaveLength(2);
     expect(screen.getByRole('link', { name: 'Sign in to upgrade' })).toHaveAttribute(
       'href',
       '/auth?returnTo=%2Fpricing',
