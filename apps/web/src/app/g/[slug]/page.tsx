@@ -74,10 +74,10 @@ export default async function GalleryPage({ params }: { params: Promise<{ slug: 
     // Only an unlocked, successfully loaded gallery is a view. Scheduled for after the response;
     // never able to fail or slow the page.
     trackGalleryEvent(
-      db,
+      getDb(),
       slug,
       { type: 'view' },
-      visitorFromHeaders(requestHeaders, getAuthenticatedUser()),
+      visitorFromHeaders(await headers(), getAuthenticatedUser()),
     );
     return <PublicGallery key={data.gallery.id} slug={slug} initial={data} />;
   } catch (error) {
