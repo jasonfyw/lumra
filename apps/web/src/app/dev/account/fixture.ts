@@ -63,6 +63,7 @@ export function makeAccountFixture(
 
   const summary: AccountUsageSummary = {
     email: 'ada@example.com',
+    name: 'Ada Lovelace',
     plan: isPro ? 'pro' : 'free',
     billingStatus: status,
     period: { start: periodStart.toISOString(), end: periodEnd.toISOString() },

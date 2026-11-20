@@ -124,6 +124,7 @@ export const profiles = pgTable('profiles', {
     .primaryKey()
     .references(() => authUsers.id, { onDelete: 'cascade' }),
   email: text('email').notNull(),
+  /** Nullable; trimmed 1-80 chars (CHECK `profiles_display_name_valid`). */
   displayName: text('display_name'),
   planId: text('plan_id')
     .$type<PlanId>()

@@ -218,6 +218,8 @@ export const RATE_LIMITS = {
   billingSession: { limit: 30, windowSeconds: 60 * 60 },
   /** Per user: spending-cap changes (T32). */
   billingSettings: { limit: 30, windowSeconds: 60 * 60 },
+  /** Per user: display-name changes on /account. */
+  accountSettings: { limit: 30, windowSeconds: 60 * 60 },
 } as const satisfies Record<string, RateLimitRule>;
 export type RateLimitRuleName = keyof typeof RATE_LIMITS;
 

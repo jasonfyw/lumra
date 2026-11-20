@@ -94,8 +94,30 @@ export const accountInvoiceSchema = z.object({
 });
 export type AccountInvoice = z.infer<typeof accountInvoiceSchema>;
 
+/** Longest display name; mirrors the `profiles_display_name_valid` CHECK. */
+export const USER_NAME_MAX_LENGTH = 80;
+
+/**
+ * A user's display name (`profiles.display_name`). Trimmed; blank (empty or whitespace-only)
+ * clears it to `null`; at most 80 characters after trimming.
+ */
+export const userNameSchema = z
+  .string()
+  .transform((value) => value.trim())
+  .pipe(z.string().max(USER_NAME_MAX_LENGTH))
+  .transform((value) => (value === '' ? null : value));
+
+/** `PATCH /api/v1/account`: the signed-in user's own name. Unknown keys are rejected. */
+export const updateAccountRequestSchema = z.object({ name: userNameSchema }).strict();
+export type UpdateAccountRequest = z.infer<typeof updateAccountRequestSchema>;
+
+export const updateAccountResponseSchema = z.object({ name: z.string().nullable() });
+export type UpdateAccountResponse = z.infer<typeof updateAccountResponseSchema>;
+
 export const accountUsageSummarySchema = z.object({
   email: z.string().nullable(),
+  /** Display name set on `/account` (`null` until set). */
+  name: z.string().nullable(),
   plan: planIdSchema,
   billingStatus: billingAccountStatusSchema,
   /** Current billing period (calendar month in UTC until a Stripe subscription sets one). */

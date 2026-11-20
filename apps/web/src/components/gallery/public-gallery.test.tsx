@@ -28,6 +28,7 @@ const gallery = {
   id: id(99),
   slug: 'abcdefgh',
   title: 'Autumn',
+  ownerName: null,
   coverMediaId: null,
   brandingVisible: true,
   contentVersion: 1,

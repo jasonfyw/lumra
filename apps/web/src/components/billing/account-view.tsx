@@ -6,6 +6,7 @@ import { formatDate, formatGigabytes, formatUsd } from '@/lib/format';
 import { BillingBanners, type CheckoutReturn } from './billing-banners';
 import { BillingButton } from './billing-button';
 import { InvoiceList } from './invoice-list';
+import { NameForm } from './name-form';
 import { SpendingCapForm } from './spending-cap-form';
 
 /**
@@ -125,6 +126,7 @@ export function AccountView({
             </dd>
           </div>
         </dl>
+        <NameForm initialName={summary.name} />
       </section>
 
       <section aria-labelledby="account-plan" className={section}>

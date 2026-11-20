@@ -62,6 +62,7 @@ describe('publicGalleryResponseSchema', () => {
     id: '00000000-0000-4000-8000-0000000000aa',
     slug: 'k3x9AuTu',
     title: 'Autumn',
+    ownerName: 'Ada',
     coverMediaId: null,
     brandingVisible: true,
     contentVersion: 3,
@@ -69,6 +70,25 @@ describe('publicGalleryResponseSchema', () => {
 
   it('accepts a gallery with items', () => {
     expect(publicGalleryResponseSchema.safeParse({ gallery, items: [ready] }).success).toBe(true);
+  });
+
+  it('carries the owner name and nothing else about the owner', () => {
+    const leaky = { ...gallery, email: 'ada@example.test', ownerId: 'u1' };
+    const parsed = publicGalleryResponseSchema.parse({ gallery: leaky, items: [ready] });
+    expect(parsed.gallery.ownerName).toBe('Ada');
+    expect(Object.keys(parsed.gallery).sort()).toEqual([
+      'brandingVisible',
+      'contentVersion',
+      'coverMediaId',
+      'id',
+      'ownerName',
+      'slug',
+      'title',
+    ]);
+    const unnamed = { ...gallery, ownerName: null };
+    expect(publicGalleryResponseSchema.safeParse({ gallery: unnamed, items: [] }).success).toBe(
+      true,
+    );
   });
 
   it('caps the item count at the gallery limit', () => {

@@ -25,6 +25,7 @@ import { desc, eq } from 'drizzle-orm';
 
 interface AccountRow extends Record<string, unknown> {
   email: string | null;
+  display_name: string | null;
   plan_id: 'free' | 'pro' | null;
   max_storage_bytes: string | null;
   status: AccountUsageSummary['billingStatus'] | null;
@@ -90,7 +91,7 @@ export async function getAccountUsageSummary(
 
   // Plan limits come from the `plans` row (authoritative copy of the rate card).
   const [account] = (await db.execute<AccountRow>(sql`
-    select p.email, p.plan_id,
+    select p.email, p.display_name, p.plan_id,
            pl.max_storage_bytes::text as max_storage_bytes,
            ba.status, ba.billing_period_start, ba.billing_period_end,
            pl.max_active_galleries,
@@ -146,6 +147,7 @@ export async function getAccountUsageSummary(
 
   return {
     email: user.email ?? account?.email ?? null,
+    name: account?.display_name ?? null,
     plan: account?.plan_id ?? 'free',
     billingStatus,
     period: { start: period.start.toISOString(), end: period.end.toISOString() },

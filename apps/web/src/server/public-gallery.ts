@@ -63,6 +63,8 @@ export interface ViewableGallery {
   id: string;
   slug: string;
   title: string;
+  /** Owner's display name; the only owner field exposed to recipients. */
+  ownerName: string | null;
   coverMediaId: string | null;
   contentVersion: number;
   accessVersion: number;
@@ -111,6 +113,7 @@ export async function findViewableGallery(
       id: galleries.id,
       slug: galleries.slug,
       title: galleries.title,
+      ownerName: profiles.displayName,
       status: galleries.status,
       deletedAt: galleries.deletedAt,
       expiresAt: galleries.expiresAt,
@@ -151,6 +154,7 @@ export async function findViewableGallery(
     id: row.id,
     slug: row.slug,
     title: row.title,
+    ownerName: row.ownerName,
     coverMediaId: row.coverMediaId,
     contentVersion: row.contentVersion,
     accessVersion: row.accessVersion,
@@ -448,6 +452,7 @@ export async function loadPublicGallery(
       id: gallery.id,
       slug: gallery.slug,
       title: gallery.title,
+      ownerName: gallery.ownerName,
       coverMediaId: gallery.coverMediaId,
       brandingVisible: gallery.brandingVisible,
       contentVersion: gallery.contentVersion,
