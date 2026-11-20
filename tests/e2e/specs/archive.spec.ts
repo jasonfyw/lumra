@@ -85,7 +85,7 @@ test.describe('archive progress page (fixture)', () => {
     await expect(page.getByRole('link', { name: /^Download/ })).toHaveCount(0);
     await expect(page.getByRole('link', { name: 'Back to the gallery' })).toHaveAttribute(
       'href',
-      '/g/dev-fixture',
+      '/g/devFixtr',
     );
     expect(await seriousViolations(page)).toEqual([]);
     await shoot(page, 'expired');

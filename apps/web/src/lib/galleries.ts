@@ -17,6 +17,7 @@ import {
   type Database,
 } from '@lumra/db';
 import { decideClaim, galleryAccessState, generateSlug, type ClaimDecision } from '@lumra/domain';
+import { withSlugRetry } from '@/server/slug-retry';
 import { getDb } from './db';
 
 /**
@@ -234,49 +235,51 @@ export async function createGalleryForOwner(
     ? await idempotentGalleryId(ownerId, input.idempotencyKey)
     : undefined;
 
-  return db.transaction(async (tx) => {
-    const plan = await lockPlanRates(tx, ownerId);
-    const decision = checkGalleryCreation({
-      plan,
-      activeGalleryCount: await activeGalleryCount(tx, ownerId),
-    });
+  return withSlugRetry(() =>
+    db.transaction(async (tx) => {
+      const plan = await lockPlanRates(tx, ownerId);
+      const decision = checkGalleryCreation({
+        plan,
+        activeGalleryCount: await activeGalleryCount(tx, ownerId),
+      });
 
-    // Common path: a single INSERT. A replayed Idempotency-Key hits the deterministic primary
-    // key and inserts nothing (decided after the profile lock, so two concurrent replays can't
-    // both insert), which saves a separate "does it exist" read on every first-time create.
-    if (decision.allowed) {
-      const [row] = await tx
-        .insert(galleries)
-        .values({
-          ...(id ? { id } : {}),
-          ownerId,
-          slug: generateSlug(),
-          title: input.title ?? GALLERY_LIMITS.defaultTitle,
-        })
-        .onConflictDoNothing({ target: galleries.id })
-        .returning();
-      if (row) return { kind: 'created', gallery: newGalleryItem(row, now) };
-    }
-
-    // Not created: a replay of an earlier request (answered even when the plan is now at its
-    // cap), a key that can't be replayed, or the plan's gallery cap.
-    if (id) {
-      const [existing] = await tx.select().from(galleries).where(eq(galleries.id, id));
-      if (existing) {
-        // The key is per-user by construction; a deleted gallery can't be "replayed".
-        if (existing.ownerId !== ownerId || existing.deletedAt) return { kind: 'conflict' };
-        const [row] = await queryListRows(tx as unknown as Database, ownerId, {
-          limit: 1,
-          galleryId: id,
-        });
-        return {
-          kind: 'replayed',
-          gallery: row ? toListItem(row, now) : newGalleryItem(existing, now),
-        };
+      // Common path: a single INSERT. A replayed Idempotency-Key hits the deterministic primary
+      // key and inserts nothing (decided after the profile lock, so two concurrent replays can't
+      // both insert), which saves a separate "does it exist" read on every first-time create.
+      if (decision.allowed) {
+        const [row] = await tx
+          .insert(galleries)
+          .values({
+            ...(id ? { id } : {}),
+            ownerId,
+            slug: generateSlug(),
+            title: input.title ?? GALLERY_LIMITS.defaultTitle,
+          })
+          .onConflictDoNothing({ target: galleries.id })
+          .returning();
+        if (row) return { kind: 'created', gallery: newGalleryItem(row, now) };
       }
-    }
-    return { kind: 'quota_exceeded', maxActiveGalleries: plan.maxActiveGalleries };
-  });
+
+      // Not created: a replay of an earlier request (answered even when the plan is now at its
+      // cap), a key that can't be replayed, or the plan's gallery cap.
+      if (id) {
+        const [existing] = await tx.select().from(galleries).where(eq(galleries.id, id));
+        if (existing) {
+          // The key is per-user by construction; a deleted gallery can't be "replayed".
+          if (existing.ownerId !== ownerId || existing.deletedAt) return { kind: 'conflict' };
+          const [row] = await queryListRows(tx as unknown as Database, ownerId, {
+            limit: 1,
+            galleryId: id,
+          });
+          return {
+            kind: 'replayed',
+            gallery: row ? toListItem(row, now) : newGalleryItem(existing, now),
+          };
+        }
+      }
+      return { kind: 'quota_exceeded', maxActiveGalleries: plan.maxActiveGalleries };
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------------------------

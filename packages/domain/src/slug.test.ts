@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { SLUG_ALPHABET, SLUG_LENGTH, generateSlug, isValidSlug } from './slug';
+import { gallerySlugSchema } from '@lumra/contracts';
+import { LEGACY_SLUG_LENGTH, SLUG_ALPHABET, SLUG_LENGTH, generateSlug, isValidSlug } from './slug';
 
 describe('generateSlug', () => {
-  it('produces fixed-length base58 slugs with >= 96 bits of entropy', () => {
-    expect(SLUG_LENGTH * Math.log2(SLUG_ALPHABET.length)).toBeGreaterThanOrEqual(96);
+  it('produces 8-char base58 slugs (ADR-010: ~46.9 bits)', () => {
+    expect(SLUG_LENGTH).toBe(8);
+    expect(SLUG_LENGTH * Math.log2(SLUG_ALPHABET.length)).toBeGreaterThanOrEqual(46);
     for (let i = 0; i < 200; i++) {
       const slug = generateSlug();
       expect(slug).toHaveLength(SLUG_LENGTH);
@@ -46,6 +48,10 @@ describe('isValidSlug', () => {
     'abc',
     '1'.repeat(SLUG_LENGTH - 1),
     '1'.repeat(SLUG_LENGTH + 1),
+    '1'.repeat(LEGACY_SLUG_LENGTH - 1),
+    '1'.repeat(LEGACY_SLUG_LENGTH + 1),
+    `${'1'.repeat(LEGACY_SLUG_LENGTH - 1)}0`,
+    `${'1'.repeat(LEGACY_SLUG_LENGTH)}\n`,
     `${'1'.repeat(SLUG_LENGTH - 1)}0`,
     `${'1'.repeat(SLUG_LENGTH - 1)}l`,
     `${'1'.repeat(SLUG_LENGTH - 1)}-`,
@@ -60,5 +66,26 @@ describe('isValidSlug', () => {
     expect(isValidSlug(null)).toBe(false);
     expect(isValidSlug(123)).toBe(false);
     expect(isValidSlug(undefined)).toBe(false);
+  });
+
+  it('still accepts legacy 17-char slugs (ADR-010 regression: shared links must keep working)', () => {
+    const legacy = 'k3x9AbCdEfGhJkMnP';
+    expect(legacy).toHaveLength(LEGACY_SLUG_LENGTH);
+    expect(isValidSlug(legacy)).toBe(true);
+    expect(isValidSlug('1'.repeat(LEGACY_SLUG_LENGTH))).toBe(true);
+    expect(gallerySlugSchema.safeParse(legacy).success).toBe(true);
+  });
+
+  it('contract schema and domain check agree', () => {
+    for (const value of [
+      generateSlug(),
+      'k3x9AbCdEfGhJkMnP',
+      '',
+      'abc',
+      '1'.repeat(12),
+      '0'.repeat(8),
+    ]) {
+      expect(gallerySlugSchema.safeParse(value).success).toBe(isValidSlug(value));
+    }
   });
 });

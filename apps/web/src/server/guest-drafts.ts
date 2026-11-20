@@ -4,9 +4,7 @@ import { GALLERY_LIMITS, GUEST_LIMITS } from '@lumra/config';
 import type { GuestDraftResponse } from '@lumra/contracts';
 import { galleries, guestSessions, media, uploadSessions, type Database } from '@lumra/db';
 import { generateSlug } from '@lumra/domain';
-
-const UNIQUE_VIOLATION = '23505';
-const MAX_SLUG_ATTEMPTS = 3;
+import { withSlugRetry } from './slug-retry';
 
 export interface CreatedGuestDraft {
   guestSessionId: string;
@@ -14,54 +12,42 @@ export interface CreatedGuestDraft {
   expiresAt: Date;
 }
 
-function isUniqueViolation(error: unknown): boolean {
-  const cause = (error as { cause?: { code?: string } })?.cause;
-  return (
-    (error as { code?: string })?.code === UNIQUE_VIOLATION || cause?.code === UNIQUE_VIOLATION
-  );
-}
-
 /**
  * Creates the guest session and its draft gallery in one transaction (FR-A01, FR-A03). Only the
  * capability's HMAC is stored. `expires_at` is fixed at creation (DB clock + 24 h) and is never
- * extended. Slug collisions (≈2^-99 per pair) are retried.
+ * extended. Slug collisions (rare with 8-char slugs, ADR-010) are retried.
  */
 export async function createGuestDraft(
   db: Database,
   input: { capabilityHash: string; rateKeyHash: string | null },
 ): Promise<CreatedGuestDraft> {
   const ttlSeconds = Math.floor(GUEST_LIMITS.draftTtlMs / 1000);
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await db.transaction(async (tx) => {
-        const [session] = await tx
-          .insert(guestSessions)
-          .values({
-            capabilityHash: input.capabilityHash,
-            rateKeyHash: input.rateKeyHash,
-            expiresAt: sql`now() + make_interval(secs => ${ttlSeconds})`,
-          })
-          .returning({ id: guestSessions.id, expiresAt: guestSessions.expiresAt });
-        const [gallery] = await tx
-          .insert(galleries)
-          .values({
-            guestSessionId: session!.id,
-            slug: generateSlug(),
-            title: GALLERY_LIMITS.defaultTitle,
-            status: 'draft',
-          })
-          .returning({ id: galleries.id });
-        return {
+  return withSlugRetry(() =>
+    db.transaction(async (tx) => {
+      const [session] = await tx
+        .insert(guestSessions)
+        .values({
+          capabilityHash: input.capabilityHash,
+          rateKeyHash: input.rateKeyHash,
+          expiresAt: sql`now() + make_interval(secs => ${ttlSeconds})`,
+        })
+        .returning({ id: guestSessions.id, expiresAt: guestSessions.expiresAt });
+      const [gallery] = await tx
+        .insert(galleries)
+        .values({
           guestSessionId: session!.id,
-          galleryId: gallery!.id,
-          expiresAt: session!.expiresAt,
-        };
-      });
-    } catch (error) {
-      if (attempt < MAX_SLUG_ATTEMPTS && isUniqueViolation(error)) continue;
-      throw error;
-    }
-  }
+          slug: generateSlug(),
+          title: GALLERY_LIMITS.defaultTitle,
+          status: 'draft',
+        })
+        .returning({ id: galleries.id });
+      return {
+        guestSessionId: session!.id,
+        galleryId: gallery!.id,
+        expiresAt: session!.expiresAt,
+      };
+    }),
+  );
 }
 
 /** The guest session's (unclaimed, undeleted) draft gallery, newest first. */

@@ -35,7 +35,7 @@ export function makeArchiveFixture(
     jobId: '7d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
     status: state,
     progressPct: state === 'processing' ? 46 : state === 'ready' ? 100 : 0,
-    gallery: { slug: 'dev-fixture', title: 'Autumn wedding' },
+    gallery: { slug: 'devFixtr', title: 'Autumn wedding' },
     itemCount,
     totalBytes: parts.reduce((s, p) => s + p.sourceBytes, 0),
     partsExpected: partCount,
