@@ -43,7 +43,7 @@ describe('POST /api/v1/guest/drafts', () => {
       { owner_id: string | null; title: string; status: string; slug: string }[]
     >`select owner_id, title, status, slug from public.galleries where id = ${body.data.galleryId}`;
     expect(gallery).toMatchObject({ owner_id: null, title: 'Untitled gallery', status: 'draft' });
-    expect(gallery!.slug).toMatch(/^[1-9A-HJ-NP-Za-km-z]{17}$/);
+    expect(gallery!.slug).toMatch(/^[1-9A-HJ-NP-Za-km-z]{8}$/);
   });
 
   it('returns the existing draft for a browser that already has one', async () => {

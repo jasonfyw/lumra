@@ -60,7 +60,7 @@ describe('publicMediaItemSchema', () => {
 describe('publicGalleryResponseSchema', () => {
   const gallery = {
     id: '00000000-0000-4000-8000-0000000000aa',
-    slug: 'k3x9-autumn',
+    slug: 'k3x9AuTu',
     title: 'Autumn',
     coverMediaId: null,
     brandingVisible: true,

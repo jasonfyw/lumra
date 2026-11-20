@@ -4,6 +4,8 @@ import { argon2id } from 'hash-wasm';
 import postgres from 'postgres';
 import { SUPABASE_E2E } from './env';
 
+const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
 /**
  * Recipient `/g/[slug]` against the local Supabase stack (T16/T19/T20; E2E_SUPABASE=1).
  * Galleries are seeded directly in Postgres. Media URLs point at a gateway origin that is never
@@ -32,7 +34,8 @@ async function seedGallery(opts: { password?: string; expiresAt?: Date; title?: 
     insert into auth.users (id, instance_id, aud, role, email, raw_app_meta_data, raw_user_meta_data)
     values (${ownerId}, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
             ${`${ownerId}@example.test`}, '{}', '{}')`;
-  const slug = randomUUID().replaceAll('-', '').slice(0, 17);
+  // Legacy 17-char base58 slug (ADR-010): must keep resolving.
+  const slug = Array.from(randomBytes(17), (b) => BASE58[b % 58]).join('');
   const passwordHash = opts.password
     ? await argon2id({
         password: opts.password,

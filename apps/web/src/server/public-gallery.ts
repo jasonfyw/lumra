@@ -25,6 +25,7 @@ import {
 } from '@lumra/db';
 import {
   galleryAccessState,
+  isValidSlug,
   sanitizeDownloadFilename,
   selectCover,
   toPublicMediaStatus,
@@ -56,7 +57,6 @@ export interface MintDeps {
   now?: Date;
 }
 
-const SLUG_SHAPE = /^[A-Za-z0-9_-]{1,64}$/;
 const HIDDEN_MEDIA_STATUSES: MediaStatus[] = ['deleting', 'deleted'];
 
 export interface ViewableGallery {
@@ -105,7 +105,7 @@ export async function findViewableGallery(
   slug: string,
   now: Date = new Date(),
 ): Promise<ViewableGallery> {
-  if (!SLUG_SHAPE.test(slug)) throw notFoundError();
+  if (!isValidSlug(slug)) throw notFoundError();
   const [row] = await db
     .select({
       id: galleries.id,

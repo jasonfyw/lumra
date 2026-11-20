@@ -8,6 +8,7 @@ export * from './guest';
 export * from './media-token';
 export * from './pagination';
 export * from './queue';
+export * from './slug';
 export * from './upload';
 export * from './public-gallery';
 export * from './processor';
