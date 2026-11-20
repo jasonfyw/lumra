@@ -70,7 +70,7 @@
   // `POST /internal/relay` finalize kick; same value as the web app), STRIPE_SECRET_KEY (daily
   // Billing Meter export, T31; unset ⇒ skipped), RESEND_API_KEY (`wrangler secret put
   // RESEND_API_KEY --env production`; app email via Resend; unset ⇒ email.send is logged and
-  // acked). Optional vars: EMAIL_FROM (default `Lumra <hello@lumra.photos>`), EMAIL_REPLY_TO,
+  // acked). Optional vars: EMAIL_FROM (default `Lumra <noreply@lumra.photos>`), EMAIL_REPLY_TO,
   // APP_URL. Vars: PROCESSOR_URL (local).
   // 17 3 * * *: daily Stripe meter export (T31, METER_EXPORT_CRON).
   // Optional vars (T04): SENTRY_ENVIRONMENT, LOG_LEVEL, COMMIT_SHA (`--var COMMIT_SHA:<sha>`)

@@ -22,7 +22,7 @@ the manual QA script.
 - Users report "no code in the email" or "link only works on one device": the hosted project is
   still using Supabase's default templates. Run `node scripts/supabase-apply-email-templates.mjs` (AUTH.md).
 - Sign-in emails not arriving or rate-limited: check Supabase Auth → SMTP (Resend, `smtp.resend.com`:465,
-  user `resend`, sender `hello@lumra.photos`) and the Resend dashboard → Logs. The SMTP key is a
+  user `resend`, sender `noreply@lumra.photos`) and the Resend dashboard → Logs. The SMTP key is a
   separate Resend API key from the Worker's `RESEND_API_KEY`.
 - Claims refused: grep logs for `guest claim refused` and its `reason`
   (`no_capability` = a different browser, `session_expired`, `capability_mismatch`). The client
@@ -31,7 +31,7 @@ the manual QA script.
 ## Application email (Resend, `email.send`)
 
 Billing notices and spend-cap alerts go out from the worker through Resend (BILLING.md
-"Notifications"). Sender `Lumra <hello@lumra.photos>` on the verified `lumra.photos` domain.
+"Notifications"). Sender `Lumra <noreply@lumra.photos>` on the verified `lumra.photos` domain.
 
 - **Set up / rotate the key:** create a Resend API key with sending access restricted to
   `lumra.photos`, then `wrangler secret put RESEND_API_KEY --env production` (run from

@@ -180,7 +180,7 @@ export const workerEnvSchema = z.object({
   STRIPE_SECRET_KEY: unsetIfEmpty(stripeSecretKey),
   /** Resend API key for `email.send`. Unset => notices are logged and acked, not sent. */
   RESEND_API_KEY: unsetIfEmpty(z.string().min(8)),
-  /** Sender; any RFC 5322 mailbox on the verified domain. Default `Lumra <hello@lumra.photos>`. */
+  /** Sender; any RFC 5322 mailbox on the verified domain. Default `Lumra <noreply@lumra.photos>`. */
   EMAIL_FROM: unsetIfEmpty(z.string().min(3).max(200)),
   EMAIL_REPLY_TO: unsetIfEmpty(z.string().min(3).max(200)),
   /** Public app origin used for links in emails. Default `https://www.lumra.photos`. */

@@ -4,7 +4,7 @@ import { renderEmail } from '../email/templates';
 import { sendWithResend, type FetchLike } from '../email/resend';
 import type { Logger } from '../log';
 
-export const DEFAULT_EMAIL_FROM = 'Lumra <hello@lumra.photos>';
+export const DEFAULT_EMAIL_FROM = 'Lumra <noreply@lumra.photos>';
 export const DEFAULT_APP_URL = 'https://www.lumra.photos';
 
 export type EmailOutcome = 'sent' | 'skipped_unconfigured' | 'skipped_no_recipient' | 'rejected';
