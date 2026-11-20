@@ -151,8 +151,8 @@ the guest capability cookie of the session that owns the draft. It runs as one t
 - Auth → SMTP settings (production sender, **Resend**): enable custom SMTP with host
   `smtp.resend.com`, port `465`, username `resend`, password = a Resend API key with "Sending
   access" (use a dedicated key for Supabase, separate from the Worker's), sender email
-  `hello@lumra.photos`, sender name `Lumra`. This is the same address the Worker uses for app
-  email (`Lumra <hello@lumra.photos>`), so SPF/DKIM/DMARC for `lumra.photos` (verified in Resend)
+  `noreply@lumra.photos`, sender name `Lumra`. This is the same address the Worker uses for app
+  email (`Lumra <noreply@lumra.photos>`), so SPF/DKIM/DMARC for `lumra.photos` (verified in Resend)
   cover both. The built-in Supabase sender is rate-limited heavily and not meant for production.
   After enabling custom SMTP, raise Auth → Rate limits → emails per hour (default 30) to taste.
 - Auth → Rate limits: review the email-send and verify limits (FR-A05).

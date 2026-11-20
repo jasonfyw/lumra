@@ -26,7 +26,7 @@ export interface Env {
    * and acked without sending (no crash).
    */
   RESEND_API_KEY?: string;
-  /** Sender, default `Lumra <hello@lumra.photos>` (verified Resend domain lumra.photos). */
+  /** Sender, default `Lumra <noreply@lumra.photos>` (verified Resend domain lumra.photos). */
   EMAIL_FROM?: string;
   /** Optional Reply-To address. */
   EMAIL_REPLY_TO?: string;

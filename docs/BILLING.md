@@ -206,7 +206,7 @@ branded layout (table, inline styles, no remote assets), an HTML and a plain-tex
 style as the Supabase auth emails.
 
 - **Config (worker):** secret `RESEND_API_KEY` (`wrangler secret put RESEND_API_KEY --env
-production`), optional vars `EMAIL_FROM` (default `Lumra <hello@lumra.photos>`), `EMAIL_REPLY_TO`
+production`), optional vars `EMAIL_FROM` (default `Lumra <noreply@lumra.photos>`), `EMAIL_REPLY_TO`
   (default none) and `APP_URL` (default `https://www.lumra.photos`, used for links).
 - **Unset `RESEND_API_KEY`:** the message is logged (`email not sent: RESEND_API_KEY not set`) and
   acked; nothing crashes. In-app banners on `/account` and the dashboard show the same states.
@@ -293,13 +293,13 @@ above 10 % (and more than 2 ¢) or overage above cap + tolerance logs `billing r
 
 ## Environment and webhook endpoint
 
-| Variable                                  | Where           | Notes                                                                              |
-| ----------------------------------------- | --------------- | ---------------------------------------------------------------------------------- |
-| `STRIPE_SECRET_KEY`                       | Vercel (server) | `sk_…`/`rk_…`; unset ⇒ billing disabled gracefully. Test key outside prod.         |
-| `STRIPE_WEBHOOK_SECRET`                   | Vercel (server) | Endpoint signing secret `whsec_…` for `/api/v1/billing/webhook`.                   |
-| `STRIPE_SECRET_KEY`                       | Worker (secret) | Same key; daily meter export. Unset ⇒ export skipped (logged).                     |
-| `RESEND_API_KEY`                          | Worker (secret) | Resend key (sending access). Unset ⇒ app email logged and acked, not sent.         |
-| `EMAIL_FROM`, `EMAIL_REPLY_TO`, `APP_URL` | Worker (vars)   | Optional; defaults `Lumra <hello@lumra.photos>`, none, `https://www.lumra.photos`. |
+| Variable                                  | Where           | Notes                                                                                |
+| ----------------------------------------- | --------------- | ------------------------------------------------------------------------------------ |
+| `STRIPE_SECRET_KEY`                       | Vercel (server) | `sk_…`/`rk_…`; unset ⇒ billing disabled gracefully. Test key outside prod.           |
+| `STRIPE_WEBHOOK_SECRET`                   | Vercel (server) | Endpoint signing secret `whsec_…` for `/api/v1/billing/webhook`.                     |
+| `STRIPE_SECRET_KEY`                       | Worker (secret) | Same key; daily meter export. Unset ⇒ export skipped (logged).                       |
+| `RESEND_API_KEY`                          | Worker (secret) | Resend key (sending access). Unset ⇒ app email logged and acked, not sent.           |
+| `EMAIL_FROM`, `EMAIL_REPLY_TO`, `APP_URL` | Worker (vars)   | Optional; defaults `Lumra <noreply@lumra.photos>`, none, `https://www.lumra.photos`. |
 
 Webhook endpoint: `https://www.lumra.photos/api/v1/billing/webhook` (the PRD's `/api/v1/webhooks/stripe`
 path sits with the other billing routes instead; ADR-004 amendment). Subscribe it to
