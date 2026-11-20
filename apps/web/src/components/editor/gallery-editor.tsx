@@ -1,6 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
+import { LocalTime } from '@/components/local-time';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { EditorMediaItem, GalleryDetail, MediaStatus } from '@lumra/contracts';
 import { PublishButton } from '@/components/publish-button';
@@ -352,9 +353,12 @@ export function GalleryEditor({
               {STATE_LABEL[gallery.accessState]} · {gallery.itemCount}{' '}
               {gallery.itemCount === 1 ? 'photo' : 'photos'}
               {gallery.hasPassword ? ' · Password protected' : ''}
-              {gallery.expiresAt
-                ? ` · Expires ${new Date(gallery.expiresAt).toLocaleString()}`
-                : ''}
+              {gallery.expiresAt && (
+                <>
+                  {' · Expires '}
+                  <LocalTime value={gallery.expiresAt} format="datetime" />
+                </>
+              )}
             </p>
           </header>
 

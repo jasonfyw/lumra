@@ -1,5 +1,6 @@
 import type { AccountInvoice } from '@lumra/contracts';
 import { Tag } from '@/components/ui';
+import { LocalTime } from '@/components/local-time';
 import { formatDate } from '@/lib/format';
 
 const STATUS: Record<AccountInvoice['status'], { label: string; tone?: 'ready' | 'failed' }> = {
@@ -33,7 +34,7 @@ export function InvoiceList({ invoices }: { invoices: AccountInvoice[] }) {
         return (
           <li key={inv.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
             <div className="flex flex-col">
-              <span className="tabular-nums">{formatDate(inv.createdAt)}</span>
+              <LocalTime value={inv.createdAt} className="tabular-nums" />
               {inv.number && (
                 <span className="text-[13px] text-[var(--color-ink-muted)]">{inv.number}</span>
               )}
