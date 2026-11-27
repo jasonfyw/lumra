@@ -1,4 +1,5 @@
 import { mediaTokensRequestSchema, type MediaTokensResponse } from '@lumra/contracts';
+import { getAuthenticatedUser } from '@/lib/actor';
 import { ok, parseJsonBody } from '@/lib/api';
 import { assertSameOrigin } from '@/lib/origin';
 import { withRoute } from '@/lib/route';
@@ -8,6 +9,7 @@ import {
   mintDeps,
   publicRequestContext,
 } from '@/server/public-context';
+import { trackGalleryEvent, visitorFromHeaders } from '@/server/gallery-analytics';
 import { mintMediaTokens } from '@/server/public-gallery';
 
 export const dynamic = 'force-dynamic';
@@ -32,6 +34,16 @@ export const POST = withRoute<Context>(
     const data = await mintMediaTokens(db, slug, mintDeps(), body, {
       sessionToken: await gallerySessionToken(),
     });
+    if (body.action === 'original') {
+      // A minted download URL is an initiated download (T22/T26); counted after the response.
+      const mediaIds = data.items.filter((i) => i.downloadUrl).map((i) => i.id);
+      if (mediaIds.length > 0) {
+        const visitor = visitorFromHeaders(request.headers, getAuthenticatedUser());
+        trackGalleryEvent(db, slug, { type: 'item_download', mediaIds }, visitor, {
+          log: scope.log,
+        });
+      }
+    }
     return ok<MediaTokensResponse>(data, scope.requestId, { headers: PRIVATE_NO_STORE });
   },
   { quiet: true },

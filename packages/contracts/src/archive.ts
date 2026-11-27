@@ -1,5 +1,6 @@
 import { ARCHIVE_LIMITS, GALLERY_LIMITS } from '@lumra/config';
 import { z } from 'zod';
+import { gallerySlugSchema } from './slug';
 import { mediaUrlSchema } from './public-gallery';
 
 /**
@@ -95,7 +96,7 @@ export const archiveStatusResponseSchema = z.object({
   jobId: z.uuid(),
   status: publicArchiveStatusSchema,
   progressPct: z.number().int().min(0).max(100),
-  gallery: z.object({ slug: z.string().min(1), title: z.string() }),
+  gallery: z.object({ slug: gallerySlugSchema, title: z.string() }),
   itemCount: z.number().int().nonnegative(),
   totalBytes: z.number().int().nonnegative(),
   partsExpected: z.number().int().nonnegative(),

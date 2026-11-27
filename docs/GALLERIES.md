@@ -110,3 +110,23 @@ All controls are ≥ 44 px, keyboard operable, and announced through a polite `a
 Public gallery reads, the unlock endpoint and session cookie, media tokens and the KV writer belong
 to the recipient side and T20. Creator thumbnails are owner-scoped preview tokens minted by the
 detail endpoint (ADR-001 "Owner previews").
+
+## Analytics (FR-N02, T26)
+
+Owners see one muted line under the gallery title ("142 views · 12 visitors · 23 downloads · last
+viewed 2h ago"; `GalleryStats`) and can read the same numbers from
+`GET /api/v1/galleries/{id}/analytics` (owner only, concealed 404 otherwise).
+
+- **Storage:** `gallery_events` stays the append-only, service-only log (view dedupe per visitor per
+  30-minute window, optional idempotency key). `gallery_stats` holds one counter row per gallery
+  (owner-readable under RLS, no client writes). `public.record_gallery_event` (SECURITY DEFINER,
+  service role only) inserts the event and bumps the counters atomically.
+- **Views:** counted from the `/g/[slug]` server component once the gallery loaded and is unlocked.
+  Bots (simple UA check in `@lumra/domain`) and the owner are skipped.
+- **Downloads:** counted where they are initiated on the server: a `media-tokens` call with
+  `action: 'original'` (one per minted item) and `POST .../archives` (one per request, new or
+  reused). Media bytes still flow only through the gateway.
+- **Privacy:** the visitor id is `HMAC(pepper, UTC day | gallery | truncated IP prefix | UA)`. It is
+  never stored with an IP, rotates daily and differs per gallery, so "visitors" means unique
+  visitors per day, summed. Tracking runs in `after()`, swallows errors and logs only an event type
+  and error name.

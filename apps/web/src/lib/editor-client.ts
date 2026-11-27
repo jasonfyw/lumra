@@ -1,5 +1,6 @@
 import type {
   ApiResponse,
+  BulkDeleteMediaResponse,
   DeleteGalleryResponse,
   DeleteMediaResponse,
   GalleryDetail,
@@ -57,6 +58,9 @@ export const reorderMediaRequest = (id: string, orderedIds: string[]) =>
 
 export const deleteMediaRequest = (id: string, mediaId: string) =>
   call<DeleteMediaResponse>('DELETE', `${g(id)}/media/${encodeURIComponent(mediaId)}`);
+
+export const bulkDeleteMediaRequest = (id: string, mediaIds: string[]) =>
+  call<BulkDeleteMediaResponse>('POST', `${g(id)}/media/bulk-delete`, { mediaIds });
 
 /** `<input type="datetime-local">` value (local wall time) → ISO UTC (`…Z`), or null if empty. */
 export function localInputToUtcIso(value: string): string | null {

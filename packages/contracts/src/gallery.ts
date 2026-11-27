@@ -119,3 +119,19 @@ export const claimGuestDraftResponseSchema = z.object({
   pendingUploads: z.number().int().nonnegative(),
 });
 export type ClaimGuestDraftResponse = z.infer<typeof claimGuestDraftResponseSchema>;
+
+/**
+ * `GET /api/v1/galleries/{id}/analytics` (FR-N02, T26): owner-only aggregate counters. Downloads
+ * are split item vs archive in the backend; the UI may show the total. `uniqueVisitors` counts
+ * anonymous visitors per day (the visitor id rotates daily, nothing links days).
+ */
+export const galleryAnalyticsSchema = z.object({
+  views: z.number().int().nonnegative(),
+  uniqueVisitors: z.number().int().nonnegative(),
+  itemDownloads: z.number().int().nonnegative(),
+  archiveDownloads: z.number().int().nonnegative(),
+  /** Item + archive downloads. */
+  downloads: z.number().int().nonnegative(),
+  lastViewedAt: z.iso.datetime().nullable(),
+});
+export type GalleryAnalytics = z.infer<typeof galleryAnalyticsSchema>;

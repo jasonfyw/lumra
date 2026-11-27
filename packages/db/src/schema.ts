@@ -124,6 +124,7 @@ export const profiles = pgTable('profiles', {
     .primaryKey()
     .references(() => authUsers.id, { onDelete: 'cascade' }),
   email: text('email').notNull(),
+  /** Nullable; trimmed 1-80 chars (CHECK `profiles_display_name_valid`). */
   displayName: text('display_name'),
   planId: text('plan_id')
     .$type<PlanId>()
@@ -339,6 +340,22 @@ export const galleryEvents = pgTable('gallery_events', {
   idempotencyKey: text('idempotency_key').unique(),
   occurredAt: tstz('occurred_at').notNull().defaultNow(),
   createdAt: createdAt(),
+});
+
+/**
+ * Per-gallery aggregate counters, written only by `record_gallery_event` (SECURITY DEFINER,
+ * service role). Owners may read their own row under RLS (T26).
+ */
+export const galleryStats = pgTable('gallery_stats', {
+  galleryId: uuid('gallery_id')
+    .primaryKey()
+    .references(() => galleries.id, { onDelete: 'cascade' }),
+  viewCount: int8('view_count').notNull().default(0),
+  itemDownloadCount: int8('item_download_count').notNull().default(0),
+  archiveDownloadCount: int8('archive_download_count').notNull().default(0),
+  uniqueVisitorCount: int8('unique_visitor_count').notNull().default(0),
+  lastViewedAt: tstz('last_viewed_at'),
+  updatedAt: updatedAt(),
 });
 
 /** Append-only (UPDATE/DELETE rejected by trigger); corrections are compensating rows. */

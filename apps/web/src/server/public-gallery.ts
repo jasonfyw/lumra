@@ -25,6 +25,7 @@ import {
 } from '@lumra/db';
 import {
   galleryAccessState,
+  isValidSlug,
   sanitizeDownloadFilename,
   selectCover,
   toPublicMediaStatus,
@@ -56,13 +57,14 @@ export interface MintDeps {
   now?: Date;
 }
 
-const SLUG_SHAPE = /^[A-Za-z0-9_-]{1,64}$/;
 const HIDDEN_MEDIA_STATUSES: MediaStatus[] = ['deleting', 'deleted'];
 
 export interface ViewableGallery {
   id: string;
   slug: string;
   title: string;
+  /** Owner's display name; the only owner field exposed to recipients. */
+  ownerName: string | null;
   coverMediaId: string | null;
   contentVersion: number;
   accessVersion: number;
@@ -105,12 +107,13 @@ export async function findViewableGallery(
   slug: string,
   now: Date = new Date(),
 ): Promise<ViewableGallery> {
-  if (!SLUG_SHAPE.test(slug)) throw notFoundError();
+  if (!isValidSlug(slug)) throw notFoundError();
   const [row] = await db
     .select({
       id: galleries.id,
       slug: galleries.slug,
       title: galleries.title,
+      ownerName: profiles.displayName,
       status: galleries.status,
       deletedAt: galleries.deletedAt,
       expiresAt: galleries.expiresAt,
@@ -151,6 +154,7 @@ export async function findViewableGallery(
     id: row.id,
     slug: row.slug,
     title: row.title,
+    ownerName: row.ownerName,
     coverMediaId: row.coverMediaId,
     contentVersion: row.contentVersion,
     accessVersion: row.accessVersion,
@@ -448,6 +452,7 @@ export async function loadPublicGallery(
       id: gallery.id,
       slug: gallery.slug,
       title: gallery.title,
+      ownerName: gallery.ownerName,
       coverMediaId: gallery.coverMediaId,
       brandingVisible: gallery.brandingVisible,
       contentVersion: gallery.contentVersion,

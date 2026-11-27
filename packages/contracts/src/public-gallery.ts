@@ -1,5 +1,6 @@
 import { GALLERY_LIMITS, PUBLIC_GALLERY } from '@lumra/config';
 import { z } from 'zod';
+import { gallerySlugSchema } from './slug';
 
 /**
  * Recipient-facing gallery payload: `GET /api/v1/public/galleries/{slug}` (PRD §10, FR-V01).
@@ -72,8 +73,13 @@ export type PublicMediaItem = z.infer<typeof publicMediaItemSchema>;
 
 export const publicGallerySchema = z.object({
   id: z.uuid(),
-  slug: z.string().min(1),
+  slug: gallerySlugSchema,
   title: z.string(),
+  /**
+   * The owner's display name (`null` when unset). The only owner field in the public payload:
+   * never email or other account data.
+   */
+  ownerName: z.string().nullable(),
   coverMediaId: z.uuid().nullable(),
   /** "Made with Lumra" badge (shown for Free-plan galleries). */
   brandingVisible: z.boolean(),

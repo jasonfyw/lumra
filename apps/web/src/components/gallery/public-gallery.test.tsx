@@ -26,8 +26,9 @@ const pending = (n: number): PublicMediaItem => ({
 });
 const gallery = {
   id: id(99),
-  slug: 'abc',
+  slug: 'abcdefgh',
   title: 'Autumn',
+  ownerName: null,
   coverMediaId: null,
   brandingVisible: true,
   contentVersion: 1,
@@ -68,7 +69,7 @@ describe('PublicGallery', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { container } = render(<PublicGallery slug="abc" initial={initial} />);
+    const { container } = render(<PublicGallery slug="abcdefgh" initial={initial} />);
     expect(container.querySelector('[data-index="1"]')?.getAttribute('data-status')).toBe(
       'pending',
     );
@@ -80,12 +81,12 @@ describe('PublicGallery', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500);
     });
-    expect(calls).toContain('GET /api/v1/public/galleries/abc?urls=0');
+    expect(calls).toContain('GET /api/v1/public/galleries/abcdefgh?urls=0');
     const tile = container.querySelector('[data-index="1"]')!;
     expect(tile.getAttribute('data-status')).toBe('ready');
-    expect(calls.some((c) => c.startsWith('POST /api/v1/public/galleries/abc/media-tokens'))).toBe(
-      true,
-    );
+    expect(
+      calls.some((c) => c.startsWith('POST /api/v1/public/galleries/abcdefgh/media-tokens')),
+    ).toBe(true);
     expect(tile.querySelector('img')?.getAttribute('src')).toBe(`/m/${id(2)}`);
     // Item 1 kept the URL it was rendered with (no needless re-download).
     expect(container.querySelector('[data-index="0"] img')?.getAttribute('src')).toBe('/m/one');
@@ -106,11 +107,11 @@ describe('PublicGallery', () => {
         .mockResolvedValue(json({ expiresAt: new Date().toISOString(), items: [], missing: [] })),
     );
     const { unmount } = render(
-      <PublicGallery slug="abc" initial={{ gallery, items: [pending(1)] }} />,
+      <PublicGallery slug="abcdefgh" initial={{ gallery, items: [pending(1)] }} />,
     );
     expect(document.querySelector('button.lm-btn-primary')).toBeNull();
     unmount();
-    render(<PublicGallery slug="abc" initial={{ gallery, items: [ready(1), pending(2)] }} />);
+    render(<PublicGallery slug="abcdefgh" initial={{ gallery, items: [ready(1), pending(2)] }} />);
     expect(
       Array.from(document.querySelectorAll('button')).some((b) => b.textContent === 'Download all'),
     ).toBe(true);
@@ -121,7 +122,7 @@ describe('PublicGallery', () => {
       'fetch',
       vi.fn(async () => json(null, 410)),
     );
-    render(<PublicGallery slug="abc" initial={{ gallery, items: [pending(1)] }} />);
+    render(<PublicGallery slug="abcdefgh" initial={{ gallery, items: [pending(1)] }} />);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(PUBLIC_GALLERY.pollIntervalMs + 500);
     });

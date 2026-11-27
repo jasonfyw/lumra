@@ -4,6 +4,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
+import { generateSlug } from '@lumra/domain';
 import {
   GUEST_COOKIE_NAME,
   generateGuestCapability,
@@ -44,7 +45,7 @@ export async function createUser(plan: 'free' | 'pro' = 'free'): Promise<string>
 }
 
 export function slug(): string {
-  return randomUUID().replaceAll('-', '').slice(0, 20);
+  return generateSlug();
 }
 
 export async function createOwnedGallery(

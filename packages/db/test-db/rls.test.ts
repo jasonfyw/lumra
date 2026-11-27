@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   actAs,
+  CHECK_VIOLATION,
   connect,
   createGallery,
   createMedia,
@@ -139,6 +140,16 @@ describe('profiles and billing_accounts', () => {
         DENIED,
         (sp) => sp`update public.profiles set email = 'x@example.test' where user_id = ${a}`,
       );
+      // Name rules (20261120000300): null, or trimmed 1-80 chars.
+      await tx`update public.profiles set display_name = null where user_id = ${a}`;
+      await tx`update public.profiles set display_name = ${'n'.repeat(80)} where user_id = ${a}`;
+      for (const bad of ['', ' Ada', 'Ada ', 'n'.repeat(81)]) {
+        await expectSqlError(
+          tx,
+          CHECK_VIOLATION,
+          (sp) => sp`update public.profiles set display_name = ${bad} where user_id = ${a}`,
+        );
+      }
       await expectSqlError(tx, DENIED, (sp) => sp`update public.profiles set plan_id = 'pro'`);
       await expectSqlError(
         tx,

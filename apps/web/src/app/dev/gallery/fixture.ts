@@ -107,8 +107,9 @@ export function makeGalleryFixture(
   return {
     gallery: {
       id: fixtureId(0xa11e7),
-      slug: 'dev-fixture',
+      slug: 'devFixtr',
       title: 'Coastline, autumn',
+      ownerName: 'Ada Lovelace',
       coverMediaId: coverItem?.id ?? null,
       brandingVisible: options.branding ?? true,
       contentVersion: 1,

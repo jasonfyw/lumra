@@ -328,6 +328,82 @@ describe('GalleryEditor', () => {
     });
   });
 
+  it('multi-select: checkbox, shift range, toolbar, Escape clears', async () => {
+    mockFetch(() => detail());
+    render(<GalleryEditor initial={detail({ items: [item(1), item(2), item(3), item(4)] })} />);
+    expect(screen.queryByRole('toolbar')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select IMG_1.jpg' }));
+    const bar = screen.getByRole('toolbar', { name: 'Selected photos' });
+    expect(bar).toHaveTextContent('1 selected');
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select IMG_3.jpg' }), {
+      shiftKey: true,
+    });
+    expect(bar).toHaveTextContent('3 selected');
+    expect(screen.getByRole('checkbox', { name: 'Select IMG_4.jpg' })).not.toBeChecked();
+
+    // Ctrl-click on the tile toggles it.
+    const tiles = screen.getAllByTestId('media-tile');
+    fireEvent.click(tiles[1]!, { ctrlKey: true });
+    expect(bar).toHaveTextContent('2 selected');
+
+    await userEvent.click(within(bar).getByRole('button', { name: 'Select all' }));
+    expect(bar).toHaveTextContent('4 selected');
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('toolbar')).not.toBeInTheDocument();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('bulk delete needs confirmation, then removes the selection with one request', async () => {
+    mockFetch((call) =>
+      call.method === 'POST'
+        ? { mediaIds: [uuid(1), uuid(3)], contentVersion: 2, coverMediaId: null }
+        : detail({ items: [item(2)], itemCount: 1 }),
+    );
+    render(<GalleryEditor initial={detail({ items: [item(1), item(2), item(3)] })} />);
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select IMG_1.jpg' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select IMG_3.jpg' }));
+    await userEvent.click(
+      within(screen.getByRole('toolbar')).getByRole('button', { name: /Delete/ }),
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Delete 2 photos?' });
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(calls).toHaveLength(0);
+    // Cancelling the dialog keeps the selection.
+    expect(screen.getByRole('toolbar')).toHaveTextContent('2 selected');
+    void dialog;
+
+    await userEvent.click(
+      within(screen.getByRole('toolbar')).getByRole('button', { name: /Delete/ }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Delete photos' }));
+    await waitFor(() => expect(screen.queryByText('IMG_1.jpg')).not.toBeInTheDocument());
+    expect(screen.queryByText('IMG_3.jpg')).not.toBeInTheDocument();
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      url: `/api/v1/galleries/${uuid(99)}/media/bulk-delete`,
+      body: { mediaIds: [uuid(1), uuid(3)] },
+    });
+    expect(screen.queryByRole('toolbar')).not.toBeInTheDocument();
+  });
+
+  it('single-photo actions still work while a selection exists', async () => {
+    mockFetch(() => ({ contentVersion: 2, updated: 1, rebalanced: false }));
+    render(<GalleryEditor initial={detail()} />);
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select IMG_1.jpg' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Move IMG_3.jpg earlier' }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toMatchObject({
+      method: 'PATCH',
+      body: { orderedIds: [uuid(1), uuid(3), uuid(2)] },
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Delete IMG_2.jpg' }));
+    expect(screen.getByRole('dialog', { name: 'Delete this photo?' })).toBeInTheDocument();
+  });
+
   it('gallery deletion is gated by an irreversible-confirmation dialog', async () => {
     mockFetch(() => ({ id: uuid(99), status: 'deleted', deletedAt: '2026-11-05T10:00:00.000Z' }));
     render(<GalleryEditor initial={detail()} />);

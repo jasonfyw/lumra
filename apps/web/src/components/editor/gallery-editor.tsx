@@ -4,8 +4,18 @@ import { useRouter } from 'next/navigation';
 import { LocalTime } from '@/components/local-time';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { EditorMediaItem, GalleryDetail, MediaStatus } from '@lumra/contracts';
+import {
+  EMPTY_SELECTION,
+  applySelectClick,
+  moveSelection,
+  pruneSelection,
+  toggleSelectAll,
+  type SelectClick,
+  type SelectionState,
+} from '@lumra/domain';
 import { PublishButton } from '@/components/publish-button';
 import {
+  bulkDeleteMediaRequest,
   deleteGalleryRequest,
   deleteMediaRequest,
   getGalleryRequest,
@@ -19,6 +29,7 @@ import { AppHeader, Icon, Tag, buttonClass } from '@/components/ui';
 import { UploadBridgeContext } from '@/components/upload';
 import { ConfirmDialog } from './confirm-dialog';
 import { MediaGrid, moveItem } from './media-grid';
+import { SelectionBar } from './selection-bar';
 import { ShareSheet } from './share-sheet';
 import { THUMBNAIL_RETRY_MS, mergeThumbnails, useLocalPreviews } from './thumbnails';
 
@@ -43,8 +54,11 @@ const STATE_LABEL = { draft: 'Draft', published: 'Published', expired: 'Expired'
 export function GalleryEditor({
   initial,
   uploadSlot,
+  statsSlot,
 }: {
   initial: GalleryDetail;
+  /** Muted analytics line (FR-N02) rendered under the status line. */
+  statsSlot?: ReactNode;
   /** Upload zone (T14). Until it lands, a placeholder explains that uploads start from `/new`. */
   uploadSlot?: ReactNode;
 }) {
@@ -143,6 +157,68 @@ export function GalleryEditor({
     setGallery((g) => ({ ...g, items }));
     announce(`Moved ${moved.filename} to position ${to + 1} of ${items.length}.`);
     void saveOrder(items.map((i) => i.id));
+  }
+
+  // ---------------------------------------------------------------- selection
+  const [selection, setSelection] = useState<SelectionState>(EMPTY_SELECTION);
+  const orderedIds = useMemo(() => gallery.items.map((i) => i.id), [gallery.items]);
+  // Items vanish via refresh/delete: never keep (or later act on) ids that are gone.
+  const live = useMemo(() => pruneSelection(selection, orderedIds), [selection, orderedIds]);
+  useEffect(() => {
+    if (live !== selection) setSelection(live);
+  }, [live, selection]);
+  const selectedIds = live.selected;
+
+  function select(mediaId: string, click: SelectClick) {
+    setSelection((s) => applySelectClick(s, orderedIds, mediaId, click));
+  }
+
+  /** Drag-drop: a selected tile carries the whole selection (relative order kept). */
+  function dragMove(from: number, to: number) {
+    const moved = gallery.items[from];
+    if (!moved) return;
+    if (!selectedIds.has(moved.id) || selectedIds.size < 2) return move(from, to);
+    const nextIds = moveSelection(orderedIds, selectedIds, from, to);
+    if (nextIds.every((id, i) => id === orderedIds[i])) return;
+    const byId = new Map(gallery.items.map((i) => [i.id, i]));
+    setGallery((g) => ({ ...g, items: nextIds.map((id) => byId.get(id)!) }));
+    announce(`Moved ${selectedIds.size} selected photos.`);
+    void saveOrder(nextIds);
+  }
+
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const dialogOpen = bulkDeleteOpen;
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape' && !dialogOpen) setSelection(EMPTY_SELECTION);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dialogOpen]);
+
+  async function confirmBulkDelete() {
+    const ids = orderedIds.filter((id) => selectedIds.has(id));
+    if (ids.length === 0) return;
+    setBusy('media');
+    const res = await bulkDeleteMediaRequest(galleryId, ids);
+    setBusy(null);
+    if (!res.ok) {
+      setError(res.message);
+      announce(res.message);
+    } else {
+      const gone = new Set(res.data.mediaIds);
+      setGallery((g) => ({
+        ...g,
+        items: g.items.filter((i) => !gone.has(i.id)),
+        itemCount: g.itemCount - gone.size,
+        coverMediaId: res.data.coverMediaId,
+        contentVersion: res.data.contentVersion,
+      }));
+      setSelection(EMPTY_SELECTION);
+      announce(`Deleted ${gone.size} photos.`);
+      void refresh();
+    }
+    setBulkDeleteOpen(false);
   }
 
   // ---------------------------------------------------------------- polling for readiness
@@ -360,6 +436,7 @@ export function GalleryEditor({
                 </>
               )}
             </p>
+            {statsSlot}
           </header>
 
           <p role="status" aria-live="polite" className="sr-only">
@@ -394,6 +471,9 @@ export function GalleryEditor({
               effectiveCoverMediaId={gallery.effectiveCoverMediaId}
               disabled={busy === 'cover' || busy === 'media'}
               onMove={move}
+              selected={selectedIds}
+              onSelect={select}
+              onDragMove={dragMove}
               onSetCover={setCover}
               onDelete={setToDelete}
               localPreviews={previews}
@@ -560,6 +640,29 @@ export function GalleryEditor({
           </section>
         </aside>
       </div>
+
+      <SelectionBar
+        count={selectedIds.size}
+        total={gallery.items.length}
+        disabled={busy === 'media'}
+        onSelectAll={() => setSelection((s) => toggleSelectAll(s, orderedIds))}
+        onDelete={() => setBulkDeleteOpen(true)}
+        onClear={() => setSelection(EMPTY_SELECTION)}
+      />
+
+      <ConfirmDialog
+        open={bulkDeleteOpen}
+        title={`Delete ${selectedIds.size} ${selectedIds.size === 1 ? 'photo' : 'photos'}?`}
+        confirmLabel={`Delete ${selectedIds.size === 1 ? 'photo' : 'photos'}`}
+        busy={busy === 'media'}
+        onCancel={() => setBulkDeleteOpen(false)}
+        onConfirm={() => void confirmBulkDelete()}
+      >
+        <p>
+          The selected photos will be removed from the gallery and their files deleted. This can’t
+          be undone.
+        </p>
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={toDelete !== null}

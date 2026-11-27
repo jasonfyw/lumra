@@ -92,7 +92,7 @@ describe('ArchiveProgress', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await act(() => vi.advanceTimersByTimeAsync(0));
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/public/galleries/dev-fixture/archives',
+      '/api/v1/public/galleries/devFixtr/archives',
       expect.objectContaining({ method: 'POST' }),
     );
     expect(push).toHaveBeenCalledWith(`/archive/${NEW_JOB}`);
@@ -116,7 +116,7 @@ describe('ArchiveProgress', () => {
     expect(push).not.toHaveBeenCalled();
     expect(screen.getByRole('link', { name: 'Back to the gallery' })).toHaveAttribute(
       'href',
-      '/g/dev-fixture',
+      '/g/devFixtr',
     );
   });
 

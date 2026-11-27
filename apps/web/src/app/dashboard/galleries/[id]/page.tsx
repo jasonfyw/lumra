@@ -1,5 +1,7 @@
+import { Suspense } from 'react';
 import { notFound, redirect } from 'next/navigation';
 import { GalleryEditor } from '@/components/editor/gallery-editor';
+import { GalleryStats } from '@/components/editor/gallery-stats-loader';
 import { GalleryUploader } from '@/components/upload';
 import { getAuthenticatedUser } from '@/lib/actor';
 import { ApiFailure } from '@/lib/api';
@@ -40,6 +42,11 @@ export default async function EditGalleryPage({ params }: { params: Promise<{ id
     <GalleryEditor
       key={detail.id}
       initial={detail}
+      statsSlot={
+        <Suspense fallback={null}>
+          <GalleryStats userId={user.userId} galleryId={detail.id} />
+        </Suspense>
+      }
       uploadSlot={
         <GalleryUploader
           galleryId={detail.id}

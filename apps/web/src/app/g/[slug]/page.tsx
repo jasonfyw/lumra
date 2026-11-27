@@ -1,11 +1,15 @@
 import type { Metadata } from 'next';
 import { cookies, headers } from 'next/headers';
 import { notFound } from 'next/navigation';
+import { cache } from 'react';
+import { galleryDocumentTitle } from '@lumra/domain';
 import { PublicGallery } from '@/components/gallery';
+import { getAuthenticatedUser } from '@/lib/actor';
 import { ApiFailure } from '@/lib/api';
 import { getDb } from '@/lib/db';
 import { GALLERY_SESSION_COOKIE } from '@/lib/gallery-session';
 import { clientIp, enforceRateLimit } from '@/lib/rate-limit';
+import { trackGalleryEvent, visitorFromHeaders } from '@/server/gallery-analytics';
 import { mintDeps } from '@/server/public-context';
 import { loadPublicGallery } from '@/server/public-gallery';
 import { GalleryNotice } from './gallery-notice';
@@ -16,31 +20,65 @@ export const dynamic = 'force-dynamic';
 /**
  * Recipient gallery (PRD §3 J3/J4, §4 `/g/[slug]`; T16/T19). Rendered per request (never
  * cached: password sessions and short-lived URLs are per viewer) through the same service as
- * `GET /api/v1/public/galleries/{slug}`. Not indexed by search engines; the generic title never
- * reveals a protected gallery's name.
+ * `GET /api/v1/public/galleries/{slug}`. Not indexed by search engines.
  */
-export const metadata: Metadata = {
+const baseMetadata: Metadata = {
   title: 'Gallery',
   robots: { index: false, follow: false, nocache: true },
   referrer: 'no-referrer',
 };
 
-export default async function GalleryPage({ params }: { params: Promise<{ slug: string }> }) {
-  const { slug } = await params;
+/** One rate-limited load per request, shared by the page and `generateMetadata`. */
+const loadGallery = cache(async (slug: string) => {
   const db = getDb();
   const requestHeaders = await headers();
+  await enforceRateLimit(
+    new Request('https://lumra.invalid/', { headers: requestHeaders }),
+    'publicGalleryRead',
+    { kind: 'ip', ip: clientIp(requestHeaders) },
+    { db, challenge: null },
+  );
+  return loadPublicGallery(db, slug, mintDeps(), {
+    sessionToken: (await cookies()).get(GALLERY_SESSION_COOKIE)?.value,
+  });
+});
+
+/**
+ * Tab title "{Gallery title} · {Owner name}" once the viewer may see the gallery. A locked
+ * gallery (or any error) keeps the generic title, so a protected gallery's name never leaks.
+ */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata> {
+  const { slug } = await params;
+  try {
+    const data = await loadGallery(slug);
+    if (!('passwordRequired' in data)) {
+      const title = galleryDocumentTitle(data.gallery.title, data.gallery.ownerName);
+      if (title) return { ...baseMetadata, title };
+    }
+  } catch {
+    // Expired, unavailable, rate limited: the page renders its own notice; keep the generic title.
+  }
+  return baseMetadata;
+}
+
+export default async function GalleryPage({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
 
   try {
-    await enforceRateLimit(
-      new Request('https://lumra.invalid/', { headers: requestHeaders }),
-      'publicGalleryRead',
-      { kind: 'ip', ip: clientIp(requestHeaders) },
-      { db, challenge: null },
-    );
-    const data = await loadPublicGallery(db, slug, mintDeps(), {
-      sessionToken: (await cookies()).get(GALLERY_SESSION_COOKIE)?.value,
-    });
+    const data = await loadGallery(slug);
     if ('passwordRequired' in data) return <PasswordGate slug={slug} />;
+    // Only an unlocked, successfully loaded gallery is a view. Scheduled for after the response;
+    // never able to fail or slow the page.
+    trackGalleryEvent(
+      getDb(),
+      slug,
+      { type: 'view' },
+      visitorFromHeaders(await headers(), getAuthenticatedUser()),
+    );
     return <PublicGallery key={data.gallery.id} slug={slug} initial={data} />;
   } catch (error) {
     if (!(error instanceof ApiFailure)) throw error;
