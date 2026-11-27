@@ -14,6 +14,7 @@ import {
 } from '@/lib/upload';
 import { PHOTO_ACCEPT, UploadZone } from './upload-zone';
 import { UploadBridgeContext } from './upload-bridge';
+import { UploadGrid } from './upload-grid';
 import { UploadToast } from './upload-list';
 
 function connection(): ConnectionInfo | undefined {
@@ -196,6 +197,10 @@ export function GalleryUploader({
       )}
 
       <UploadZone onFiles={(files) => engine.addFiles(files)} />
+
+      {mode === 'guest' && (
+        <UploadGrid items={snapshot.items} getFile={(id) => engine.getFile(id)} />
+      )}
 
       <UploadToast
         snapshot={snapshot}

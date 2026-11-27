@@ -15,6 +15,7 @@ import {
   type BillingRepository,
   type BillingStateRepository,
   type DeletionRepository,
+  type GuestDraftExpiryRepository,
   type MeterExportRepository,
   type MediaPipelineRepository,
   type OutboxRepository,
@@ -42,7 +43,7 @@ export interface Services {
   /** Stripe meter export cursors and stored events (T31). */
   meterExportRepo(): MeterExportRepository;
   /** Physical deletion: purge reads/marks and the backstop sweep (T13). */
-  deletionRepo(): DeletionRepository;
+  deletionRepo(): DeletionRepository & GuestDraftExpiryRepository;
   /**
    * Processor client. `slot` pins the container instance (0..PROCESSOR_POOL_SIZE-1) so the
    * concurrent jobs of one batch never share an instance (`processor_busy`); without it the

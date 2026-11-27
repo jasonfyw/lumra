@@ -16,6 +16,7 @@ import { runBillingSweep } from './handlers/billing';
 import { handleEmailSend } from './handlers/email';
 import { runMeterExport, stripeMeterSender } from './handlers/meter-export';
 import { sweepArchives } from './handlers/archive-sweep';
+import { sweepExpiredGuestDrafts } from './handlers/guest-drafts';
 import { handleMediaUploaded } from './handlers/media-uploaded';
 import { runStorageAccrual } from './handlers/metering';
 import { purgeGallery, purgeMedia, sweepDeletions, type PurgeDeps } from './handlers/purge';
@@ -460,6 +461,18 @@ export function createWorker(options: WorkerOptions = {}) {
     log.info('meter export finished', { mode, ...result, ms: now() - started, steps: timings });
   }
 
+  /** Guest draft expiry (FR-A03): soft-deletes expired unclaimed drafts; the purge removes R2. */
+  async function guestDraftSweepTick(services: Services, log: Logger): Promise<void> {
+    const started = now();
+    const timings: StepTimings = {};
+    const result = await sweepExpiredGuestDrafts({
+      repo: bounded(services.deletionRepo(), 'db', DEADLINES.dbStepMs, { timings }),
+      log,
+      now,
+    });
+    log.info('guest draft sweep finished', { ...result, ms: now() - started, steps: timings });
+  }
+
   /** Backstop deletion sweep (T13). Per-item failures are logged inside the sweep. */
   async function deletionSweepTick(env: Env, services: Services, log: Logger): Promise<void> {
     const started = now();
@@ -629,11 +642,18 @@ export function createWorker(options: WorkerOptions = {}) {
         return;
       }
       if (controller.cron === DELETION_SWEEP_CRON) {
-        // One 15-minute reconcile tick runs both sweeps; each failure is reported on its own so
+        // One 15-minute reconcile tick runs the guest draft expiry and both sweeps; each failure is reported on its own so
         // a broken deletion sweep never stops archive expiry (and vice versa).
         const services = makeServices(env);
         let firstError: unknown;
         try {
+          try {
+            await guestDraftSweepTick(services, log);
+          } catch (error) {
+            log.error('guest draft sweep failed', { err: error });
+            Sentry.captureException(error);
+            firstError ??= error;
+          }
           try {
             await deletionSweepTick(env, services, log);
           } catch (error) {
