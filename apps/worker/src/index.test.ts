@@ -362,6 +362,7 @@ describe('scheduled outbox relay', () => {
   it('runs the deletion sweep on its */15 cron (T13) and closes the pool', async () => {
     const { services, outbox, close } = fakeServices(1);
     const repo = {
+      expireGuestDrafts: vi.fn(async () => []),
       listStuckGalleries: vi.fn(async () => []),
       listStuckMedia: vi.fn(async () => []),
     };
@@ -385,6 +386,9 @@ describe('scheduled outbox relay', () => {
         ARCHIVES: bucket,
       } as unknown as Env,
     );
+    // Guest drafts expired (FR-A03) before the deletion sweep on the same tick.
+    expect(repo.expireGuestDrafts).toHaveBeenCalledWith(new Date('2026-11-11T12:00:00Z'), 100);
+    expect(events().some((e) => e.msg === 'guest draft sweep finished')).toBe(true);
     expect(repo.listStuckGalleries).toHaveBeenCalledWith(new Date('2026-11-11T11:00:00Z'), 10);
     expect(repo.listStuckMedia).toHaveBeenCalledOnce();
     expect(outbox.claim).not.toHaveBeenCalled();
@@ -401,6 +405,7 @@ describe('scheduled outbox relay', () => {
     services.archiveRepo = () => repo as unknown as ReturnType<Services['archiveRepo']>;
     services.deletionRepo = () =>
       ({
+        expireGuestDrafts: vi.fn(async () => []),
         listStuckGalleries: vi.fn(async () => {
           throw new Error('db down');
         }),

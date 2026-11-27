@@ -1,8 +1,9 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { UploadEngine, type UploadItemSnapshot, type UploadSnapshot } from '@/lib/upload';
 import { FakeLumra, photo, readPrefix, uuid } from '@/lib/upload/test-fakes';
+import { UploadGrid } from './upload-grid';
 import { UploadToast, summarize } from './upload-list';
 import { UploadZone } from './upload-zone';
 
@@ -336,5 +337,45 @@ describe('UploadZone + engine', () => {
     await user.click(screen.getByRole('button', { name: /Processing 1 photo/ }));
     expect(screen.getByText('Uploaded · processing soon')).toBeInTheDocument();
     engine.dispose();
+  });
+});
+
+describe('UploadGrid (guest drafts)', () => {
+  it('keeps every uploaded photo visible as a tile, unlike the self-dismissing toast', () => {
+    const items = [
+      item({ name: 'a.jpg', state: 'ready', bytesUploaded: 2_000_000, percent: 100 }),
+      item({ name: 'b.heic', type: 'image/heic', state: 'processing' }),
+      item({ name: 'c.jpg', state: 'cancelled' }),
+      item({ name: 'd.jpg', state: 'uploading', percent: 40, bytesUploaded: 800_000 }),
+    ];
+    render(<UploadGrid items={items} />);
+    const grid = screen.getByRole('list', { name: 'Photos in this gallery' });
+    const tiles = within(grid).getAllByRole('listitem');
+    expect(tiles.map((t) => t.getAttribute('data-state'))).toEqual([
+      'ready',
+      'processing',
+      'uploading',
+    ]);
+    expect(within(tiles[0]!).getByText('a.jpg')).toBeInTheDocument();
+    expect(within(tiles[0]!).getByText('Ready')).toBeInTheDocument();
+  });
+
+  it('shows a local preview while the page still holds the file', () => {
+    const create = vi.fn(() => 'blob:preview');
+    const revoke = vi.fn();
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke }));
+    const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
+    const { unmount } = render(
+      <UploadGrid items={[item({ name: 'a.jpg', state: 'uploaded' })]} getFile={() => file} />,
+    );
+    expect(screen.getByRole('img', { name: 'a.jpg' })).toHaveAttribute('src', 'blob:preview');
+    unmount();
+    expect(revoke).toHaveBeenCalledWith('blob:preview');
+    vi.unstubAllGlobals();
+  });
+
+  it('renders nothing for an empty draft', () => {
+    const { container } = render(<UploadGrid items={[]} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });

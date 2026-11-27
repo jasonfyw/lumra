@@ -27,6 +27,17 @@ the manual QA script.
 - Claims refused: grep logs for `guest claim refused` and its `reason`
   (`no_capability` = a different browser, `session_expired`, `capability_mismatch`). The client
   always sees a 404.
+- **Abandoned guest drafts (FR-A03):** a draft expires 24 h after creation. The worker's `*/15`
+  reconcile tick (`guest draft sweep finished`, then `deletion sweep finished`) soft-deletes
+  expired, unclaimed drafts (`galleries.status = 'deleted'`, pending `upload_sessions` →
+  `expired`) and writes a deduplicated `gallery.delete` outbox row per gallery, so the normal
+  purge removes the R2 originals and derivatives ("Physical deletion purge" below). Logs:
+  `expired guest drafts` (count) and `guest draft sweep failed`. A backlog is drained at up to
+  2,000 drafts per tick. The `guest_sessions` row (hashed capability, counters) is kept. Dry-run
+  check: `select count(*) from galleries g join guest_sessions s on s.id = g.guest_session_id
+where s.expires_at < now() and g.status = 'draft' and g.owner_id is null and g.deleted_at is
+null and s.claimed_at is null;` should stay near zero. Abandoned multipart uploads are also
+  aborted by the originals bucket lifecycle rule (2 days).
 
 ## Application email (Resend, `email.send`)
 

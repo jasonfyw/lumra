@@ -57,6 +57,18 @@ export interface DeletionRepository {
   listStuckMedia(cutoff: Date, limit: number): Promise<string[]>;
 }
 
+/** Guest draft expiry, driving the same purge as a deletion (separate so purge fakes stay small). */
+export interface GuestDraftExpiryRepository {
+  /**
+   * Guest draft expiry (FR-A03): soft-deletes up to `limit` draft galleries of guest sessions
+   * that expired at or before `now` and were never claimed (gallery `deleted`, `deleted_at` set,
+   * `access_version` bumped), expires their pending upload sessions and writes a deduplicated
+   * `gallery.delete` outbox row for each, all in one statement. The existing purge then removes
+   * the R2 objects. Idempotent: deleted galleries are never selected again. Returns gallery ids.
+   */
+  expireGuestDrafts(now: Date, limit: number): Promise<string[]>;
+}
+
 interface MediaRow {
   id: string;
   gallery_id: string;
@@ -66,7 +78,9 @@ interface MediaRow {
   gallery_deleted: boolean;
 }
 
-export function createDeletionRepository(sql: postgres.Sql): DeletionRepository {
+export function createDeletionRepository(
+  sql: postgres.Sql,
+): DeletionRepository & GuestDraftExpiryRepository {
   return {
     async getMediaForPurge(mediaIds) {
       if (mediaIds.length === 0) return [];
@@ -163,6 +177,51 @@ export function createDeletionRepository(sql: postgres.Sql): DeletionRepository 
           and deleted_at < ${cutoff}
         order by deleted_at, id
         limit ${limit}`;
+      return rows.map((r) => r.id);
+    },
+
+    async expireGuestDrafts(now, limit) {
+      const rows = await sql<{ id: string }[]>`
+        with due as (
+          select g.id
+          from public.galleries g
+          join public.guest_sessions gs on gs.id = g.guest_session_id
+          where gs.expires_at <= ${now}
+            and gs.claimed_at is null
+            and gs.claimed_by_user_id is null
+            and g.owner_id is null
+            and g.claimed_at is null
+            and g.status = 'draft'
+            and g.deleted_at is null
+          order by gs.expires_at, g.id
+          limit ${limit}
+          for update of g skip locked
+        ), gone as (
+          update public.galleries g
+          set status = 'deleted', deleted_at = ${now}, access_version = g.access_version + 1
+          from due
+          where g.id = due.id
+          returning g.id
+        ), uploads as (
+          update public.upload_sessions u
+          set status = 'expired'
+          from gone
+          where u.gallery_id = gone.id and u.status = 'pending'
+          returning u.id
+        ), enqueued as (
+          insert into public.job_outbox (event_name, aggregate_id, payload, dedupe_key)
+          select 'gallery.delete', gone.id,
+                 jsonb_build_object(
+                   'type', 'gallery.delete',
+                   'galleryId', gone.id,
+                   'traceId', 'cron:guest-draft-sweep',
+                   'dedupeKey', 'gallery.delete:' || gone.id),
+                 'gallery.delete:' || gone.id
+          from gone
+          on conflict (dedupe_key) do nothing
+          returning id
+        )
+        select id from gone`;
       return rows.map((r) => r.id);
     },
   };
