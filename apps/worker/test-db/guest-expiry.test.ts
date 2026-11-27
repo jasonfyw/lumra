@@ -54,7 +54,7 @@ describe('expireGuestDrafts (db)', () => {
     const [media] = await sql<{ id: string }[]>`
       insert into public.media (gallery_id, original_key, filename, mime, byte_size, sort_key, status)
       values (${expired.gallery}, ${`originals/guest-123456/${expired.gallery}/${randomUUID()}/source`},
-              'a.jpg', 'image/jpeg', 10, 'a', 'ready')
+              'a.jpg', 'image/jpeg', 10, 'a', 'uploading')
       returning id`;
     const [upload] = await sql<{ id: string }[]>`
       insert into public.upload_sessions (gallery_id, media_id, part_size, reserved_bytes, expires_at,
