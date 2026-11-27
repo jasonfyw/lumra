@@ -16,7 +16,9 @@ import worker, {
   type Env,
   type JobHandler,
 } from './index';
+import * as Sentry from '@sentry/cloudflare';
 import { RetryLaterError } from './handlers/archive-build';
+import { ProcessorBusyError } from './processor-client';
 import type { Services } from './services';
 
 function fakeMessage(body: unknown, attempts = 1) {
@@ -31,6 +33,11 @@ function batchOf(...messages: ReturnType<typeof fakeMessage>[]) {
     retryAll: vi.fn(),
   } as unknown as MessageBatch<unknown>;
 }
+
+vi.mock('@sentry/cloudflare', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  captureException: vi.fn(),
+}));
 
 const ctx = {
   waitUntil: vi.fn(),
@@ -157,6 +164,60 @@ describe('queue consumer', () => {
     expect(seenAttempt).toBe(msg.attempts);
     expect(msg.retry).toHaveBeenCalledWith({ delaySeconds: 900 });
     expect(msg.ack).not.toHaveBeenCalled();
+  });
+
+  it('re-queues a busy processor after a short jittered delay without alerting Sentry', async () => {
+    const mediaId = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
+    const galleryId = '0b6f3c2e-8a51-4c1e-9d7a-2f4b5c6d7e8f';
+    const originalKey = `originals/owner-123456/${galleryId}/${mediaId}/source`;
+    const jpeg = new Uint8Array([
+      0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x0b, 0xb8, 0x0f, 0xa0, 0x03, 0x01, 0x22, 0x00,
+      0x02, 0x11, 0x01, 0x03, 0x11, 0x01, 0xff, 0xd9,
+    ]);
+    const markFailed = vi.fn(async () => true);
+    const { services } = fakeServices(0);
+    services.mediaRepo = (() => ({
+      getForProcessing: async () => ({
+        id: mediaId,
+        galleryId,
+        status: 'uploaded',
+        mime: 'image/jpeg',
+        byteSize: jpeg.length,
+        originalKey,
+        checksumSha256: null,
+        deleted: false,
+      }),
+      markProcessing: async () => true,
+      markFailed,
+      complete: vi.fn(),
+    })) as unknown as Services['mediaRepo'];
+    services.processor = (() => ({
+      process: async () => {
+        throw new ProcessorBusyError('processor 503 processor_busy');
+      },
+    })) as unknown as Services['processor'];
+    const originals = {
+      get: async () => ({
+        size: jpeg.length,
+        body: new Blob([jpeg]).stream(),
+        arrayBuffer: async () => jpeg.buffer,
+      }),
+    };
+    const w = createWorker({ createServices: () => services });
+    const msg = fakeMessage({
+      type: 'media.uploaded',
+      mediaId,
+      traceId: 'req-1',
+      dedupeKey: `media.uploaded:${mediaId}`,
+    });
+    await w.queue(batchOf(msg), { ORIGINALS: originals, DERIVATIVES: {} } as unknown as Env, ctx);
+    expect(msg.retry).toHaveBeenCalledOnce();
+    const { delaySeconds } = msg.retry.mock.calls[0]![0] as { delaySeconds: number };
+    expect(delaySeconds).toBeGreaterThanOrEqual(2);
+    expect(delaySeconds).toBeLessThanOrEqual(6);
+    expect(msg.ack).not.toHaveBeenCalled();
+    expect(markFailed).not.toHaveBeenCalled();
+    expect(Sentry.captureException).not.toHaveBeenCalled();
   });
 
   it('acks poison messages instead of retrying forever', async () => {

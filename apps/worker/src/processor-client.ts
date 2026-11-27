@@ -43,6 +43,18 @@ export class TransientProcessorError extends Error {
   }
 }
 
+/**
+ * The processor answered `processor_busy` (its slot is taken). Still transient, but it clears in
+ * seconds, so the queue handler retries after a short jittered delay instead of the long
+ * exponential back-off.
+ */
+export class ProcessorBusyError extends TransientProcessorError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProcessorBusyError';
+  }
+}
+
 export type Fetcher = (request: Request) => Promise<Response>;
 
 const REJECTION_CODES: ReadonlySet<string> = new Set(MEDIA_REJECTION_CODES);
@@ -126,6 +138,9 @@ export function createProcessorClient(
         const { code, retryable } = body.data.error;
         if (!retryable && REJECTION_CODES.has(code)) {
           return { ok: false, code: code as MediaRejectionCode };
+        }
+        if (code === 'processor_busy') {
+          throw new ProcessorBusyError(`processor ${response.status} ${code}`);
         }
         if (retryable || TRANSIENT_CODES.has(code)) {
           throw new TransientProcessorError(`processor ${response.status} ${code}`);

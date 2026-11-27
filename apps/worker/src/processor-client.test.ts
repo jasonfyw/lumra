@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createProcessorClient,
+  ProcessorBusyError,
   TransientProcessorError,
   type ProcessInput,
 } from './processor-client';
@@ -100,5 +101,14 @@ describe('createProcessorClient', () => {
   ])('treats %s as transient', async (_name, fetcher) => {
     const client = createProcessorClient(fetcher as (r: Request) => Promise<Response>);
     await expect(client.process(input())).rejects.toBeInstanceOf(TransientProcessorError);
+  });
+
+  it('maps a 503 processor_busy to ProcessorBusyError (still a transient error)', async () => {
+    const client = createProcessorClient(async () =>
+      json(503, { error: { code: 'processor_busy', retryable: true, message: '' } }),
+    );
+    const error = await client.process(input()).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ProcessorBusyError);
+    expect(error).toBeInstanceOf(TransientProcessorError);
   });
 });
