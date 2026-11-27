@@ -252,6 +252,25 @@ mounts the same component with `mode="owner"`.
 - `UploadList`: one tile per file (preview, status text, per-file progress bar) with
   Retry/Cancel/Remove (≥ 44 px), a total progress bar, and a polite `aria-live` summary throttled
   to one update every 3 s.
+- **Processing is not a second step.** Once a photo's bytes are uploaded it appears at full
+  strength and processing runs quietly behind it:
+  - _Toast:_ done as soon as every file is uploaded ("All N photos uploaded", auto-dismiss);
+    processing never keeps it open. A file that later fails processing (`processing_failed`)
+    reopens the toast, expanded, with Remove.
+  - _Editor tiles_ (`tilePhase` in `editor/thumbnails.ts`): `uploading` shows the dimmed local
+    preview with a 3 px progress bar (the centered chip only when this page has no local state for
+    the photo); `finishing` (uploaded/processing) shows the local preview undimmed with a small
+    pulsing corner dot (static under reduced motion); `ready` crossfades from the local preview to
+    the gateway thumbnail once it has loaded, then releases the blob URL. The server's terminal
+    states win; local state only moves a tile forward. A thumbnail that fails to load keeps the
+    local preview and refetches a fresh URL.
+  - _Polling:_ the editor polls every 2 s while a photo is finishing, backing off ×1.5 to 10 s
+    while nothing changes (10 s when only uploads are running, off when nothing is in flight).
+    The uploader reaching `uploaded`/`ready` triggers an immediate refresh and resets the delay.
+  - _Guest grid_ (`/new`): same philosophy: uploaded photos show at full strength with the corner
+    dot and a plain "Uploaded" caption.
+  - _Worker:_ a `processor_busy` answer re-queues the job after 2–6 s (jittered) instead of the
+    20 s+ exponential back-off (ADR-002).
 - `GalleryUploader`: composes the zone and the list with the resume and sign-in prompts, and
   warns on `beforeunload` while uploads run.
 - The title field on `/new` is client-side only. TODO(T15): persist it with

@@ -117,7 +117,17 @@ export function GalleryUploader({
     if (!bridge) return;
     bridge.report(
       snapshot.items.flatMap((i) =>
-        i.mediaId ? [{ mediaId: i.mediaId, state: i.state, file: engine.getFile(i.clientId) }] : [],
+        i.mediaId
+          ? [
+              {
+                mediaId: i.mediaId,
+                state: i.state,
+                percent: i.percent,
+                errorCode: i.error?.code ?? null,
+                file: engine.getFile(i.clientId),
+              },
+            ]
+          : [],
       ),
     );
   }, [bridge, engine, snapshot]);

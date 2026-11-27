@@ -217,28 +217,35 @@ describe('UploadToast', () => {
       expect(screen.getByText('b.jpg')).toBeInTheDocument();
     });
 
-    it('shows processing, then a done state with a focusable close button', async () => {
+    it('is done as soon as every file is uploaded, even while processing', async () => {
       const user = userEvent.setup();
       const a = uploadedBytes(item({ name: 'a.jpg', state: 'processing' }));
-      const { rerender } = render(
-        <UploadToast snapshot={snapshotOf([a])} autoDismissMs={0} {...noop} />,
-      );
-      expect(screen.getByRole('button', { name: 'Processing 1 photo…' })).toBeVisible();
-      expect(screen.queryByRole('button', { name: 'Close upload status' })).not.toBeInTheDocument();
-
-      rerender(
-        <UploadToast
-          snapshot={snapshotOf([{ ...a, state: 'ready' }])}
-          autoDismissMs={0}
-          {...noop}
-        />,
-      );
+      render(<UploadToast snapshot={snapshotOf([a])} autoDismissMs={0} {...noop} />);
       expect(screen.getByRole('button', { name: 'All 1 photo uploaded' })).toBeVisible();
       const close = screen.getByRole('button', { name: 'Close upload status' });
       close.focus();
       expect(close).toHaveFocus();
       await user.click(close);
       expect(screen.queryByRole('region', { name: 'Uploads' })).not.toBeInTheDocument();
+    });
+
+    it('reopens expanded with Remove when a closed photo fails processing afterwards', async () => {
+      const user = userEvent.setup();
+      const a = uploadedBytes(item({ name: 'a.jpg', state: 'processing' }));
+      const { rerender } = render(
+        <UploadToast snapshot={snapshotOf([a])} autoDismissMs={0} {...noop} />,
+      );
+      await user.click(screen.getByRole('button', { name: 'Close upload status' }));
+      expect(screen.queryByRole('region', { name: 'Uploads' })).not.toBeInTheDocument();
+      const failed = {
+        ...a,
+        state: 'failed' as const,
+        error: { code: 'processing_failed', message: 'Could not process', retryable: false },
+      };
+      rerender(<UploadToast snapshot={snapshotOf([failed])} autoDismissMs={0} {...noop} />);
+      expect(screen.getByRole('region', { name: 'Uploads' })).toBeVisible();
+      expect(screen.getByText('Could not process')).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Remove a.jpg' })).toBeVisible();
     });
 
     it('dismisses itself a few seconds after finishing without errors', () => {
@@ -334,8 +341,8 @@ describe('UploadZone + engine', () => {
     await user.upload(screen.getByTestId('upload-input'), [photo('a.jpg', 1000)]);
     await vi.waitFor(() => expect(engine.getSnapshot().items[0]?.state).toBe('uploaded'));
     rerender(<Harness />);
-    await user.click(screen.getByRole('button', { name: /Processing 1 photo/ }));
-    expect(screen.getByText('Uploaded · processing soon')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /All 1 photo uploaded/ }));
+    expect(screen.getByText('Uploaded')).toBeInTheDocument();
     engine.dispose();
   });
 });
@@ -358,6 +365,19 @@ describe('UploadGrid (guest drafts)', () => {
     ]);
     expect(within(tiles[0]!).getByText('a.jpg')).toBeInTheDocument();
     expect(within(tiles[0]!).getByText('Ready')).toBeInTheDocument();
+  });
+
+  it('shows an uploaded photo at full strength with only a subtle processing dot', () => {
+    const create = vi.fn(() => 'blob:preview');
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: create, revokeObjectURL: vi.fn() }));
+    const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
+    render(
+      <UploadGrid items={[item({ name: 'a.jpg', state: 'processing' })]} getFile={() => file} />,
+    );
+    expect(screen.getByRole('img', { name: 'a.jpg' })).not.toHaveClass('lm-tile-pending-img');
+    expect(screen.getByTestId('tile-finishing')).toHaveTextContent('Processing');
+    expect(screen.queryByText(/processing/i, { selector: ':not(.sr-only)' })).toBeNull();
+    vi.unstubAllGlobals();
   });
 
   it('shows a local preview while the page still holds the file', () => {

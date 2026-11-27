@@ -31,10 +31,20 @@ import { ConfirmDialog } from './confirm-dialog';
 import { MediaGrid, moveItem } from './media-grid';
 import { SelectionBar } from './selection-bar';
 import { ShareSheet } from './share-sheet';
-import { THUMBNAIL_RETRY_MS, mergeThumbnails, useLocalPreviews } from './thumbnails';
+import { THUMBNAIL_RETRY_MS, mergeThumbnails, tilePhase, useLocalPreviews } from './thumbnails';
 
 const IN_FLIGHT: readonly MediaStatus[] = ['reserved', 'uploading', 'uploaded', 'processing'];
-const POLL_MS = 5_000;
+/** Readiness polling backs off from POLL_MIN_MS (×1.5 per unchanged refresh) up to POLL_MAX_MS. */
+const POLL_MIN_MS = 2_000;
+const POLL_MAX_MS = 10_000;
+
+/** Order-independent fingerprint of what a refresh can change on a tile: status + thumbnail. */
+function itemsSignature(items: readonly EditorMediaItem[]): string {
+  return items
+    .map((i) => `${i.id}:${i.status}:${i.thumbnailUrl ? 1 : 0}`)
+    .sort()
+    .join('|');
+}
 
 /** Aside section: stacked on phones, separated by hairlines in the settings panel. */
 const card =
@@ -76,12 +86,15 @@ export function GalleryEditor({
 
   // Thumbnails whose gateway URL failed to load: take the next response's fresh URL.
   const staleThumbnails = useRef(new Set<string>());
+  const lastSignature = useRef(itemsSignature(initial.items));
   const refresh = useCallback(async () => {
     const stale = new Set(staleThumbnails.current);
     staleThumbnails.current.clear();
     const res = await getGalleryRequest(galleryId);
-    if (res.ok) setGallery((prev) => mergeThumbnails(prev, res.data, stale));
-    else for (const id of stale) staleThumbnails.current.add(id);
+    if (res.ok) {
+      lastSignature.current = itemsSignature(res.data.items);
+      setGallery((prev) => mergeThumbnails(prev, res.data, stale));
+    } else for (const id of stale) staleThumbnails.current.add(id);
     return res;
   }, [galleryId]);
 
@@ -115,7 +128,31 @@ export function GalleryEditor({
   );
 
   const knownIds = useMemo(() => new Set(gallery.items.map((i) => i.id)), [gallery.items]);
-  const { bridge, previews } = useLocalPreviews(knownIds, scheduleRefresh);
+  // A photo's bytes just finished uploading (or processing finished): refresh now and poll fast.
+  const pollKick = useRef<(() => void) | null>(null);
+  const onAdvance = useCallback(() => {
+    scheduleRefresh();
+    pollKick.current?.();
+  }, [scheduleRefresh]);
+  const { bridge, previews, local, release } = useLocalPreviews(
+    knownIds,
+    scheduleRefresh,
+    onAdvance,
+  );
+
+  // A photo that went in flight → failed on the server could not be processed.
+  const previousStatuses = useRef(new Map<string, MediaStatus>());
+  useEffect(() => {
+    const prev = previousStatuses.current;
+    for (const item of gallery.items) {
+      const before = prev.get(item.id);
+      if (item.status === 'failed' && before && IN_FLIGHT.includes(before)) {
+        announce(`${item.filename} couldn’t be processed. Delete it or upload it again.`);
+        release(item.id);
+      }
+    }
+    previousStatuses.current = new Map(gallery.items.map((i) => [i.id, i.status]));
+  }, [gallery.items, announce, release]);
 
   // ---------------------------------------------------------------- order (serialised saves)
   const saving = useRef<{ inFlight: boolean; pending: string[] | null }>({
@@ -222,14 +259,45 @@ export function GalleryEditor({
   }
 
   // ---------------------------------------------------------------- polling for readiness
-  const hasInFlight = gallery.items.some((i) => IN_FLIGHT.includes(i.status));
+  // Fast while a photo finishes processing, slow while bytes are still uploading, off otherwise.
+  const pollMode = useMemo(() => {
+    const phases = gallery.items.map((i) => tilePhase(i, local.get(i.id)));
+    if (phases.includes('finishing')) return 'finishing';
+    if (phases.includes('uploading')) return 'uploading';
+    return 'none';
+  }, [gallery.items, local]);
   useEffect(() => {
-    if (!hasInFlight) return;
-    const timer = setInterval(() => {
-      if (!saving.current.inFlight && document.visibilityState !== 'hidden') void refresh();
-    }, POLL_MS);
-    return () => clearInterval(timer);
-  }, [hasInFlight, refresh]);
+    if (pollMode === 'none') return;
+    let delay = POLL_MIN_MS;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let stopped = false;
+    const schedule = () => {
+      if (stopped) return;
+      timer = setTimeout(tick, pollMode === 'uploading' ? POLL_MAX_MS : delay);
+    };
+    const tick = async () => {
+      if (saving.current.inFlight || document.visibilityState === 'hidden') {
+        schedule();
+        return;
+      }
+      const before = lastSignature.current;
+      await refresh();
+      if (stopped) return;
+      delay = lastSignature.current !== before ? POLL_MIN_MS : Math.min(delay * 1.5, POLL_MAX_MS);
+      schedule();
+    };
+    pollKick.current = () => {
+      if (timer) clearTimeout(timer);
+      delay = POLL_MIN_MS;
+      schedule();
+    };
+    schedule();
+    return () => {
+      stopped = true;
+      pollKick.current = null;
+      if (timer) clearTimeout(timer);
+    };
+  }, [pollMode, refresh]);
 
   // ---------------------------------------------------------------- title
   const [editingTitle, setEditingTitle] = useState(false);
@@ -477,6 +545,8 @@ export function GalleryEditor({
               onSetCover={setCover}
               onDelete={setToDelete}
               localPreviews={previews}
+              localUploads={local}
+              onPreviewSwapped={release}
               onThumbnailError={onThumbnailError}
             />
           </section>
