@@ -20,7 +20,7 @@ export default function HomePage() {
         <div className="flex flex-col items-start gap-6">
           <h1 className="lm-hero-title max-w-[12ch] text-balance">Share photos beautifully.</h1>
           <p className="lm-body-lg max-w-md text-[var(--color-ink-muted)]">
-            Create a gallery, drop in your photos, and send one link. Simple and seamless
+            Create a gallery, drop in your photos, and send one link. Simple and seamless.
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <Link href="/new" className={buttonClass('primary', 'lg')}>
