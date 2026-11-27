@@ -31,7 +31,36 @@ export default function HomePage() {
         </div>
         <Mosaic />
       </main>
+
+      <SiteFooter />
     </div>
+  );
+}
+
+/** Landing-page-only footer (deliberately not in the root layout, so app pages never show it). */
+function SiteFooter() {
+  const linkClass =
+    'rounded-[var(--radius-sm)] underline-offset-4 hover:text-[var(--color-ink)] hover:underline';
+  return (
+    <footer className="border-t border-[var(--color-hairline)]">
+      <div className="mx-auto flex w-full max-w-[var(--app-max)] flex-col items-start justify-between gap-3 px-4 py-6 text-sm text-[var(--color-ink-muted)] sm:flex-row sm:items-center sm:px-8">
+        <p>&copy; {new Date().getFullYear()} Lumra</p>
+        <nav aria-label="Footer">
+          <ul className="flex items-center gap-5">
+            <li>
+              <Link href="/pricing" className={linkClass}>
+                Pricing
+              </Link>
+            </li>
+            <li>
+              <Link href="/terms" className={linkClass}>
+                Terms
+              </Link>
+            </li>
+          </ul>
+        </nav>
+      </div>
+    </footer>
   );
 }
 
