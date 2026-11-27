@@ -6,6 +6,7 @@ import { parseUsdToMicroUsd } from '@lumra/billing';
 import type { AccountSpend, ApiResponse } from '@lumra/contracts';
 import { buttonClass } from '@/components/ui';
 import { formatUsd } from '@/lib/format';
+import { capturePostHogEvent } from '@/lib/posthog';
 
 /** Dollars for the input field ("10.00" → "10", "12.50" stays). */
 function dollarsText(microUsd: number): string {
@@ -42,6 +43,7 @@ export function SpendingCapForm({ spend }: { spend: AccountSpend }) {
         return;
       }
       setValue(dollarsText(body.data.capMicroUsd));
+      capturePostHogEvent(capMicroUsd === null ? 'spending_cap_reset' : 'spending_cap_updated');
       setSaved(true);
       router.refresh();
     } catch {

@@ -4,6 +4,7 @@ import { create as createQr } from 'qrcode';
 import { useMemo, useRef, useState } from 'react';
 import { Icon, buttonClass } from '@/components/ui';
 import { FeedbackButton, useTransientFlag } from '@/components/ui/feedback-button';
+import { capturePostHogEvent } from '@/lib/posthog';
 
 /** Module matrix for `text` (pure; no canvas needed, so it renders in SSR and tests too). */
 export function qrMatrix(text: string): boolean[][] {
@@ -54,6 +55,7 @@ export function ShareSheet({ url, title }: { url: string; title: string }) {
     try {
       await navigator.clipboard.writeText(url);
       setStatus('');
+      capturePostHogEvent('gallery_share_link_copied');
       flashCopied();
       return;
     } catch {
@@ -70,6 +72,7 @@ export function ShareSheet({ url, title }: { url: string; title: string }) {
     }
     if (copiedByCommand) {
       setStatus('');
+      capturePostHogEvent('gallery_share_link_copied');
       flashCopied();
     } else {
       setStatus('Link selected — press Ctrl+C or ⌘C to copy.');
@@ -101,6 +104,7 @@ export function ShareSheet({ url, title }: { url: string; title: string }) {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(href), 1000);
     setStatus('');
+    capturePostHogEvent('gallery_qr_downloaded');
     flashDownloaded();
   }
 

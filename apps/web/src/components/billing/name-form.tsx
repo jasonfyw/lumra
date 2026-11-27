@@ -7,6 +7,7 @@ import {
   type UpdateAccountResponse,
 } from '@lumra/contracts';
 import { buttonClass } from '@/components/ui';
+import { capturePostHogEvent } from '@/lib/posthog';
 
 /**
  * Display name field on `/account`. Shown in the browser-tab title of the owner's public
@@ -40,6 +41,7 @@ export function NameForm({ initialName }: { initialName: string | null }) {
         return;
       }
       setValue(body.data.name ?? '');
+      capturePostHogEvent('account_name_updated');
       setSaved(true);
     } catch {
       setError('Network error. Check your connection and try again.');

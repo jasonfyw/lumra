@@ -1,3 +1,4 @@
+import { SeverityNumber } from '@opentelemetry/api-logs';
 import {
   createGalleryRequestSchema,
   decodeKeysetCursor,
@@ -7,6 +8,7 @@ import {
 import { getAuthenticatedUser } from '@/lib/actor';
 import { fail, ok } from '@/lib/api';
 import { serverEnv } from '@/lib/env';
+import { flushPostHogLogs, posthogLogLogger } from '@/instrumentation';
 import { createGalleryForOwner, listGalleriesForOwner } from '@/lib/galleries';
 import {
   crossOriginError,
@@ -64,6 +66,12 @@ export const POST = withRoute('POST /api/v1/galleries', async (request, { reques
   switch (result.kind) {
     case 'created':
       log.info('gallery created', { galleryId: result.gallery.id });
+      posthogLogLogger.emit({
+        body: 'gallery_creation_completed',
+        severityNumber: SeverityNumber.INFO,
+        attributes: { outcome: 'created' },
+      });
+      await flushPostHogLogs();
       return ok(result.gallery, requestId, { status: 201, headers: NO_STORE });
     case 'replayed':
       return ok(result.gallery, requestId, {
@@ -80,6 +88,12 @@ export const POST = withRoute('POST /api/v1/galleries', async (request, { reques
         requestId,
       );
     case 'quota_exceeded':
+      posthogLogLogger.emit({
+        body: 'gallery_creation_rejected',
+        severityNumber: SeverityNumber.WARN,
+        attributes: { reason: 'free_gallery_cap' },
+      });
+      await flushPostHogLogs();
       return fail(
         {
           code: 'quota_exceeded',

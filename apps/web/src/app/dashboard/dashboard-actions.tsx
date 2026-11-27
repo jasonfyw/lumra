@@ -6,6 +6,7 @@ import { useRef, useState, useTransition } from 'react';
 import type { ApiResponse, CreateGalleryResponse } from '@lumra/contracts';
 import { Icon, buttonClass } from '@/components/ui';
 import { FeedbackButton, useTransientFlag } from '@/components/ui/feedback-button';
+import { capturePostHogEvent } from '@/lib/posthog';
 
 const primary = buttonClass('primary', 'md', 'min-h-11');
 
@@ -39,6 +40,7 @@ export function NewGalleryButton() {
         return;
       }
       keyRef.current = null;
+      capturePostHogEvent('gallery_created');
       startNavigation(() => router.push(`/dashboard/galleries/${body.data.id}`));
     } catch {
       setError('Network error. Check your connection and try again.');
@@ -80,6 +82,7 @@ export function CopyLinkButton({ url, label }: { url: string; label: string }) {
   async function copy() {
     try {
       await navigator.clipboard.writeText(url);
+      capturePostHogEvent('gallery_link_copied');
       flashCopied();
     } catch {
       flashFailed();
