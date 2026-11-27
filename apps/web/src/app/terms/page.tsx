@@ -6,7 +6,8 @@ import { formatUsd, formatUsdRate } from '@/lib/format';
 export const metadata = { title: 'Terms and Conditions' };
 
 const LAST_UPDATED = '2026-11-27';
-// TODO(owner): replace with the registered legal entity name, address and monitored contact email.
+const COMPANY = 'Serif Media';
+// TODO(owner): replace with the registered business address and a monitored contact email.
 const CONTACT_EMAIL = 'legal@<domain>';
 const CONTACT_ADDRESS = '[Registered business address to be confirmed], Ontario, Canada';
 
@@ -54,10 +55,12 @@ export default function TermsPage() {
         <div className="flex max-w-2xl flex-col gap-8">
           <Section id="acceptance" title="1. Acceptance of these terms">
             <p>
-              These terms govern your use of Lumra, a service for uploading photos, publishing
-              galleries and sharing them by link (the &ldquo;Service&rdquo;). By using the Service,
-              whether as a creator, a gallery visitor or an anonymous uploader, you agree to these
-              terms. If you do not agree, please do not use the Service.
+              These terms are an agreement between you and {COMPANY} (&ldquo;{COMPANY}&rdquo;,
+              &ldquo;we&rdquo;, &ldquo;us&rdquo;), which develops and operates Lumra, a service for
+              uploading photos, publishing galleries and sharing them by link (the
+              &ldquo;Service&rdquo;). By using the Service, whether as a creator, a gallery visitor
+              or an anonymous uploader, you agree to these terms. If you do not agree, please do not
+              use the Service.
             </p>
           </Section>
 
@@ -82,12 +85,12 @@ export default function TermsPage() {
 
           <Section id="content" title="4. Your content and our licence to host it">
             <p>
-              You keep ownership of everything you upload (&ldquo;Content&rdquo;). You grant Lumra a
-              worldwide, non-exclusive, royalty-free licence to store, copy, process (for example,
-              to create resized previews and ZIP archives), transmit and display your Content, only
-              as needed to operate the Service and to show it to the people you share it with. This
-              licence ends when your Content is deleted, subject to a short period for backups and
-              cleanup. We do not sell your Content or use it for advertising.
+              You keep ownership of everything you upload (&ldquo;Content&rdquo;). You grant{' '}
+              {COMPANY} a worldwide, non-exclusive, royalty-free licence to store, copy, process
+              (for example, to create resized previews and ZIP archives), transmit and display your
+              Content, only as needed to operate the Service and to show it to the people you share
+              it with. This licence ends when your Content is deleted, subject to a short period for
+              backups and cleanup. We do not sell your Content or use it for advertising.
             </p>
             <p>
               You confirm that you own your Content or have all rights, consents and releases needed
@@ -189,7 +192,7 @@ export default function TermsPage() {
 
           <Section id="liability" title="10. Limitation of liability">
             <p>
-              To the extent permitted by law, Lumra will not be liable for indirect, incidental,
+              To the extent permitted by law, {COMPANY} will not be liable for indirect, incidental,
               special, consequential or punitive damages, or for lost profits, data or goodwill,
               arising from your use of the Service. Our total liability for any claim relating to
               the Service is limited to the greater of the fees you paid us in the 12 months before
@@ -218,7 +221,7 @@ export default function TermsPage() {
 
           <Section id="contact" title="13. Contact">
             <p>
-              Questions, notices or copyright and abuse reports can be sent to Lumra at{' '}
+              Questions, notices or copyright and abuse reports can be sent to {COMPANY} at{' '}
               <a href={`mailto:${CONTACT_EMAIL}`} className="underline">
                 {CONTACT_EMAIL}
               </a>

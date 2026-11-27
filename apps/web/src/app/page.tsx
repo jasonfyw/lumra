@@ -44,7 +44,7 @@ function SiteFooter() {
   return (
     <footer className="border-t border-[var(--color-hairline)]">
       <div className="mx-auto flex w-full max-w-[var(--app-max)] flex-col items-start justify-between gap-3 px-4 py-6 text-sm text-[var(--color-ink-muted)] sm:flex-row sm:items-center sm:px-8">
-        <p>&copy; {new Date().getFullYear()} Lumra</p>
+        <p>&copy; {new Date().getFullYear()} Serif Media</p>
         <nav aria-label="Footer">
           <ul className="flex items-center gap-5">
             <li>
