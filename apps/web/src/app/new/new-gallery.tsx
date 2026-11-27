@@ -114,7 +114,7 @@ export function NewGallery({
         <header className="flex flex-col gap-1">
           <h1 className="lm-title-1">New gallery</h1>
           {!signedIn && (
-            <p className="text-[var(--color-ink-muted)]">No account needed to start.</p>
+            <p className="text-[var(--color-ink-muted)]">Simple and seamless</p>
           )}
         </header>
 
