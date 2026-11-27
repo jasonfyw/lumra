@@ -43,7 +43,9 @@ archives in the job Worker instead.) Containers scale to zero when idle.
   processor call has a deadline and each job is cut off at 120 s (`apps/worker/src/deadline.ts`); a timeout
   retries after 5 s, 15 s, 60 s … instead of hanging the invocation until the 900 s wall-time kill. Finalize
   kicks `POST /internal/relay` on the worker so the outbox is relayed within seconds; the per-minute cron relay
-  remains the fallback and the only other publish path.
+  remains the fallback and the only other publish path. A `processor_busy` (503) answer surfaces as
+  `ProcessorBusyError`, which `media.uploaded` turns into a `RetryLaterError` (re-queued after 2–6 s,
+  jittered, no Sentry) instead of the 20 s+ exponential back-off, so a burst of uploads drains in seconds.
 
 ### Response format: manifest-first `multipart/form-data`
 

@@ -14,7 +14,9 @@ import {
   type MediaUploadedDeps,
   type OriginalsStore,
 } from './media-uploaded';
+import { RetryLaterError } from '../errors';
 import {
+  ProcessorBusyError,
   TransientProcessorError,
   type ProcessInput,
   type ProcessResult,
@@ -276,6 +278,26 @@ describe('handleMediaUploaded', () => {
     expect(repo.row.status).toBe('processing');
     expect(derivatives.objects.size).toBe(0);
   });
+
+  it.each([0, 0.5, 0.999])(
+    'retries a busy processor after 2–6 s (jitter %s) without failing the media',
+    async (jitter) => {
+      const { repo, derivatives, deps } = setup('uploaded', async () => {
+        throw new ProcessorBusyError('processor 503 processor_busy');
+      });
+      const failed = vi.spyOn(repo, 'markFailed');
+      const error = await handleMediaUploaded(message, { ...deps, random: () => jitter }).catch(
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(RetryLaterError);
+      const delay = (error as RetryLaterError).delaySeconds;
+      expect(delay).toBeGreaterThanOrEqual(2);
+      expect(delay).toBeLessThanOrEqual(6);
+      expect(failed).not.toHaveBeenCalled();
+      expect(repo.row.status).toBe('processing');
+      expect(derivatives.objects.size).toBe(0);
+    },
+  );
 
   it('cleans up partial uploads when an R2 write fails, then retries', async () => {
     const { repo, derivatives, deps } = setup();

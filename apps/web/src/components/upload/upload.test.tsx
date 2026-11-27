@@ -1,8 +1,9 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { UploadEngine, type UploadItemSnapshot, type UploadSnapshot } from '@/lib/upload';
 import { FakeLumra, photo, readPrefix, uuid } from '@/lib/upload/test-fakes';
+import { UploadGrid } from './upload-grid';
 import { UploadToast, summarize } from './upload-list';
 import { UploadZone } from './upload-zone';
 
@@ -216,28 +217,35 @@ describe('UploadToast', () => {
       expect(screen.getByText('b.jpg')).toBeInTheDocument();
     });
 
-    it('shows processing, then a done state with a focusable close button', async () => {
+    it('is done as soon as every file is uploaded, even while processing', async () => {
       const user = userEvent.setup();
       const a = uploadedBytes(item({ name: 'a.jpg', state: 'processing' }));
-      const { rerender } = render(
-        <UploadToast snapshot={snapshotOf([a])} autoDismissMs={0} {...noop} />,
-      );
-      expect(screen.getByRole('button', { name: 'Processing 1 photo…' })).toBeVisible();
-      expect(screen.queryByRole('button', { name: 'Close upload status' })).not.toBeInTheDocument();
-
-      rerender(
-        <UploadToast
-          snapshot={snapshotOf([{ ...a, state: 'ready' }])}
-          autoDismissMs={0}
-          {...noop}
-        />,
-      );
+      render(<UploadToast snapshot={snapshotOf([a])} autoDismissMs={0} {...noop} />);
       expect(screen.getByRole('button', { name: 'All 1 photo uploaded' })).toBeVisible();
       const close = screen.getByRole('button', { name: 'Close upload status' });
       close.focus();
       expect(close).toHaveFocus();
       await user.click(close);
       expect(screen.queryByRole('region', { name: 'Uploads' })).not.toBeInTheDocument();
+    });
+
+    it('reopens expanded with Remove when a closed photo fails processing afterwards', async () => {
+      const user = userEvent.setup();
+      const a = uploadedBytes(item({ name: 'a.jpg', state: 'processing' }));
+      const { rerender } = render(
+        <UploadToast snapshot={snapshotOf([a])} autoDismissMs={0} {...noop} />,
+      );
+      await user.click(screen.getByRole('button', { name: 'Close upload status' }));
+      expect(screen.queryByRole('region', { name: 'Uploads' })).not.toBeInTheDocument();
+      const failed = {
+        ...a,
+        state: 'failed' as const,
+        error: { code: 'processing_failed', message: 'Could not process', retryable: false },
+      };
+      rerender(<UploadToast snapshot={snapshotOf([failed])} autoDismissMs={0} {...noop} />);
+      expect(screen.getByRole('region', { name: 'Uploads' })).toBeVisible();
+      expect(screen.getByText('Could not process')).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Remove a.jpg' })).toBeVisible();
     });
 
     it('dismisses itself a few seconds after finishing without errors', () => {
@@ -333,8 +341,61 @@ describe('UploadZone + engine', () => {
     await user.upload(screen.getByTestId('upload-input'), [photo('a.jpg', 1000)]);
     await vi.waitFor(() => expect(engine.getSnapshot().items[0]?.state).toBe('uploaded'));
     rerender(<Harness />);
-    await user.click(screen.getByRole('button', { name: /Processing 1 photo/ }));
-    expect(screen.getByText('Uploaded · processing soon')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /All 1 photo uploaded/ }));
+    expect(screen.getByText('Uploaded')).toBeInTheDocument();
     engine.dispose();
+  });
+});
+
+describe('UploadGrid (guest drafts)', () => {
+  it('keeps every uploaded photo visible as a tile, unlike the self-dismissing toast', () => {
+    const items = [
+      item({ name: 'a.jpg', state: 'ready', bytesUploaded: 2_000_000, percent: 100 }),
+      item({ name: 'b.heic', type: 'image/heic', state: 'processing' }),
+      item({ name: 'c.jpg', state: 'cancelled' }),
+      item({ name: 'd.jpg', state: 'uploading', percent: 40, bytesUploaded: 800_000 }),
+    ];
+    render(<UploadGrid items={items} />);
+    const grid = screen.getByRole('list', { name: 'Photos in this gallery' });
+    const tiles = within(grid).getAllByRole('listitem');
+    expect(tiles.map((t) => t.getAttribute('data-state'))).toEqual([
+      'ready',
+      'processing',
+      'uploading',
+    ]);
+    expect(within(tiles[0]!).getByText('a.jpg')).toBeInTheDocument();
+    expect(within(tiles[0]!).getByText('Ready')).toBeInTheDocument();
+  });
+
+  it('shows an uploaded photo at full strength with only a subtle processing dot', () => {
+    const create = vi.fn(() => 'blob:preview');
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: create, revokeObjectURL: vi.fn() }));
+    const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
+    render(
+      <UploadGrid items={[item({ name: 'a.jpg', state: 'processing' })]} getFile={() => file} />,
+    );
+    expect(screen.getByRole('img', { name: 'a.jpg' })).not.toHaveClass('lm-tile-pending-img');
+    expect(screen.getByTestId('tile-finishing')).toHaveTextContent('Processing');
+    expect(screen.queryByText(/processing/i, { selector: ':not(.sr-only)' })).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it('shows a local preview while the page still holds the file', () => {
+    const create = vi.fn(() => 'blob:preview');
+    const revoke = vi.fn();
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke }));
+    const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
+    const { unmount } = render(
+      <UploadGrid items={[item({ name: 'a.jpg', state: 'uploaded' })]} getFile={() => file} />,
+    );
+    expect(screen.getByRole('img', { name: 'a.jpg' })).toHaveAttribute('src', 'blob:preview');
+    unmount();
+    expect(revoke).toHaveBeenCalledWith('blob:preview');
+    vi.unstubAllGlobals();
+  });
+
+  it('renders nothing for an empty draft', () => {
+    const { container } = render(<UploadGrid items={[]} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });

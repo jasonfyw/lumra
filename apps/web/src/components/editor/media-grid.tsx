@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import type { EditorMediaItem, MediaStatus } from '@lumra/contracts';
 import type { SelectClick } from '@lumra/domain';
 import { Icon } from '@/components/ui';
+import { tilePhase, type LocalUpload, type TilePhase } from './thumbnails';
 
 /** Creator-facing tile labels: the creator sees pipeline states, incl. recoverable failures. */
 export const STATUS_LABEL: Record<MediaStatus, string> = {
@@ -17,44 +18,54 @@ export const STATUS_LABEL: Record<MediaStatus, string> = {
   deleted: 'Removed',
 };
 
-/** Pipeline states shown as a spinner overlay (still uploading or processing). */
-const IN_PROGRESS: ReadonlySet<MediaStatus> = new Set([
-  'reserved',
-  'uploading',
-  'uploaded',
-  'processing',
-  'deleting',
-]);
-
-/** Short overlay label (visually hidden; announced with the spinner). */
-const PENDING_LABEL: Partial<Record<MediaStatus, string>> = {
-  reserved: 'Waiting to upload',
-  uploading: 'Uploading',
-  uploaded: 'Processing',
-  processing: 'Processing',
-  deleting: 'Removing',
-};
+/** Accessible label of a tile, by the phase it presents (not the raw server status). */
+export function phaseLabel(item: EditorMediaItem, phase: TilePhase): string {
+  switch (phase) {
+    case 'uploading':
+      return STATUS_LABEL[item.status === 'reserved' ? 'reserved' : 'uploading'];
+    case 'finishing':
+      return 'Uploaded, preparing preview';
+    case 'ready':
+      return STATUS_LABEL.ready;
+    case 'failed':
+      return STATUS_LABEL.failed;
+    case 'upload_failed':
+      return 'Upload interrupted';
+    case 'removing':
+      return STATUS_LABEL.deleting;
+  }
+}
 
 /**
- * The picture area of one tile:
- * - ready → the owner thumbnail only (no badge); without one, a neutral image placeholder;
- * - uploading/processing → spinner overlay over the local preview (if the uploader on this page
- *   still holds the file) or over the neutral shimmer; static icon under reduced motion;
- * - failed → icon + short text, full message as tooltip (never colour alone).
+ * The picture area of one tile, by the phase it presents (`tilePhase`):
+ * - uploading → dimmed local preview (or shimmer) with a thin progress bar; without local
+ *   knowledge of the upload (another tab, after a reload) the centered status chip;
+ * - finishing (bytes are in; processing runs quietly) → the local preview at full strength with
+ *   a small corner dot; no chip, no dimming;
+ * - ready → the owner thumbnail; when a local preview is still held it stays underneath and the
+ *   gateway image crossfades in once it has loaded, so the swap never flashes blank;
+ * - upload_failed → dimmed local preview + alert badge; failed → icon + short text.
  */
 export function TileMedia({
   item,
   localPreview,
+  local,
   onThumbnailError,
+  onPreviewSwapped,
 }: {
   item: EditorMediaItem;
   localPreview?: string;
+  local?: LocalUpload;
   onThumbnailError?: (mediaId: string) => void;
+  /** The gateway thumbnail is on screen, so the local blob can be released. */
+  onPreviewSwapped?: (mediaId: string) => void;
 }) {
-  // The `src` that failed to load; a newer URL from the next refresh renders again.
+  // The `src` that failed to load / has loaded; a newer URL from the next refresh renders again.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const phase = tilePhase(item, local);
 
-  if (item.status === 'failed') {
+  if (phase === 'failed') {
     return (
       <div
         className="flex h-full w-full flex-col items-center justify-center gap-1 bg-[var(--color-danger-soft)] px-2 text-center text-[var(--color-danger)]"
@@ -68,46 +79,98 @@ export function TileMedia({
     );
   }
 
-  const pending = IN_PROGRESS.has(item.status);
-  const remote = item.status === 'ready' ? item.thumbnailUrl : null;
-  const src = remote && remote !== failedSrc ? remote : (localPreview ?? null);
+  const remote = phase === 'ready' && item.thumbnailUrl ? item.thumbnailUrl : null;
+  const remoteUsable = remote !== null && remote !== failedSrc;
+  const dimmed = phase === 'uploading' || phase === 'upload_failed' || phase === 'removing';
+  const placeholder = phase === 'ready' || phase === 'upload_failed';
+  const showChip = phase === 'removing' || (phase === 'uploading' && !local);
+  const progress = phase === 'uploading' && local ? local.percent : null;
+  // The gateway image is visible once loaded, or straight away when nothing sits underneath.
+  const remoteVisible = !localPreview || loadedSrc === remote;
 
   return (
     <div className="relative h-full w-full">
-      {src ? (
-        // eslint-disable-next-line @next/next/no-img-element -- short-lived gateway URL / local blob
+      {localPreview && (
+        // eslint-disable-next-line @next/next/no-img-element -- local blob preview
         <img
-          key={src}
-          src={src}
+          src={localPreview}
+          alt=""
+          decoding="async"
+          draggable={false}
+          className={`h-full w-full object-cover ${dimmed ? 'lm-tile-pending-img' : ''}`}
+          data-testid="tile-thumbnail"
+        />
+      )}
+      {remoteUsable && (
+        // eslint-disable-next-line @next/next/no-img-element -- short-lived gateway URL
+        <img
+          key={remote}
+          src={remote}
           alt=""
           loading="lazy"
           decoding="async"
           draggable={false}
-          className={`h-full w-full object-cover ${pending ? 'lm-tile-pending-img' : ''}`}
-          data-testid="tile-thumbnail"
+          className={`${localPreview ? 'absolute inset-0 ' : ''}h-full w-full object-cover transition-opacity duration-[var(--duration-fast)] motion-reduce:transition-none ${remoteVisible ? 'opacity-100' : 'opacity-0'}`}
+          data-testid={localPreview ? 'tile-thumbnail-remote' : 'tile-thumbnail'}
+          onLoad={() => {
+            setLoadedSrc(remote);
+            if (localPreview) onPreviewSwapped?.(item.id);
+          }}
           onError={() => {
-            if (src !== remote) return;
-            setFailedSrc(src);
+            setFailedSrc(remote);
             onThumbnailError?.(item.id);
           }}
         />
-      ) : pending ? (
-        <span aria-hidden="true" className="lm-shimmer block h-full w-full" />
-      ) : (
-        <span
-          aria-hidden="true"
-          className="flex h-full w-full items-center justify-center bg-[var(--color-sunken)] text-[var(--color-ink-muted)]"
-        >
-          <Icon name="image" size={24} />
-        </span>
       )}
-      {pending && (
+      {!localPreview &&
+        !remoteUsable &&
+        (placeholder ? (
+          <span
+            aria-hidden="true"
+            className="flex h-full w-full items-center justify-center bg-[var(--color-sunken)] text-[var(--color-ink-muted)]"
+          >
+            <Icon name="image" size={24} />
+          </span>
+        ) : (
+          <span aria-hidden="true" className="lm-shimmer block h-full w-full" />
+        ))}
+      {showChip && (
         <span className="lm-tile-status" data-testid="tile-pending">
           <span className="lm-tile-status-chip">
             <span className="lm-spinner" aria-hidden="true" />
             <Icon name="clock" size={20} className="lm-spinner-static" />
-            <span className="sr-only">{PENDING_LABEL[item.status] ?? 'Processing'}</span>
+            <span className="sr-only">
+              {phase === 'removing'
+                ? 'Removing'
+                : item.status === 'reserved'
+                  ? 'Waiting to upload'
+                  : 'Uploading'}
+            </span>
           </span>
+        </span>
+      )}
+      {progress !== null && (
+        <span
+          className="lm-tile-progress"
+          role="progressbar"
+          aria-label={`Uploading ${item.filename}`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress}
+          data-testid="tile-progress"
+        >
+          <span style={{ width: `${progress}%` }} />
+        </span>
+      )}
+      {phase === 'finishing' && (
+        <span className="lm-tile-finishing" data-testid="tile-finishing">
+          <span className="sr-only">Processing</span>
+        </span>
+      )}
+      {phase === 'upload_failed' && (
+        <span className="lm-tile-alert" data-testid="tile-upload-failed">
+          <Icon name="alert" size={16} />
+          <span className="sr-only">Upload interrupted — retry from the upload panel</span>
         </span>
       )}
     </div>
@@ -153,7 +216,9 @@ export function MediaGrid({
   onSetCover,
   onDelete,
   localPreviews,
+  localUploads,
   onThumbnailError,
+  onPreviewSwapped,
   selected,
   onSelect,
   onDragMove,
@@ -164,6 +229,10 @@ export function MediaGrid({
   disabled?: boolean;
   /** Object URLs of files still held by the uploader on this page, by media id. */
   localPreviews?: ReadonlyMap<string, string>;
+  /** What the uploader on this page knows about each photo, by media id. */
+  localUploads?: ReadonlyMap<string, LocalUpload>;
+  /** A tile's gateway thumbnail is on screen, so its local preview can be released. */
+  onPreviewSwapped?: (mediaId: string) => void;
   /** A ready tile's gateway thumbnail failed to load (e.g. its token expired). */
   onThumbnailError?: (mediaId: string) => void;
   /** Selected media ids; omitted = selection UI off. */
@@ -273,7 +342,7 @@ export function MediaGrid({
           <li
             key={item.id}
             data-tile-index={index}
-            aria-label={`${item.filename}, ${STATUS_LABEL[item.status]}, position ${position}`}
+            aria-label={`${item.filename}, ${phaseLabel(item, tilePhase(item, localUploads?.get(item.id)))}, position ${position}`}
             className={[
               'relative flex flex-col transition-opacity duration-[var(--duration-fast)]',
               dimmed ? 'opacity-35' : '',
@@ -305,7 +374,9 @@ export function MediaGrid({
               <TileMedia
                 item={item}
                 localPreview={localPreviews?.get(item.id)}
+                local={localUploads?.get(item.id)}
                 onThumbnailError={onThumbnailError}
+                onPreviewSwapped={onPreviewSwapped}
               />
               {onSelect && (
                 <label

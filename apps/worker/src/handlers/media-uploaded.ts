@@ -3,7 +3,8 @@ import type { QueueMessage } from '@lumra/contracts';
 import type { CompletedVariant, MediaPipelineRepository } from '@lumra/db';
 import { assertTransition, MEDIA_TRANSITIONS } from '@lumra/domain';
 import { assertStorageKey, derivativeObjectKey, isPreviewVariant, sniffImage } from '@lumra/media';
-import type { ProcessorClient } from '../processor-client';
+import { RetryLaterError } from '../errors';
+import { ProcessorBusyError, type ProcessorClient } from '../processor-client';
 import type { Logger } from '../log';
 
 /** Narrow views of the R2 bindings so tests can use in-memory fakes. */
@@ -33,6 +34,8 @@ export interface MediaUploadedDeps {
   derivatives: DerivativesStore;
   processor: ProcessorClient;
   log: Logger;
+  /** Jitter source for the busy retry delay; defaults to `Math.random`. */
+  random?: () => number;
 }
 
 export type MediaUploadedOutcome =
@@ -109,14 +112,26 @@ export async function handleMediaUploaded(
 
   const original = await originals.get(media.originalKey);
   if (!original) throw new TransientJobError('original object not found');
-  const result = await processor.process({
-    mediaId: media.id,
-    expectedMime: sniffed.mime,
-    widths: DERIVATIVE_WIDTHS,
-    traceId: message.traceId,
-    body: original.body,
-    byteSize: original.size,
-  });
+  let result: Awaited<ReturnType<ProcessorClient['process']>>;
+  try {
+    result = await processor.process({
+      mediaId: media.id,
+      expectedMime: sniffed.mime,
+      widths: DERIVATIVE_WIDTHS,
+      traceId: message.traceId,
+      body: original.body,
+      byteSize: original.size,
+    });
+  } catch (error) {
+    // Busy clears in seconds: retry after 2–6 s (jittered) instead of the 20 s+ exponential back-off.
+    if (error instanceof ProcessorBusyError) {
+      throw new RetryLaterError(
+        2 + Math.floor((deps.random ?? Math.random)() * 5),
+        'processor busy',
+      );
+    }
+    throw error;
+  }
   if (!result.ok) return reject(result.code);
   // FR-M04: R2/multipart ETags aren't whole-file checksums, so the client SHA-256 recorded at
   // finalize is verified here, on the bytes the processor actually decoded.

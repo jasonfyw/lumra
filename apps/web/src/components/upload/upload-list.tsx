@@ -16,9 +16,9 @@ export function statusText(item: UploadItemSnapshot): string {
     case 'uploading':
       return `Uploading ${item.percent}% · ${formatBytes(item.bytesUploaded)} of ${formatBytes(item.size)}`;
     case 'uploaded':
-      return 'Uploaded · processing soon';
+      return 'Uploaded';
     case 'processing':
-      return 'Processing';
+      return 'Uploaded · preparing preview';
     case 'ready':
       return 'Ready';
     case 'failed':
@@ -87,13 +87,12 @@ const retryAction = buttonClass('secondary', 'sm', 'min-h-11');
 /** How long a fully finished, error-free toast stays before it dismisses itself. */
 export const TOAST_AUTO_DISMISS_MS = 5000;
 
-type Phase = 'uploading' | 'attention' | 'paused' | 'processing' | 'done';
+type Phase = 'uploading' | 'attention' | 'paused' | 'done';
 
 interface Counts {
   total: number;
   /** Uploaded to storage (uploaded, processing or ready). */
   uploaded: number;
-  ready: number;
   active: number;
   failed: number;
   awaiting: number;
@@ -113,7 +112,6 @@ function countsOf(items: readonly UploadItemSnapshot[]): Counts {
   return {
     total: counted.length,
     uploaded: counted.filter((i) => ['uploaded', 'processing', 'ready'].includes(i.state)).length,
-    ready: counted.filter((i) => i.state === 'ready').length,
     active: counted.filter((i) => i.state === 'queued' || i.state === 'uploading').length,
     failed: counted.filter((i) => i.state === 'failed').length,
     awaiting: counted.filter((i) => i.state === 'awaiting_file').length,
@@ -127,7 +125,6 @@ function phaseOf(c: Counts): Phase {
   if (c.active > 0) return 'uploading';
   if (c.failed > 0) return 'attention';
   if (c.awaiting > 0) return 'paused';
-  if (c.ready < c.total) return 'processing';
   return 'done';
 }
 
@@ -140,8 +137,6 @@ export function toastHeadline(phase: Phase, c: Counts): string {
       return `${plural(c.failed, 'upload')} ${c.failed === 1 ? 'needs' : 'need'} attention`;
     case 'paused':
       return `${plural(c.awaiting, 'upload')} paused`;
-    case 'processing':
-      return `Processing ${plural(c.total - c.ready, 'photo')}…`;
     case 'done':
       return `All ${plural(c.total, 'photo')} uploaded`;
   }
@@ -150,8 +145,8 @@ export function toastHeadline(phase: Phase, c: Counts): string {
 /**
  * Floating upload status (PRD §4 Upload UI state): bottom-right on desktop, full-width above the
  * safe area on phones. A collapsed summary row ("Uploading 3 of 12…" + total progress) expands to
- * the per-file list with retry/cancel/remove. When every photo is uploaded *and* processed it
- * turns into a done state with a close button and dismisses itself after a few seconds, unless
+ * the per-file list with retry/cancel/remove. When every photo is uploaded (processing continues
+ * quietly on the tiles; it is not a second step here) it turns into a done state with a close button and dismisses itself after a few seconds, unless
  * something failed. Progress is announced through a polite, throttled live region.
  */
 export function UploadToast({
@@ -180,7 +175,10 @@ export function UploadToast({
   // Items of batches the user already closed: they stay in the engine but not in the toast.
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
 
-  const items = snapshot.items.filter((i) => !dismissed.has(i.clientId));
+  // A processing failure after the toast was closed reopens it, with Remove.
+  const items = snapshot.items.filter(
+    (i) => !dismissed.has(i.clientId) || i.error?.code === 'processing_failed',
+  );
   const counts = countsOf(items);
   const phase = phaseOf(counts);
   const finished = items.length > 0 && (phase === 'done' || phase === 'attention');
@@ -266,8 +264,7 @@ export function UploadToast({
           {expanded && (
             <div id={bodyId} className="lm-toast-body">
               <p className="lm-num py-2 text-[13px] text-[var(--color-ink-muted)]">
-                {formatBytes(counts.uploadedBytes)} of {formatBytes(counts.totalBytes)} ·{' '}
-                {counts.ready} of {counts.total} ready
+                {formatBytes(counts.uploadedBytes)} of {formatBytes(counts.totalBytes)}
               </p>
               <ul className="flex flex-col divide-y divide-[var(--color-hairline)]">
                 {items.map((item) => (

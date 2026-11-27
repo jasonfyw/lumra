@@ -14,6 +14,10 @@ export const PREVIEWABLE_TYPES: ReadonlySet<string> = new Set([
 export interface BridgedUpload {
   mediaId: string;
   state: UploadState;
+  /** Bytes uploaded so far, 0–100. */
+  percent: number;
+  /** Machine-readable failure code (e.g. `processing_failed`), null while healthy. */
+  errorCode: string | null;
   /** The selected file while this page still holds it (null after a reload). */
   file: File | null;
 }

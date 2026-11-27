@@ -707,6 +707,61 @@
   .lm-tile-pending-img {
     opacity: 0.72;
   }
+  /* Upload progress: a thin bar on the tile's bottom edge. */
+  .lm-tile-progress {
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 3px;
+    background: rgb(0 0 0 / 0.18);
+    pointer-events: none;
+  }
+  .lm-tile-progress > span {
+    display: block;
+    height: 100%;
+    background: var(--color-surface);
+    transition: width var(--duration-fast) linear;
+  }
+  /* Bytes are in; processing runs quietly. A small pulsing dot, static when motion is reduced. */
+  .lm-tile-finishing {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    width: 9px;
+    height: 9px;
+    border-radius: var(--radius-pill);
+    background: rgb(255 255 255 / 0.92);
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 0.25);
+    pointer-events: none;
+    animation: lm-tile-pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes lm-tile-pulse {
+    0%,
+    100% {
+      opacity: 0.95;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lm-tile-finishing {
+      animation: none;
+    }
+    .lm-tile-progress > span {
+      transition: none;
+    }
+  }
+  .lm-tile-alert {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    display: inline-flex;
+    padding: 2px;
+    border-radius: var(--radius-pill);
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+    pointer-events: none;
+  }
   .lm-spinner {
     display: block;
     width: 20px;

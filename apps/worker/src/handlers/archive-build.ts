@@ -3,6 +3,7 @@ import type { ArchiveFailureCode } from '@lumra/contracts';
 import type { ArchiveBuildPart, ArchiveRepository } from '@lumra/db';
 import { archiveProgressPct } from '@lumra/domain';
 import { assertStorageKey, ZipStreamWriter, type Crc32Fn } from '@lumra/media';
+import { RetryLaterError } from '../errors';
 import type { Logger } from '../log';
 
 /**
@@ -59,16 +60,8 @@ export interface ArchiveBuildDeps {
 export type ArchiveBuildOutcome =
   'ready' | 'missing' | 'not_buildable' | `failed:${ArchiveFailureCode}`;
 
-/** Another delivery holds the build lease; retry after it can have expired. */
-export class RetryLaterError extends Error {
-  constructor(
-    readonly delaySeconds: number,
-    reason: string,
-  ) {
-    super(reason);
-    this.name = 'RetryLaterError';
-  }
-}
+// Shared with other handlers (e.g. media.uploaded); re-exported for existing importers.
+export { RetryLaterError };
 
 export class ArchiveBuildFailure extends Error {
   constructor(readonly code: ArchiveFailureCode) {
