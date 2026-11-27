@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 import { GalleryEditor } from '@/components/editor/gallery-editor';
 import { GalleryStats } from '@/components/editor/gallery-stats-loader';
 import { GalleryUploader } from '@/components/upload';
+import { PostHogIdentity } from '@/app/auth/auth-form';
 import { getAuthenticatedUser } from '@/lib/actor';
 import { ApiFailure } from '@/lib/api';
 import { getDb } from '@/lib/db';
@@ -39,21 +40,24 @@ export default async function EditGalleryPage({ params }: { params: Promise<{ id
     throw err;
   }
   return (
-    <GalleryEditor
-      key={detail.id}
-      initial={detail}
-      statsSlot={
-        <Suspense fallback={null}>
-          <GalleryStats userId={user.userId} galleryId={detail.id} />
-        </Suspense>
-      }
-      uploadSlot={
-        <GalleryUploader
-          galleryId={detail.id}
-          mode="owner"
-          signInHref={`/auth?returnTo=${encodeURIComponent(`/dashboard/galleries/${detail.id}`)}`}
-        />
-      }
-    />
+    <>
+      <PostHogIdentity userId={user.userId} email={user.email} />
+      <GalleryEditor
+        key={detail.id}
+        initial={detail}
+        statsSlot={
+          <Suspense fallback={null}>
+            <GalleryStats userId={user.userId} galleryId={detail.id} />
+          </Suspense>
+        }
+        uploadSlot={
+          <GalleryUploader
+            galleryId={detail.id}
+            mode="owner"
+            signInHref={`/auth?returnTo=${encodeURIComponent(`/dashboard/galleries/${detail.id}`)}`}
+          />
+        }
+      />
+    </>
   );
 }

@@ -6,6 +6,7 @@ import type { PublishGalleryRequest, PublishGalleryResponse } from '@lumra/contr
 import { Icon, buttonClass } from '@/components/ui';
 import { authUrlForPublish, claimGuestDraftRequest } from '@/lib/claim-client';
 import { publishGalleryRequest } from '@/lib/editor-client';
+import { capturePostHogEvent } from '@/lib/posthog';
 
 /**
  * Publish entry point (J1, T07/T16). Mounted by the draft screens (`/new`, T14; editor, T15):
@@ -63,6 +64,7 @@ export function PublishButton({
         setError(result.message);
         return;
       }
+      capturePostHogEvent('gallery_published');
       onPublished?.(result.data);
       router.refresh();
     } finally {

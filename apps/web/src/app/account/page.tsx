@@ -8,7 +8,7 @@ import { getDb } from '@/lib/db';
 import { getAccountUsageSummary } from '@/server/account';
 import { isBillingConfigured } from '@/server/stripe';
 import { AccountView } from '@/components/billing/account-view';
-import { signOutAction } from '../auth/actions';
+import { PostHogIdentity, PostHogSignOutForm } from '../auth/auth-form';
 import { AppHeader, buttonClass } from '@/components/ui';
 
 export const metadata = { title: 'Account' };
@@ -38,6 +38,7 @@ export default async function AccountPage({
 
   return (
     <div className="flex min-h-dvh flex-col">
+      <PostHogIdentity userId={user.userId} email={user.email} />
       <AppHeader
         actions={
           <>
@@ -46,11 +47,7 @@ export default async function AccountPage({
                 Galleries
               </Link>
             </nav>
-            <form action={signOutAction}>
-              <button type="submit" className={buttonClass('ghost')}>
-                Sign out
-              </button>
-            </form>
+            <PostHogSignOutForm />
           </>
         }
       />

@@ -26,6 +26,7 @@ import {
   utcIsoToLocalInput,
 } from '@/lib/editor-client';
 import { AppHeader, Icon, Tag, buttonClass } from '@/components/ui';
+import { capturePostHogEvent } from '@/lib/posthog';
 import { UploadBridgeContext } from '@/components/upload';
 import { ConfirmDialog } from './confirm-dialog';
 import { MediaGrid, moveItem } from './media-grid';
@@ -215,6 +216,10 @@ export function GalleryEditor({
         contentVersion: res.data.contentVersion,
       }));
       setSelection(EMPTY_SELECTION);
+      capturePostHogEvent('gallery_media_deleted', {
+        deletion_mode: 'bulk',
+        media_count: gone.size,
+      });
       announce(`Deleted ${gone.size} photos.`);
       void refresh();
     }
@@ -256,7 +261,10 @@ export function GalleryEditor({
       return;
     }
     setBusy('title');
-    if (await patch({ title }, 'Title saved.')) setEditingTitle(false);
+    if (await patch({ title }, 'Title saved.')) {
+      capturePostHogEvent('gallery_title_updated');
+      setEditingTitle(false);
+    }
     setBusy(null);
   }
 
@@ -284,6 +292,7 @@ export function GalleryEditor({
         coverMediaId: res.data.coverMediaId,
         contentVersion: res.data.contentVersion,
       }));
+      capturePostHogEvent('gallery_media_deleted', { deletion_mode: 'single', media_count: 1 });
       announce(`Deleted ${toDelete.filename}.`);
       void refresh();
     }
@@ -338,6 +347,7 @@ export function GalleryEditor({
       announce(res.message);
       return;
     }
+    capturePostHogEvent('gallery_deleted');
     router.push('/dashboard');
     router.refresh();
   }

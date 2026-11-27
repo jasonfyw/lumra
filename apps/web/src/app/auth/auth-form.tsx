@@ -1,9 +1,10 @@
 'use client';
 
 import { useActionState, useEffect, useRef, useState } from 'react';
+import posthog from 'posthog-js';
 import { buttonClass } from '@/components/ui';
 import type { AuthFlowParams } from '@/lib/return-to';
-import { sendOtpAction, verifyOtpAction, type AuthFormState } from './actions';
+import { sendOtpAction, signOutAction, verifyOtpAction, type AuthFormState } from './actions';
 
 /** Matches Supabase's per-address `max_frequency` (infra/supabase/config.toml). */
 const RESEND_COOLDOWN_S = 60;
@@ -19,6 +20,39 @@ const initialState: AuthFormState = {
 const button = buttonClass('primary', 'lg', 'mt-3 w-full');
 const input = 'lm-input';
 const textButton = buttonClass('ghost', 'sm', '-mx-2 min-h-11');
+const posthogEnabled = Boolean(
+  process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN && process.env.NEXT_PUBLIC_POSTHOG_HOST,
+);
+
+/** Keeps browser events and exception reports associated with the authenticated Supabase user. */
+export function PostHogIdentity({ userId, email }: { userId: string; email: string | null }) {
+  const previousUserId = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!posthogEnabled) return;
+    if (previousUserId.current && previousUserId.current !== userId) posthog.reset();
+    posthog.identify(userId, email ? { email } : undefined);
+    previousUserId.current = userId;
+  }, [email, userId]);
+
+  return null;
+}
+
+/** Resets persisted browser identity before the server clears the authenticated session. */
+export function PostHogSignOutForm() {
+  async function signOut() {
+    if (posthogEnabled) posthog.reset();
+    await signOutAction();
+  }
+
+  return (
+    <form action={signOut}>
+      <button type="submit" className={buttonClass('ghost')}>
+        Sign out
+      </button>
+    </form>
+  );
+}
 
 /**
  * Seconds left before another code may be requested: a proactive cooldown after a successful

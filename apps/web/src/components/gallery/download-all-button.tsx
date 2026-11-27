@@ -4,6 +4,7 @@ import { createArchiveResponseSchema } from '@lumra/contracts';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Icon, buttonClass } from '@/components/ui';
+import { capturePostHogEvent } from '@/lib/posthog';
 
 export interface DownloadAllButtonProps {
   slug: string;
@@ -38,6 +39,7 @@ export function DownloadAllButton({ slug, readyCount }: DownloadAllButtonProps) 
       } | null;
       const parsed = createArchiveResponseSchema.safeParse(body?.data);
       if (res.ok && parsed.success) {
+        capturePostHogEvent('gallery_archive_requested', { ready_media_count: readyCount });
         router.push(`/archive/${parsed.data.jobId}`);
         return;
       }

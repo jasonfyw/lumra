@@ -10,7 +10,7 @@ import { getDb } from '@/lib/db';
 import { getAccountUsageSummary } from '@/server/account';
 import { isBillingConfigured } from '@/server/stripe';
 import { BillingBanners } from '@/components/billing/billing-banners';
-import { signOutAction } from '../auth/actions';
+import { PostHogIdentity, PostHogSignOutForm } from '../auth/auth-form';
 import { AppHeader, Icon, Tag, buttonClass } from '@/components/ui';
 import { CopyLinkButton, NewGalleryButton } from './dashboard-actions';
 
@@ -49,6 +49,7 @@ export default async function DashboardPage({
 
   return (
     <div className="flex min-h-dvh flex-col">
+      <PostHogIdentity userId={user.userId} email={user.email} />
       <AppHeader
         actions={
           <>
@@ -57,11 +58,7 @@ export default async function DashboardPage({
                 Account
               </Link>
             </nav>
-            <form action={signOutAction}>
-              <button type="submit" className={buttonClass('ghost')}>
-                Sign out
-              </button>
-            </form>
+            <PostHogSignOutForm />
           </>
         }
       />

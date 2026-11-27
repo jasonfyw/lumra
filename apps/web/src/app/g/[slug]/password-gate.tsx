@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useId, useRef, useState, type FormEvent } from 'react';
 import { Icon, buttonClass } from '@/components/ui';
+import { capturePostHogEvent } from '@/lib/posthog';
 
 interface ErrorBody {
   error?: { code?: string; details?: { retryAfterSeconds?: unknown; challenge?: unknown } };
@@ -55,6 +56,7 @@ export function PasswordGate({ slug }: { slug: string }) {
         cache: 'no-store',
       });
       if (res.ok) {
+        capturePostHogEvent('gallery_password_unlocked');
         setPassword('');
         router.refresh();
         return;

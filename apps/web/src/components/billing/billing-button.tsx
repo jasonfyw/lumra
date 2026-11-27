@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { ApiResponse, BillingRedirectResponse } from '@lumra/contracts';
 import { buttonClass } from '@/components/ui';
+import { capturePostHogEvent } from '@/lib/posthog';
 
 const ENDPOINT = {
   checkout: '/api/v1/billing/checkout',
@@ -47,6 +48,9 @@ export function BillingButton({
         setBusy(false);
         return;
       }
+      capturePostHogEvent(
+        action === 'checkout' ? 'billing_checkout_started' : 'billing_portal_opened',
+      );
       window.location.assign(body.data.url);
     } catch {
       setError('Network error. Check your connection and try again.');
